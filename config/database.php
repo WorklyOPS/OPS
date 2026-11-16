@@ -47,29 +47,23 @@ final class Database
 
         $host = $url['host'];
         $port = $url['port'] ?? 5432;
-        $dbname = rawurldecode(
-            ltrim($url['path'] ?? '', '/')
-        );
+        $dbname = rawurldecode(ltrim($url['path'] ?? '', '/'));
 
         $username = rawurldecode($url['user'] ?? '');
         $password = rawurldecode($url['pass'] ?? '');
 
-        parse_str($url['query'] ?? '', $query);
+        // Neon endpoint ID: first hostname segment.
+        $endpointId = explode('.', $host)[0];
 
-        $sslMode = $query['sslmode'] ?? 'require';
-
-        if ($dbname === '' || $username === '') {
-            throw new RuntimeException(
-                'Incomplete PostgreSQL connection URL.'
-            );
-        }
+        // Remove pooler suffix if present.
+        $endpointId = preg_replace('/-pooler$/', '', $endpointId);
 
         $dsn = sprintf(
-            'pgsql:host=%s;port=%d;dbname=%s;sslmode=%s',
+            "pgsql:host=%s;port=%d;dbname=%s;sslmode=require;options='endpoint=%s'",
             $host,
             $port,
             $dbname,
-            $sslMode
+            $endpointId
         );
 
         try {
