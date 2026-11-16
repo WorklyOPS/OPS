@@ -1,0 +1,8 @@
+.DS_Store
+*.log
+.env
+config/.env
+uploads/avatars/*
+!uploads/avatars/.htaccess
+uploads/contracts/*
+!uploads/contracts/.htaccess

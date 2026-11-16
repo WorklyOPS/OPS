@@ -1,0 +1,235 @@
+<?php
+/**
+ * Workly Virtual Assistant Management Platform
+ * Production Root Entry Router (100% Native PHP 8 + PostgreSQL)
+ */
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/config/env_loader.php';
+
+EnvLoader::load();
+
+require_once __DIR__ . '/config/secrets.php';
+require_once __DIR__ . '/config/database.php';
+require_once __DIR__ . '/services/SecurityHelper.php';
+require_once __DIR__ . '/services/CacheService.php';
+require_once __DIR__ . '/services/AuditLogger.php';
+require_once __DIR__ . '/middleware/AuthMiddleware.php';
+
+
+
+$rawUri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+$uri = '/' . ltrim($rawUri, '/');
+$method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+
+// Health Probe Endpoint (no sensitive leak)
+if ($uri === '/health' || $uri === '/api/v1/health') {
+    SecurityHelper::sendApiHeaders();
+    try {
+        $db = Database::getConnection();
+        $db->query('SELECT 1');
+        echo json_encode([
+            'status'   => 'healthy',
+            'runtime'  => 'PHP ' . PHP_VERSION,
+            'database' => 'postgresql',
+        ]);
+    } catch (Throwable) {
+        http_response_code(503);
+        echo json_encode([
+            'status'   => 'unconfigured',
+            'runtime'  => 'PHP ' . PHP_VERSION,
+            'database' => 'disconnected',
+        ]);
+    }
+    exit;
+}
+
+try {
+    $db = Database::getConnection();
+} catch (Throwable $e) {
+    if (str_starts_with($uri, '/api/')) {
+        SecurityHelper::sendApiHeaders();
+        http_response_code(503);
+        echo json_encode(['error' => 'PostgreSQL database connection is not yet configured. Check config/.env.']);
+        exit;
+    }
+    SecurityHelper::sendHtmlHeaders();
+    http_response_code(503);
+    ?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Workly — Database Configuration Required</title>
+  <link rel="stylesheet" href="/assets/css/workly.css">
+</head>
+<body class="auth-body">
+  <div class="auth-card">
+    <div class="brand-mark">W</div>
+    <h1>PostgreSQL Setup Required</h1>
+    <p class="muted">Workly could not connect to PostgreSQL. Copy <code>config/.env.example</code> to <code>config/.env</code>, enter your Hostinger PostgreSQL credentials, and import <code>sql/workly_postgres_schema.sql</code>.</p>
+    <div class="notice notice-warn">Database Driver: <code>pdo_pgsql</code> required on PHP 8.2+.</div>
+  </div>
+</body>
+</html>
+    <?php
+    exit;
+}
+
+// REST API v1 Routing
+if (str_starts_with($uri, '/api/v1/')) {
+    SecurityHelper::sendApiHeaders();
+
+    if ($uri === '/api/v1/auth/login' && $method === 'POST') {
+        require_once __DIR__ . '/controllers/AuthController.php';
+        (new AuthController($db))->handleApiLogin();
+        exit;
+    }
+
+    if (str_starts_with($uri, '/api/v1/tasks')) {
+        require_once __DIR__ . '/controllers/api/TaskApiController.php';
+        (new TaskApiController($db))->handle($method, $uri);
+        exit;
+    }
+    if (str_starts_with($uri, '/api/v1/clients')) {
+        require_once __DIR__ . '/controllers/api/ClientApiController.php';
+        (new ClientApiController($db))->handle($method, $uri);
+        exit;
+    }
+    if (str_starts_with($uri, '/api/v1/users')) {
+        require_once __DIR__ . '/controllers/api/UserApiController.php';
+        (new UserApiController($db))->handle($method, $uri);
+        exit;
+    }
+    if (str_starts_with($uri, '/api/v1/pto')) {
+        require_once __DIR__ . '/controllers/api/PtoApiController.php';
+        (new PtoApiController($db))->handle($method, $uri);
+        exit;
+    }
+    if (str_starts_with($uri, '/api/v1/meetings')) {
+        require_once __DIR__ . '/controllers/api/MeetingApiController.php';
+        (new MeetingApiController($db))->handle($method, $uri);
+        exit;
+    }
+    if (str_starts_with($uri, '/api/v1/email')) {
+        require_once __DIR__ . '/controllers/api/EmailApiController.php';
+        (new EmailApiController($db))->handle($method, $uri);
+        exit;
+    }
+    if (str_starts_with($uri, '/api/v1/knowledge')) {
+        require_once __DIR__ . '/controllers/api/KnowledgeApiController.php';
+        (new KnowledgeApiController($db))->handle($method, $uri);
+        exit;
+    }
+    if (str_starts_with($uri, '/api/v1/perks')) {
+        require_once __DIR__ . '/controllers/api/PerksApiController.php';
+        (new PerksApiController($db))->handle($method, $uri);
+        exit;
+    }
+    if (str_starts_with($uri, '/api/v1/reports')) {
+        require_once __DIR__ . '/controllers/api/ReportApiController.php';
+        (new ReportApiController($db))->handle($method, $uri);
+        exit;
+    }
+    if (str_starts_with($uri, '/api/v1/uploads')) {
+        require_once __DIR__ . '/controllers/api/UploadApiController.php';
+        (new UploadApiController($db))->handle($method, $uri);
+        exit;
+    }
+    if (str_starts_with($uri, '/api/v1/logs')) {
+        require_once __DIR__ . '/controllers/api/AuditLogApiController.php';
+        (new AuditLogApiController($db))->handle($method, $uri);
+        exit;
+    }
+
+    http_response_code(404);
+    echo json_encode(['error' => 'API endpoint not found']);
+    exit;
+}
+
+// Authentication & One-Time Setup Routes
+require_once __DIR__ . '/controllers/AuthController.php';
+$auth = new AuthController($db);
+
+if ($uri === '/setup') {
+    if ($method === 'POST') {
+        $auth->handleSetup();
+    } else {
+        $auth->showSetup();
+    }
+    exit;
+}
+
+if ($uri === '/login') {
+    if ($method === 'POST') {
+        $auth->handleLogin();
+    } else {
+        $auth->showLogin();
+    }
+    exit;
+}
+
+if ($uri === '/logout') {
+    $auth->handleLogout();
+    exit;
+}
+
+// Authenticated Platform Pages
+require_once __DIR__ . '/controllers/PageController.php';
+$pages = new PageController($db);
+
+$sectionMap = [
+    '/'                 => 'home',
+    '/tasks'            => 'tasks',
+    '/dashboard'        => 'dashboard',
+    '/va-directory'     => 'va_directory',
+    '/profile'          => 'profile',
+    '/clients'          => 'clients',
+    '/calendar-reports' => 'calendar_reports',
+    '/pto'              => 'pto',
+    '/email'            => 'email',
+    '/knowledge'        => 'knowledge',
+    '/perks'            => 'perks',
+];
+
+if ($uri === '/' || $uri === '') {
+    if (AuthMiddleware::userCount($db) === 0) {
+        header('Location: /setup');
+        exit;
+    }
+    $current = AuthMiddleware::currentUser($db);
+    if ($current === null) {
+        header('Location: /login');
+        exit;
+    }
+    header('Location: ' . ($current['role'] === 'va' ? '/tasks' : '/dashboard'));
+    exit;
+}
+
+if (isset($sectionMap[$uri])) {
+    $pages->render($sectionMap[$uri]);
+    exit;
+}
+
+http_response_code(404);
+SecurityHelper::sendHtmlHeaders();
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>404 — Page Not Found | Workly</title>
+  <link rel="stylesheet" href="/assets/css/workly.css">
+</head>
+<body class="auth-body">
+  <div class="auth-card">
+    <div class="brand-mark">W</div>
+    <h1>Page Not Found</h1>
+    <p class="muted">The requested workspace route does not exist.</p>
+    <a class="btn btn-primary" href="/">Return to Workspace</a>
+  </div>
+</body>
+</html>
