@@ -95,6 +95,18 @@ final class SecurityHelper
         return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
+    public static function toBoolean(mixed $value): bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return $value !== 0 && $value !== 0.0;
+        }
+
+        return in_array(strtolower(trim((string) $value)), ['1', 't', 'true', 'yes', 'on'], true);
+    }
+
     public static function sanitizePlainText(mixed $value, int $maxLength = 4000): string
     {
         if ($value === null) {

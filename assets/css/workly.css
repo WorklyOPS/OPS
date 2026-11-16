@@ -3058,3 +3058,126 @@ input[type="checkbox"], input[type="radio"] {
     break-inside: avoid;
   }
 }
+
+
+/* Task context menu and unified activity stream */
+.task-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.task-dropdown {
+  position: fixed;
+  z-index: 120;
+  width: min(220px, calc(100vw - 16px));
+  max-height: min(420px, calc(100vh - 16px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.task-menu-label {
+  display: block;
+  padding: 7px 10px 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.task-menu-divider {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border);
+}
+
+.task-dropdown button.task-menu-danger,
+.task-dropdown button[style*="danger"] {
+  color: var(--danger);
+}
+
+.task-activity-section {
+  margin: 4px 0 18px;
+}
+
+.task-activity-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.task-activity-heading h4 {
+  margin-bottom: 3px;
+}
+
+.task-activity-heading p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.task-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  max-height: 340px;
+  overflow-y: auto;
+  padding: 2px 3px 10px 0;
+}
+
+.task-activity-item {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.task-activity-item.is-note {
+  border-left-color: var(--warning, #d69a26);
+  background: color-mix(in srgb, var(--surface) 94%, #d69a26 6%);
+}
+
+.task-activity-item p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.task-activity-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  font-size: 11px;
+}
+
+.task-activity-form {
+  display: grid;
+  grid-template-columns: minmax(130px, .34fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+#modal-task-detail .modal-head {
+  position: sticky;
+  top: -1px;
+  z-index: 5;
+  padding: 2px 0 12px;
+  background: var(--surface);
+}
+
+@media (max-width: 600px) {
+  .task-activity-form {
+    grid-template-columns: 1fr;
+  }
+
+  .task-activity-form .btn {
+    width: 100%;
+  }
+}

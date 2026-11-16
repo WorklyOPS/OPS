@@ -162,7 +162,7 @@ final class PageController
             FROM tasks t
             JOIN users u ON t.assigned_va_id = u.id
             JOIN clients c ON t.client_id = c.id
-            WHERE t.deadline BETWEEN :r_start AND :r_end
+            WHERE t.archived_at IS NULL AND t.deadline BETWEEN :r_start AND :r_end
         ";
         $params = [':r_start' => $rangeStart, ':r_end' => $rangeEnd];
 
@@ -277,8 +277,8 @@ final class PageController
             ")->fetchAll(PDO::FETCH_ASSOC);
 
             $clientCount = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM clients WHERE contract_status = 'active'")->fetchColumn();
-            $totalTasks = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM tasks")->fetchColumn();
-            $completedTasks = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM tasks WHERE status = 'completed'")->fetchColumn();
+            $totalTasks = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM tasks WHERE archived_at IS NULL")->fetchColumn();
+            $completedTasks = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM tasks WHERE status = 'completed' AND archived_at IS NULL")->fetchColumn();
             $pendingPto = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM pto_requests WHERE status = 'pending'")->fetchColumn();
 
             $res = [
@@ -337,6 +337,7 @@ final class PageController
                     FROM tasks t
                     JOIN users u ON t.assigned_va_id = u.id
                     WHERE (u.team_leader_id = :tl OR t.created_by_id = :tl2)
+                      AND t.archived_at IS NULL
                       AND t.deadline >= CURRENT_DATE - INTERVAL '30 days'
                     GROUP BY TO_CHAR(t.deadline, 'YYYY-MM-DD')
                     ORDER BY day_label ASC
@@ -536,8 +537,14 @@ final class PageController
         $mStart = $calMonth . '-01';
         $mEnd = (new DateTimeImmutable($mStart))->modify('last day of this month')->format('Y-m-d');
 
-        // Strict calendar privacy: own meetings/shared meetings only; Admin can select a user to monitor
+        // Admin calendar monitoring is read-only and scoped to the selected account.
         $targetCalUid = ($role === 'admin' && $monitorUser !== '') ? $monitorUser : $uid;
+        $targetCalRole = $role;
+        if ($role === 'admin' && $monitorUser !== '') {
+            $targetRoleStmt = $this->db->prepare('SELECT role FROM users WHERE id = :id AND is_active = TRUE LIMIT 1');
+            $targetRoleStmt->execute([':id' => $targetCalUid]);
+            $targetCalRole = (string) ($targetRoleStmt->fetchColumn() ?: 'va');
+        }
 
         $mStmt = $this->db->prepare("
             SELECT m.*, u.name AS va_name, c.agency_name AS client_name
@@ -551,14 +558,26 @@ final class PageController
         $mStmt->execute([':u1' => $targetCalUid, ':u2' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
         $meetings = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Task milestones in that month (own tasks for VA; pod + own for TL; selected user for Admin)
-        $tStmt = $this->db->prepare("
-            SELECT id, title, deadline, status, priority
-            FROM tasks
-            WHERE assigned_va_id = :uid AND deadline BETWEEN :ms AND :me
-            ORDER BY deadline ASC
-        ");
-        $tStmt->execute([':uid' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
+        // VA sees own assigned tasks; Team Leader sees their own tasks and their pod.
+        $taskSql = "
+            SELECT t.id, t.title, t.deadline, t.status, t.priority
+            FROM tasks t
+            JOIN users assigned ON assigned.id = t.assigned_va_id
+            WHERE t.archived_at IS NULL AND t.deadline BETWEEN :ms AND :me
+        ";
+        $taskParams = [':ms' => $mStart, ':me' => $mEnd];
+        if ($targetCalRole === 'team_leader') {
+            $taskSql .= ' AND (assigned.team_leader_id = :uid OR t.assigned_va_id = :uid2 OR t.created_by_id = :uid3)';
+            $taskParams[':uid'] = $targetCalUid;
+            $taskParams[':uid2'] = $targetCalUid;
+            $taskParams[':uid3'] = $targetCalUid;
+        } else {
+            $taskSql .= ' AND t.assigned_va_id = :uid';
+            $taskParams[':uid'] = $targetCalUid;
+        }
+        $taskSql .= ' ORDER BY t.deadline ASC';
+        $tStmt = $this->db->prepare($taskSql);
+        $tStmt->execute($taskParams);
         $calendarTasks = $tStmt->fetchAll(PDO::FETCH_ASSOC);
 
         // SLA Report summary for initial range
@@ -567,7 +586,7 @@ final class PageController
             FROM tasks t
             JOIN users u ON t.assigned_va_id = u.id
             JOIN clients c ON t.client_id = c.id
-            WHERE t.deadline BETWEEN :sd AND :ed
+            WHERE t.archived_at IS NULL AND t.deadline BETWEEN :sd AND :ed
         ";
         $repParams = [':sd' => $startDate, ':ed' => $endDate];
         if ($role === 'va') {

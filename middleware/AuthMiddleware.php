@@ -62,7 +62,11 @@ final class AuthMiddleware
         $stmt->execute([':id' => $userId]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-        if (!$user || !$user['is_active'] || $user['is_suspended']) {
+        if (
+            !$user
+            || !SecurityHelper::toBoolean($user['is_active'] ?? false)
+            || SecurityHelper::toBoolean($user['is_suspended'] ?? false)
+        ) {
             session_unset();
             return null;
         }

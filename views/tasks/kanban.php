@@ -112,20 +112,40 @@ $totalCount = max(1, count($data['tasks']));
             };
           ?>
           <article class="task-card"
+                   tabindex="0"
                    draggable="true"
                    data-task-id="<?= SecurityHelper::e($task['id']) ?>"
                    data-search="<?= SecurityHelper::e($task['title'] . ' ' . $task['client_name'] . ' ' . $task['va_name']) ?>">
             <div class="task-card-top">
-              <span class="badge <?= $pBadge ?>"><?= SecurityHelper::e(ucfirst($task['priority'])) ?></span>
-              <button type="button" class="task-menu-btn" aria-label="Task actions">•••</button>
+              <div class="task-badges">
+                <span class="badge <?= $pBadge ?>"><?= SecurityHelper::e(ucfirst($task['priority'])) ?></span>
+                <?php if (!empty($task['is_urgent'])): ?>
+                  <span class="badge badge-danger">Urgent</span>
+                <?php endif; ?>
+              </div>
             </div>
 
-            <div class="task-dropdown is-hidden">
-              <button type="button" data-task-action="open" data-task-id="<?= SecurityHelper::e($task['id']) ?>">View Details & Notes</button>
-              <button type="button" data-task-action="priority" data-priority="high" data-task-id="<?= SecurityHelper::e($task['id']) ?>">Set High Priority</button>
-              <button type="button" data-task-action="priority" data-priority="medium" data-task-id="<?= SecurityHelper::e($task['id']) ?>">Set Medium Priority</button>
-              <button type="button" data-task-action="priority" data-priority="low" data-task-id="<?= SecurityHelper::e($task['id']) ?>">Set Low Priority</button>
-              <button type="button" data-task-action="delete" data-task-id="<?= SecurityHelper::e($task['id']) ?>" style="color:var(--danger);">Delete Task</button>
+            <div class="task-dropdown is-hidden" role="menu" aria-label="Task actions">
+              <button type="button" data-task-action="open" data-task-id="<?= SecurityHelper::e($task['id']) ?>">Open task details</button>
+              <div class="task-menu-divider"></div>
+              <span class="task-menu-label">Move to</span>
+              <?php foreach ($columns as $statusKey => $statusLabel): ?>
+                <?php if ($statusKey !== $task['status']): ?>
+                  <button type="button" data-task-action="status" data-status="<?= SecurityHelper::e($statusKey) ?>" data-task-id="<?= SecurityHelper::e($task['id']) ?>"><?= SecurityHelper::e($statusLabel) ?></button>
+                <?php endif; ?>
+              <?php endforeach; ?>
+              <div class="task-menu-divider"></div>
+              <span class="task-menu-label">Priority</span>
+              <button type="button" data-task-action="priority" data-priority="high" data-task-id="<?= SecurityHelper::e($task['id']) ?>">High</button>
+              <button type="button" data-task-action="priority" data-priority="medium" data-task-id="<?= SecurityHelper::e($task['id']) ?>">Medium</button>
+              <button type="button" data-task-action="priority" data-priority="low" data-task-id="<?= SecurityHelper::e($task['id']) ?>">Low</button>
+              <button type="button" data-task-action="urgent" data-urgent="<?= !empty($task['is_urgent']) ? '0' : '1' ?>" data-task-id="<?= SecurityHelper::e($task['id']) ?>"><?= !empty($task['is_urgent']) ? 'Remove urgent flag' : 'Mark as urgent' ?></button>
+              <?php if (in_array($role, ['team_leader', 'admin'], true)): ?>
+                <div class="task-menu-divider"></div>
+                <button type="button" data-task-action="duplicate" data-task-id="<?= SecurityHelper::e($task['id']) ?>">Duplicate task</button>
+                <button type="button" data-task-action="archive" data-task-id="<?= SecurityHelper::e($task['id']) ?>">Archive task</button>
+                <button type="button" data-task-action="delete" data-task-id="<?= SecurityHelper::e($task['id']) ?>" class="task-menu-danger">Delete permanently</button>
+              <?php endif; ?>
             </div>
 
             <div class="task-title" data-open-task="<?= SecurityHelper::e($task['id']) ?>">
@@ -248,25 +268,24 @@ $totalCount = max(1, count($data['tasks']));
 
     <div class="notice notice-info" id="detail-task-desc"></div>
 
-    <div style="margin-bottom:16px;">
-      <h4 style="margin-bottom:8px;">Instructions & Execution Notes</h4>
-      <div id="detail-notes-list"></div>
-      <form data-api-form="/api/v1/tasks/{task_id}/notes" data-api-method="POST" style="display:flex;gap:8px;margin-top:8px;">
+    <section class="task-activity-section">
+      <div class="task-activity-heading">
+        <div>
+          <h4>Task activity</h4>
+          <p class="muted">Notes and team conversation in one timeline.</p>
+        </div>
+      </div>
+      <div id="detail-activity-list" class="task-activity-list"></div>
+      <form data-api-form="/api/v1/tasks/{task_id}/activity" data-api-method="POST" class="task-activity-form">
         <input type="hidden" name="task_id" value="">
-        <input class="input" name="content" required placeholder="Add note or instruction...">
-        <button type="submit" class="btn btn-secondary btn-sm">Add Note</button>
+        <select class="select" name="type" aria-label="Activity type">
+          <option value="comment">Comment</option>
+          <option value="note">Internal note</option>
+        </select>
+        <input class="input" name="content" required maxlength="2000" placeholder="Write a comment or internal note...">
+        <button type="submit" class="btn btn-primary btn-sm">Send</button>
       </form>
-    </div>
-
-    <div style="margin-bottom:16px;">
-      <h4 style="margin-bottom:8px;">Comments</h4>
-      <div id="detail-comments-list"></div>
-      <form data-api-form="/api/v1/tasks/{task_id}/comments" data-api-method="POST" style="display:flex;gap:8px;margin-top:8px;">
-        <input type="hidden" name="task_id" value="">
-        <input class="input" name="message" required placeholder="Post a comment...">
-        <button type="submit" class="btn btn-secondary btn-sm">Post</button>
-      </form>
-    </div>
+    </section>
 
     <div style="padding-top:14px;border-top:1px solid var(--border);">
       <h4 style="margin-bottom:8px;">Log Overtime / Extra Hours on Deliverable</h4>

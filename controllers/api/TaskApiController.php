@@ -45,8 +45,20 @@ final class TaskApiController
             $this->addComment($taskId, $user);
             return;
         }
+        if ($method === 'POST' && $taskId && $sub === 'activity') {
+            $this->addActivity($taskId, $user);
+            return;
+        }
         if ($method === 'POST' && $taskId && $sub === 'extra-hours') {
             $this->logExtraHours($taskId, $user);
+            return;
+        }
+        if ($method === 'POST' && $taskId && $sub === 'duplicate') {
+            $this->duplicateTask($taskId, $user);
+            return;
+        }
+        if ($method === 'PATCH' && $taskId && $sub === 'archive') {
+            $this->archiveTask($taskId, $user);
             return;
         }
         if ($method === 'PATCH' && !$sub) {
@@ -61,7 +73,7 @@ final class TaskApiController
                 $this->updateStatus($id, $user, $input);
                 return;
             }
-            if (isset($input['priority'])) {
+            if (isset($input['priority']) || array_key_exists('is_urgent', $input)) {
                 $this->updateTask($id, $user, $input);
                 return;
             }
@@ -88,18 +100,38 @@ final class TaskApiController
 
     private function assertTaskAccess(string $taskId, array $user): array
     {
-        $stmt = $this->db->prepare('SELECT * FROM tasks WHERE id = :id LIMIT 1');
+        $stmt = $this->db->prepare("
+            SELECT t.*, assigned.team_leader_id AS assigned_team_leader_id
+            FROM tasks t
+            JOIN users assigned ON assigned.id = t.assigned_va_id
+            WHERE t.id = :id
+            LIMIT 1
+        ");
         $stmt->execute([':id' => $taskId]);
         $task = $stmt->fetch(PDO::FETCH_ASSOC);
+
         if (!$task) {
             http_response_code(404);
             echo json_encode(['error' => 'Task not found']);
             exit;
         }
 
-        if ($user['role'] === 'va' && $task['assigned_va_id'] !== $user['id']) {
+        $role = (string) ($user['role'] ?? '');
+        $uid = (string) ($user['id'] ?? '');
+        $allowed = match ($role) {
+            'admin', 'hrm' => true,
+            'va' => hash_equals((string) $task['assigned_va_id'], $uid),
+            'team_leader' => (
+                hash_equals((string) ($task['assigned_team_leader_id'] ?? ''), $uid)
+                || hash_equals((string) $task['created_by_id'], $uid)
+                || hash_equals((string) $task['assigned_va_id'], $uid)
+            ),
+            default => false,
+        };
+
+        if (!$allowed) {
             http_response_code(403);
-            echo json_encode(['error' => 'Forbidden: Task belongs to another Virtual Assistant']);
+            echo json_encode(['error' => 'Forbidden: You do not have access to this task']);
             exit;
         }
 
@@ -114,18 +146,18 @@ final class TaskApiController
 
         $payload = CacheService::remember($this->db, "tasks:{$role}:{$uid}", 30, function () use ($role, $uid): array {
             if ($role === 'va') {
-                $stmt = $this->db->prepare('SELECT * FROM tasks WHERE assigned_va_id = :va ORDER BY created_at DESC');
+                $stmt = $this->db->prepare('SELECT * FROM tasks WHERE assigned_va_id = :va AND archived_at IS NULL ORDER BY created_at DESC');
                 $stmt->execute([':va' => $uid]);
             } elseif ($role === 'team_leader') {
                 $stmt = $this->db->prepare("
                     SELECT t.* FROM tasks t
                     LEFT JOIN users u ON t.assigned_va_id = u.id
-                    WHERE u.team_leader_id = :tl OR t.assigned_va_id = :tl OR t.created_by_id = :tl
+                    WHERE (u.team_leader_id = :tl OR t.assigned_va_id = :tl OR t.created_by_id = :tl) AND t.archived_at IS NULL
                     ORDER BY t.created_at DESC
                 ");
                 $stmt->execute([':tl' => $uid]);
             } else {
-                $stmt = $this->db->query('SELECT * FROM tasks ORDER BY created_at DESC');
+                $stmt = $this->db->query('SELECT * FROM tasks WHERE archived_at IS NULL ORDER BY created_at DESC');
             }
             return ['data' => $stmt->fetchAll(PDO::FETCH_ASSOC)];
         }, $hit);
@@ -152,6 +184,45 @@ final class TaskApiController
         if ($title === '' || $clientId === '') {
             http_response_code(422);
             echo json_encode(['error' => 'Title and client are required']);
+            return;
+        }
+
+        $deadlineDate = DateTimeImmutable::createFromFormat('!Y-m-d', $deadline);
+        if (!$deadlineDate || $deadlineDate->format('Y-m-d') !== $deadline) {
+            http_response_code(422);
+            echo json_encode(['error' => 'A valid deadline in YYYY-MM-DD format is required']);
+            return;
+        }
+
+        $vaCheck = $this->db->prepare("SELECT id, role, is_active, team_leader_id FROM users WHERE id = :id LIMIT 1");
+        $vaCheck->execute([':id' => $assignedVaId]);
+        $assignedUser = $vaCheck->fetch(PDO::FETCH_ASSOC);
+        if (!$assignedUser || $assignedUser['role'] !== 'va' || !SecurityHelper::toBoolean($assignedUser['is_active'] ?? false)) {
+            http_response_code(422);
+            echo json_encode(['error' => 'The selected assignee is not an active Virtual Assistant']);
+            return;
+        }
+        if ($user['role'] === 'team_leader' && $assignedUser['team_leader_id'] !== $user['id']) {
+            http_response_code(403);
+            echo json_encode(['error' => 'You can only assign tasks to VAs in your team']);
+            return;
+        }
+
+        $clientSql = "SELECT id FROM clients WHERE id = :id";
+        $clientParams = [':id' => $clientId];
+        if ($user['role'] === 'va') {
+            $clientSql .= " AND focus_va_id = :uid";
+            $clientParams[':uid'] = $user['id'];
+        } elseif ($user['role'] === 'team_leader') {
+            $clientSql .= " AND team_leader_id = :uid";
+            $clientParams[':uid'] = $user['id'];
+        }
+        $clientSql .= " LIMIT 1";
+        $clientCheck = $this->db->prepare($clientSql);
+        $clientCheck->execute($clientParams);
+        if (!$clientCheck->fetchColumn()) {
+            http_response_code(403);
+            echo json_encode(['error' => 'The selected client is outside your access scope']);
             return;
         }
 
@@ -232,15 +303,55 @@ final class TaskApiController
 
         $fields = [];
         $params = [':id' => $taskId];
-        $allowed = ['title', 'description', 'status', 'priority', 'client_id', 'deadline', 'estimated_hours'];
+        $allowed = $user['role'] === 'va'
+            ? ['priority', 'is_urgent']
+            : ['title', 'description', 'status', 'priority', 'deadline', 'estimated_hours', 'is_urgent'];
 
         foreach ($allowed as $col) {
-            if (array_key_exists($col, $input)) {
-                $fields[] = "{$col} = :{$col}";
+            if (!array_key_exists($col, $input)) {
+                continue;
+            }
+
+            if ($col === 'deadline') {
+                $deadlineValue = SecurityHelper::sanitizePlainText($input[$col], 10);
+                $deadlineDate = DateTimeImmutable::createFromFormat('!Y-m-d', $deadlineValue);
+                if (!$deadlineDate || $deadlineDate->format('Y-m-d') !== $deadlineValue) {
+                    http_response_code(422);
+                    echo json_encode(['error' => 'Invalid task deadline']);
+                    return;
+                }
+                $input[$col] = $deadlineValue;
+            }
+            if ($col === 'title' && SecurityHelper::sanitizePlainText($input[$col], 255) === '') {
+                http_response_code(422);
+                echo json_encode(['error' => 'Task title cannot be empty']);
+                return;
+            }
+            if ($col === 'status' && !in_array($input[$col], ['backlog', 'todo', 'in_progress', 'in_review', 'completed'], true)) {
+                http_response_code(422);
+                echo json_encode(['error' => 'Invalid task status']);
+                return;
+            }
+            if ($col === 'priority' && !in_array($input[$col], ['low', 'medium', 'high'], true)) {
+                http_response_code(422);
+                echo json_encode(['error' => 'Invalid task priority']);
+                return;
+            }
+            if ($col === 'is_urgent') {
+                $params[":{$col}"] = filter_var($input[$col], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                if ($params[":{$col}"] === null) {
+                    http_response_code(422);
+                    echo json_encode(['error' => 'Invalid urgent flag']);
+                    return;
+                }
+            } elseif ($col === 'estimated_hours') {
+                $params[":{$col}"] = max(0, min(1000, (float) $input[$col]));
+            } else {
                 $params[":{$col}"] = is_string($input[$col])
-                    ? SecurityHelper::sanitizePlainText($input[$col])
+                    ? SecurityHelper::sanitizePlainText($input[$col], $col === 'title' ? 255 : 4000)
                     : $input[$col];
             }
+            $fields[] = "{$col} = :{$col}";
         }
 
         if (empty($fields)) {
@@ -256,8 +367,54 @@ final class TaskApiController
         echo json_encode(['success' => true, 'id' => $taskId]);
     }
 
+    private function archiveTask(string $taskId, array $user): void
+    {
+        AuthMiddleware::requireRoles(['admin', 'team_leader'], $user);
+        $this->assertTaskAccess($taskId, $user);
+        $stmt = $this->db->prepare('UPDATE tasks SET archived_at = NOW(), updated_at = NOW() WHERE id = :id');
+        $stmt->execute([':id' => $taskId]);
+        $this->invalidate();
+        AuditLogger::log('TASK_ARCHIVED', 'success', "Archived task {$taskId}", $user['id'], $user['role'], $this->db);
+        echo json_encode(['success' => true, 'id' => $taskId]);
+    }
+
+    private function duplicateTask(string $taskId, array $user): void
+    {
+        AuthMiddleware::requireRoles(['admin', 'team_leader'], $user);
+        $task = $this->assertTaskAccess($taskId, $user);
+        $newId = 'task-' . bin2hex(random_bytes(5));
+        $stmt = $this->db->prepare("
+            INSERT INTO tasks (
+                id, title, description, status, priority, assigned_va_id, client_id,
+                created_by_id, creator_role, deadline, estimated_hours, is_urgent
+            )
+            VALUES (
+                :id, :title, :description, 'todo', :priority, :va_id, :client_id,
+                :creator_id, :creator_role, :deadline, :hours, :urgent
+            )
+        ");
+        $stmt->execute([
+            ':id' => $newId,
+            ':title' => substr((string) $task['title'] . ' (copy)', 0, 255),
+            ':description' => $task['description'],
+            ':priority' => $task['priority'],
+            ':va_id' => $task['assigned_va_id'],
+            ':client_id' => $task['client_id'],
+            ':creator_id' => $user['id'],
+            ':creator_role' => $user['role'],
+            ':deadline' => $task['deadline'],
+            ':hours' => $task['estimated_hours'],
+            ':urgent' => $task['is_urgent'] ?? false,
+        ]);
+        $this->invalidate();
+        AuditLogger::log('TASK_DUPLICATED', 'success', "Duplicated task {$taskId} as {$newId}", $user['id'], $user['role'], $this->db);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'id' => $newId]);
+    }
+
     private function deleteTask(string $taskId, array $user): void
     {
+        AuthMiddleware::requireRoles(['admin', 'team_leader'], $user);
         $this->assertTaskAccess($taskId, $user);
         $stmt = $this->db->prepare('DELETE FROM tasks WHERE id = :id');
         $stmt->execute([':id' => $taskId]);
@@ -324,6 +481,54 @@ final class TaskApiController
 
         $this->invalidate();
         echo json_encode(['success' => true, 'id' => $id]);
+    }
+
+    private function addActivity(string $taskId, array $user): void
+    {
+        $this->assertTaskAccess($taskId, $user);
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $type = ($input['type'] ?? 'comment') === 'note' ? 'note' : 'comment';
+        $content = SecurityHelper::sanitizePlainText($input['content'] ?? '', 2000);
+
+        if ($content === '') {
+            http_response_code(422);
+            echo json_encode(['error' => 'Activity content cannot be empty']);
+            return;
+        }
+
+        if ($type === 'note') {
+            $stmt = $this->db->prepare("
+                INSERT INTO task_notes (id, task_id, author_id, author_name, author_role, is_instruction, content)
+                VALUES (:id, :task_id, :author_id, :author_name, :author_role, :is_instruction, :content)
+            ");
+            $stmt->execute([
+                ':id' => 'note-' . bin2hex(random_bytes(5)),
+                ':task_id' => $taskId,
+                ':author_id' => $user['id'],
+                ':author_name' => $user['name'],
+                ':author_role' => $user['role'],
+                ':is_instruction' => $user['role'] !== 'va',
+                ':content' => $content,
+            ]);
+        } else {
+            $stmt = $this->db->prepare("
+                INSERT INTO task_comments (id, task_id, author_id, author_name, author_role, message)
+                VALUES (:id, :task_id, :author_id, :author_name, :author_role, :message)
+            ");
+            $stmt->execute([
+                ':id' => 'cmt-' . bin2hex(random_bytes(5)),
+                ':task_id' => $taskId,
+                ':author_id' => $user['id'],
+                ':author_name' => $user['name'],
+                ':author_role' => $user['role'],
+                ':message' => $content,
+            ]);
+        }
+
+        $this->invalidate();
+        AuditLogger::log('TASK_ACTIVITY_ADDED', 'success', "Added {$type} to task {$taskId}", $user['id'], $user['role'], $this->db);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'type' => $type]);
     }
 
     private function logExtraHours(string $taskId, array $user): void

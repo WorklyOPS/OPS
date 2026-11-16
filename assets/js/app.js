@@ -197,58 +197,120 @@
       });
     });
 
-    // Context menu & task modal openers
-    board.addEventListener('click', async (e) => {
-      const menuBtn = e.target.closest('.task-menu-btn');
-      if (menuBtn) {
-        e.stopPropagation();
-        const card = menuBtn.closest('.task-card');
-        const menu = card ? card.querySelector('.task-dropdown') : null;
-        document.querySelectorAll('.task-dropdown').forEach((d) => {
-          if (d !== menu) d.classList.add('is-hidden');
-        });
-        if (menu) menu.classList.toggle('is-hidden');
-        return;
-      }
+    // Native task context menu (right-click); touch users can use a long press.
+    const hideTaskMenus = () => {
+      board.querySelectorAll('.task-dropdown').forEach((menu) => {
+        menu.classList.add('is-hidden');
+        menu.style.removeProperty('left');
+        menu.style.removeProperty('top');
+      });
+    };
 
+    const openTaskMenu = (card, x, y) => {
+      hideTaskMenus();
+      const menu = card.querySelector('.task-dropdown');
+      if (!menu) return;
+      menu.classList.remove('is-hidden');
+      menu.style.position = 'fixed';
+      menu.style.left = Math.max(8, Math.min(x, window.innerWidth - 230)) + 'px';
+      menu.style.top = Math.max(8, Math.min(y, window.innerHeight - 360)) + 'px';
+    };
+
+    board.addEventListener('contextmenu', (e) => {
+      const card = e.target.closest('.task-card');
+      if (!card) return;
+      e.preventDefault();
+      openTaskMenu(card, e.clientX, e.clientY);
+    });
+
+    board.addEventListener('keydown', (e) => {
+      if (e.key !== 'ContextMenu' && !(e.shiftKey && e.key === 'F10')) return;
+      const card = e.target.closest('.task-card');
+      if (!card) return;
+      e.preventDefault();
+      const rect = card.getBoundingClientRect();
+      openTaskMenu(card, rect.left + 12, rect.top + 12);
+      const firstAction = card.querySelector('.task-dropdown button');
+      if (firstAction) firstAction.focus();
+    });
+
+    let touchMenuTimer = null;
+    board.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'touch') return;
+      const card = e.target.closest('.task-card');
+      if (!card) return;
+      touchMenuTimer = window.setTimeout(() => openTaskMenu(card, e.clientX, e.clientY), 650);
+    }, { passive: true });
+    ['pointerup', 'pointercancel', 'pointermove'].forEach((eventName) => {
+      board.addEventListener(eventName, () => {
+        if (touchMenuTimer) window.clearTimeout(touchMenuTimer);
+        touchMenuTimer = null;
+      }, { passive: true });
+    });
+
+    board.addEventListener('click', async (e) => {
       const actionBtn = e.target.closest('[data-task-action]');
       if (actionBtn) {
+        e.preventDefault();
+        e.stopPropagation();
         const action = actionBtn.getAttribute('data-task-action');
         const taskId = actionBtn.getAttribute('data-task-id');
-        if (action === 'delete') {
-          try {
-            await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId), { method: 'DELETE' });
-            showToast('Task removed', 'success');
-            window.location.reload();
-          } catch (err) {
-            showToast(err.message, 'error');
+
+        try {
+          if (action === 'open') {
+            hideTaskMenus();
+            openTaskDetailModal(taskId);
+            return;
           }
-        } else if (action === 'priority') {
-          const priority = actionBtn.getAttribute('data-priority');
-          try {
-            await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId), {
-              method: 'PATCH',
-              body: JSON.stringify({ priority })
-            });
-            showToast('Priority updated', 'success');
-            window.location.reload();
-          } catch (err) {
-            showToast(err.message, 'error');
+          if (action === 'delete' && !window.confirm('Permanently delete this task? This cannot be undone.')) return;
+          if (action === 'archive' && !window.confirm('Archive this task? It will be hidden from the active board.')) return;
+
+          let endpoint = '/api/v1/tasks/' + encodeURIComponent(taskId);
+          let method = 'PATCH';
+          let body = {};
+
+          if (action === 'status') {
+            body.status = actionBtn.getAttribute('data-status');
+            endpoint += '/status';
+          } else if (action === 'priority') {
+            body.priority = actionBtn.getAttribute('data-priority');
+          } else if (action === 'urgent') {
+            body.is_urgent = actionBtn.getAttribute('data-urgent') === '1';
+          } else if (action === 'duplicate') {
+            endpoint += '/duplicate';
+            method = 'POST';
+          } else if (action === 'archive') {
+            endpoint += '/archive';
+          } else if (action === 'delete') {
+            method = 'DELETE';
+          } else {
+            return;
           }
-        } else if (action === 'open') {
-          openTaskDetailModal(taskId);
+
+          await apiFetch(endpoint, {
+            method,
+            body: method === 'DELETE' || (method === 'POST' && action === 'duplicate') ? undefined : JSON.stringify(body)
+          });
+          showToast('Task updated', 'success');
+          window.location.reload();
+        } catch (err) {
+          showToast(err.message, 'error');
         }
         return;
       }
 
       const titleBtn = e.target.closest('[data-open-task]');
       if (titleBtn) {
+        hideTaskMenus();
         openTaskDetailModal(titleBtn.getAttribute('data-open-task'));
+        return;
       }
+
+      if (!e.target.closest('.task-dropdown')) hideTaskMenus();
     });
 
-    document.addEventListener('click', () => {
-      document.querySelectorAll('.task-dropdown').forEach((d) => d.classList.add('is-hidden'));
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('.task-card')) hideTaskMenus();
     });
   }
 
@@ -275,34 +337,47 @@
       task.client_name + ' • Assigned to ' + task.va_name + ' • Due ' + task.deadline + ' • Est ' + task.estimated_hours + 'h';
     modal.querySelector('#detail-task-desc').textContent = task.description || 'No description provided.';
 
-    const notesList = modal.querySelector('#detail-notes-list');
-    const commentsList = modal.querySelector('#detail-comments-list');
-    notesList.innerHTML = '';
-    commentsList.innerHTML = '';
+    const activityList = modal.querySelector('#detail-activity-list');
+    if (activityList) {
+      activityList.replaceChildren();
+      const notes = ((allData.notes || {})[taskId] || []).map((item) => ({
+        type: 'note', content: item.content, author_name: item.author_name,
+        author_role: item.author_role, created_at: item.created_at
+      }));
+      const comments = ((allData.comments || {})[taskId] || []).map((item) => ({
+        type: 'comment', content: item.message, author_name: item.author_name,
+        author_role: item.author_role, created_at: item.created_at
+      }));
+      const activity = notes.concat(comments).sort((a, b) =>
+        String(a.created_at || '').localeCompare(String(b.created_at || ''))
+      );
 
-    const notes = (allData.notes || {})[taskId] || [];
-    if (notes.length === 0) {
-      notesList.innerHTML = '<p class="muted">No notes yet.</p>';
-    } else {
-      notes.forEach((n) => {
-        const div = document.createElement('div');
-        div.className = 'message-bubble';
-        div.innerHTML = '<strong>' + escapeHtml(n.author_name) + '</strong> <span class="badge badge-neutral">' +
-          escapeHtml(n.author_role) + '</span><p style="margin-top:4px">' + escapeHtml(n.content) + '</p>';
-        notesList.appendChild(div);
-      });
-    }
-
-    const comments = (allData.comments || {})[taskId] || [];
-    if (comments.length === 0) {
-      commentsList.innerHTML = '<p class="muted">No comments yet.</p>';
-    } else {
-      comments.forEach((c) => {
-        const div = document.createElement('div');
-        div.className = 'message-bubble';
-        div.innerHTML = '<strong>' + escapeHtml(c.author_name) + '</strong><p style="margin-top:4px">' + escapeHtml(c.message) + '</p>';
-        commentsList.appendChild(div);
-      });
+      if (!activity.length) {
+        const empty = document.createElement('p');
+        empty.className = 'muted';
+        empty.textContent = 'No activity yet. Start the conversation.';
+        activityList.appendChild(empty);
+      } else {
+        activity.forEach((item) => {
+          const entry = document.createElement('article');
+          entry.className = 'task-activity-item ' + (item.type === 'note' ? 'is-note' : 'is-comment');
+          const meta = document.createElement('div');
+          meta.className = 'task-activity-meta';
+          const author = document.createElement('strong');
+          author.textContent = item.author_name || 'Workspace member';
+          const kind = document.createElement('span');
+          kind.className = 'badge ' + (item.type === 'note' ? 'badge-warn' : 'badge-info');
+          kind.textContent = item.type === 'note' ? 'Internal note' : 'Comment';
+          const role = document.createElement('span');
+          role.className = 'muted';
+          role.textContent = item.author_role || '';
+          const content = document.createElement('p');
+          content.textContent = item.content || '';
+          meta.append(author, kind, role);
+          entry.append(meta, content);
+          activityList.appendChild(entry);
+        });
+      }
     }
 
     modal.querySelectorAll('input[name="task_id"]').forEach((inp) => { inp.value = taskId; });

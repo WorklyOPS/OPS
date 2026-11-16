@@ -53,7 +53,7 @@ foreach ($repTasks as $rt) {
     <p class="muted">Private user calendar events, Team Leader meeting scheduling, and custom date-range PDF SLA reporting.</p>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
-    <?php if (in_array($role, ['team_leader', 'admin'], true)): ?>
+    <?php if ($role === 'team_leader' || ($role === 'admin' && empty($data['monitor_user']))): ?>
       <button type="button" class="btn btn-secondary" data-open-modal="modal-schedule-meeting">+ Schedule Meeting</button>
     <?php endif; ?>
     <button type="button" id="btn-print-sla" class="btn btn-primary">Export SLA Report PDF</button>
@@ -201,7 +201,7 @@ foreach ($repTasks as $rt) {
   <?php endif; ?>
 </div>
 
-<?php if (in_array($role, ['team_leader', 'admin'], true)): ?>
+<?php if ($role === 'team_leader' || ($role === 'admin' && empty($data['monitor_user']))): ?>
   <div id="modal-schedule-meeting" class="modal-backdrop is-hidden">
     <div class="modal-box">
       <div class="modal-head">
