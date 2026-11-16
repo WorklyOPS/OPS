@@ -25,6 +25,7 @@
     initModals();
     initKanbanBoard();
     initForms();
+    initClientCsvImport();
     initInteractiveButtons();
     initOnboardingTour();
   });
@@ -491,6 +492,146 @@
       ptoStart.addEventListener('change', recalc);
       ptoEnd.addEventListener('change', recalc);
     }
+  }
+
+  // ------------------------------------------------------------------------
+  // Client CSV Import: header mapping, preview and validated bulk submission
+  // ------------------------------------------------------------------------
+  function initClientCsvImport() {
+    const fileInput = document.getElementById('client-csv-file');
+    const mappingBox = document.getElementById('client-csv-mapping');
+    const previewBox = document.getElementById('client-csv-preview');
+    const statusBox = document.getElementById('client-csv-status');
+    const importBtn = document.getElementById('client-csv-import');
+    if (!fileInput || !mappingBox || !previewBox || !statusBox || !importBtn) return;
+
+    const fields = [
+      { key: 'agency_name', label: 'Company / Agency', aliases: ['agency_name', 'agency', 'company', 'company_name', 'business'] },
+      { key: 'name', label: 'Contact name', aliases: ['name', 'contact', 'contact_name', 'full_name', 'executive_contact'] },
+      { key: 'email', label: 'Email', aliases: ['email', 'primary_email', 'contact_email'] },
+      { key: 'phone', label: 'Phone', aliases: ['phone', 'telephone', 'mobile'] },
+      { key: 'state', label: 'State', aliases: ['state', 'province', 'region'] },
+      { key: 'country', label: 'Country', aliases: ['country'] },
+      { key: 'website', label: 'Website', aliases: ['website', 'url', 'company_website'] },
+      { key: 'linkedin', label: 'LinkedIn', aliases: ['linkedin', 'linkedin_url'] },
+      { key: 'additional_email', label: 'Additional email', aliases: ['additional_email', 'secondary_email', 'email_2'] },
+      { key: 'additional_phone', label: 'Additional phone', aliases: ['additional_phone', 'secondary_phone', 'phone_2'] }
+    ];
+    let headers = [];
+    let rows = [];
+    let mappings = {};
+
+    const normalize = (value) => String(value || '').trim().toLowerCase().replace(/[\s\-./]+/g, '_');
+
+    function parseCsv(text, delimiter) {
+      const result = [];
+      let row = [], value = '', quoted = false;
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (quoted) {
+          if (char === '"' && text[i + 1] === '"') { value += '"'; i++; }
+          else if (char === '"') quoted = false;
+          else value += char;
+        } else if (char === '"') quoted = true;
+        else if (char === delimiter) { row.push(value); value = ''; }
+        else if (char === '\n') { row.push(value.replace(/\r$/, '')); result.push(row); row = []; value = ''; }
+        else value += char;
+      }
+      if (value.length || row.length) { row.push(value.replace(/\r$/, '')); result.push(row); }
+      return result.filter((r) => r.some((cell) => String(cell).trim() !== ''));
+    }
+
+    function renderMapping() {
+      mappingBox.replaceChildren();
+      fields.forEach((field) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'form-group';
+        const label = document.createElement('label');
+        label.className = 'form-label';
+        label.textContent = field.label;
+        const select = document.createElement('select');
+        select.className = 'select';
+        select.dataset.mapField = field.key;
+        const none = document.createElement('option');
+        none.value = '-1'; none.textContent = 'Not mapped'; select.appendChild(none);
+        headers.forEach((header, index) => {
+          const option = document.createElement('option');
+          option.value = String(index); option.textContent = header || ('Column ' + (index + 1));
+          select.appendChild(option);
+        });
+        const found = headers.findIndex((header) => field.aliases.includes(normalize(header)));
+        select.value = found >= 0 ? String(found) : '-1';
+        select.addEventListener('change', () => { mappings[field.key] = Number(select.value); renderPreview(); });
+        wrap.append(label, select); mappingBox.appendChild(wrap);
+        mappings[field.key] = Number(select.value);
+      });
+    }
+
+    function mappedRow(row) {
+      const item = {};
+      fields.forEach((field) => {
+        const index = mappings[field.key];
+        item[field.key] = Number.isInteger(index) && index >= 0 ? String(row[index] || '').trim() : '';
+      });
+      return item;
+    }
+
+    function renderPreview() {
+      const required = ['agency_name', 'name', 'email'];
+      const missing = required.filter((key) => !Number.isInteger(mappings[key]) || mappings[key] < 0);
+      const mapped = rows.slice(0, 5).map(mappedRow);
+      previewBox.replaceChildren();
+      if (!rows.length) return;
+      const table = document.createElement('table'); table.className = 'table';
+      const thead = document.createElement('thead'); const tr = document.createElement('tr');
+      ['Company', 'Contact', 'Email', 'Phone'].forEach((label) => { const th = document.createElement('th'); th.textContent = label; tr.appendChild(th); });
+      thead.appendChild(tr); table.appendChild(thead);
+      const tbody = document.createElement('tbody');
+      mapped.forEach((item) => {
+        const row = document.createElement('tr');
+        ['agency_name', 'name', 'email', 'phone'].forEach((key) => { const td = document.createElement('td'); td.textContent = item[key] || '—'; row.appendChild(td); });
+        tbody.appendChild(row);
+      });
+      table.appendChild(tbody); previewBox.appendChild(table);
+      statusBox.textContent = rows.length + ' data row(s) detected. ' + (missing.length ? 'Map required columns: ' + missing.join(', ') + '.' : 'Previewing first ' + mapped.length + ' row(s).');
+      importBtn.disabled = missing.length > 0 || rows.length === 0;
+    }
+
+    fileInput.addEventListener('change', async () => {
+      importBtn.disabled = true; previewBox.replaceChildren(); mappingBox.replaceChildren(); rows = []; headers = [];
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) { statusBox.textContent = 'Choose a CSV file to begin.'; return; }
+      if (!/\.csv$/i.test(file.name) && file.type !== 'text/csv') { statusBox.textContent = 'Please select a .csv file. XLSX is not supported here.'; return; }
+      if (file.size > 5 * 1024 * 1024) { statusBox.textContent = 'CSV exceeds the 5 MB limit.'; return; }
+      try {
+        const content = (await file.text()).replace(/^\uFEFF/, '');
+        const firstLine = content.split(/\r?\n/, 1)[0] || '';
+        const commaCount = (firstLine.match(/,/g) || []).length;
+        const semicolonCount = (firstLine.match(/;/g) || []).length;
+        const parsed = parseCsv(content, semicolonCount > commaCount ? ';' : ',');
+        if (parsed.length < 2) throw new Error('The CSV must include a header and at least one data row.');
+        headers = parsed.shift().map((h) => h.trim());
+        rows = parsed;
+        renderMapping(); renderPreview();
+      } catch (error) { statusBox.textContent = error.message; }
+    });
+
+    importBtn.addEventListener('click', async () => {
+      const vaId = (document.getElementById('client-csv-va') || {}).value || '';
+      const tlId = (document.getElementById('client-csv-tl') || {}).value || '';
+      if (!vaId || !tlId) { showToast('Select a default VA and Team Leader.', 'error'); return; }
+      const clients = rows.map((row) => Object.assign(mappedRow(row), { focus_va_id: vaId, team_leader_id: tlId }))
+        .filter((item) => item.agency_name && item.name && item.email);
+      if (!clients.length) { showToast('No valid client rows found.', 'error'); return; }
+      importBtn.disabled = true;
+      try {
+        const result = await apiFetch('/api/v1/clients/bulk', { method: 'POST', body: JSON.stringify({ clients }) });
+        showToast((result.imported || 0) + ' client(s) imported.', 'success');
+        window.setTimeout(() => window.location.reload(), 500);
+      } catch (error) {
+        showToast(error.message, 'error'); importBtn.disabled = false;
+      }
+    });
   }
 
   // ------------------------------------------------------------------------

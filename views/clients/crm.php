@@ -4,7 +4,10 @@
     <p class="muted">Active executive accounts, contracted monthly hours, signed PDF agreements, and relationship notes.</p>
   </div>
   <?php if (in_array($role, ['admin', 'team_leader'], true)): ?>
-    <button type="button" class="btn btn-primary" data-open-modal="modal-create-client">+ Add Client Account</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button type="button" class="btn btn-secondary" data-open-modal="modal-import-clients">Import CSV</button>
+      <button type="button" class="btn btn-primary" data-open-modal="modal-create-client">+ Add Client Account</button>
+    </div>
   <?php endif; ?>
 </div>
 
@@ -112,6 +115,54 @@
 <?php endif; ?>
 
 <?php if (in_array($role, ['admin', 'team_leader'], true)): ?>
+  <div id="modal-import-clients" class="modal-backdrop is-hidden">
+    <div class="modal-box" style="max-width:900px;">
+      <div class="modal-head">
+        <div>
+          <h3>Import Client Accounts</h3>
+          <p class="muted" style="font-size:12px;">Upload a CSV, map its columns, review the first rows, then import.</p>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="client-csv-file">CSV file</label>
+        <input class="input" type="file" id="client-csv-file" accept=".csv,text/csv">
+        <small class="muted">Use UTF-8 CSV with a header row. Excel files (.xlsx) are not supported in this import flow.</small>
+      </div>
+      <div id="client-csv-mapping" class="grid-3" style="margin:14px 0;"></div>
+      <div class="grid-2" style="margin-bottom:14px;">
+        <div class="form-group">
+          <label class="form-label" for="client-csv-va">Default assigned VA</label>
+          <select class="select" id="client-csv-va" required>
+            <option value="">Select a VA</option>
+            <?php foreach ($data['vas'] as $v): ?>
+              <option value="<?= SecurityHelper::e($v['id']) ?>"><?= SecurityHelper::e($v['name']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="client-csv-tl">Team Leader</label>
+          <select class="select" id="client-csv-tl" required>
+            <?php if ($role === 'team_leader'): ?>
+              <option value="<?= SecurityHelper::e($user['id']) ?>" selected><?= SecurityHelper::e($user['name']) ?></option>
+            <?php else: ?>
+              <option value="">Select a Team Leader</option>
+              <?php foreach ($data['team_leaders'] as $tl): ?>
+                <option value="<?= SecurityHelper::e($tl['id']) ?>"><?= SecurityHelper::e($tl['name']) ?></option>
+              <?php endforeach; ?>
+            <?php endif; ?>
+          </select>
+        </div>
+      </div>
+      <div id="client-csv-status" class="muted" style="font-size:12px;margin-bottom:10px;" aria-live="polite">Choose a CSV file to begin.</div>
+      <div id="client-csv-preview" class="table-wrap" style="max-height:260px;overflow:auto;margin-bottom:14px;"></div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;">
+        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+        <button type="button" class="btn btn-primary" id="client-csv-import" disabled>Import clients</button>
+      </div>
+    </div>
+  </div>
+
   <div id="modal-create-client" class="modal-backdrop is-hidden">
     <div class="modal-box">
       <div class="modal-head">

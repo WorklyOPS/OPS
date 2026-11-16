@@ -216,12 +216,13 @@ foreach ($repTasks as $rt) {
 
         <div class="grid-2">
           <div class="form-group">
-            <label class="form-label">Virtual Assistant Participant</label>
-            <select class="select" name="va_id" required>
+            <label class="form-label">VA Participants</label>
+            <select class="select" name="participant_ids[]" multiple required size="4" style="min-height:112px;">
               <?php foreach ($data['vas'] as $v): ?>
                 <option value="<?= SecurityHelper::e($v['id']) ?>"><?= SecurityHelper::e($v['name']) ?></option>
               <?php endforeach; ?>
             </select>
+            <small class="muted">Select one or more VAs. Use Ctrl (Windows) or Cmd (Mac) to select multiple.</small>
           </div>
           <div class="form-group">
             <label class="form-label">Client (Optional)</label>

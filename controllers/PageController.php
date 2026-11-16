@@ -551,11 +551,18 @@ final class PageController
             FROM calendar_meetings m
             JOIN users u ON m.va_id = u.id
             LEFT JOIN clients c ON m.client_id = c.id
-            WHERE (m.va_id = :u1 OR m.created_by_tl_id = :u2)
+            WHERE (
+                m.va_id = :u1
+                OR m.created_by_tl_id = :u2
+                OR EXISTS (
+                    SELECT 1 FROM calendar_meeting_participants mp
+                    WHERE mp.meeting_id = m.id AND mp.user_id = :u3
+                )
+            )
               AND m.start_time::DATE BETWEEN :ms AND :me
             ORDER BY m.start_time ASC
         ");
-        $mStmt->execute([':u1' => $targetCalUid, ':u2' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
+        $mStmt->execute([':u1' => $targetCalUid, ':u2' => $targetCalUid, ':u3' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
         $meetings = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 
         // VA sees own assigned tasks; Team Leader sees their own tasks and their pod.
