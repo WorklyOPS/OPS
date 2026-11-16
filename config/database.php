@@ -8,48 +8,95 @@ final class Database
 
     public static function getConnection(): PDO
     {
+    error_log('PDO: ' . (extension_loaded('pdo') ? 'YES' : 'NO'));
+
+    error_log(
+        'PDO_PGSQL: ' .
+        (extension_loaded('pdo_pgsql') ? 'YES' : 'NO')
+    );
+
+    error_log(
+        'DATABASE_URL: ' .
+        (getenv('DATABASE_URL') ? 'AVAILABLE' : 'MISSING')
+    );
+
+
         if (self::$connection instanceof PDO) {
             return self::$connection;
         }
 
-        $databaseUrl = getenv('DATABASE_URL');
+        // Neon / Vercel connection strings.
+        $databaseUrl =
+            getenv('DATABASE_URL')
+            ?: getenv('POSTGRES_URL')
+            ?: getenv('POSTGRES_URL_NON_POOLING');
 
         if (!$databaseUrl) {
-            throw new RuntimeException('DATABASE_URL is not configured.');
+            throw new RuntimeException(
+                'No PostgreSQL connection URL configured.'
+            );
         }
 
         $url = parse_url($databaseUrl);
 
-        if ($url === false) {
-            throw new RuntimeException('Invalid DATABASE_URL.');
+        if ($url === false || empty($url['host'])) {
+            throw new RuntimeException(
+                'Invalid PostgreSQL connection URL.'
+            );
         }
 
-        $host = $url['host'] ?? '';
+        $host = $url['host'];
         $port = $url['port'] ?? 5432;
-        $dbname = ltrim($url['path'] ?? '', '/');
-        $username = $url['user'] ?? '';
-        $password = $url['pass'] ?? '';
+        $dbname = rawurldecode(
+            ltrim($url['path'] ?? '', '/')
+        );
 
-        if (!$host || !$dbname || !$username) {
-            throw new RuntimeException('Incomplete database configuration.');
+        $username = rawurldecode($url['user'] ?? '');
+        $password = rawurldecode($url['pass'] ?? '');
+
+        parse_str($url['query'] ?? '', $query);
+
+        $sslMode = $query['sslmode'] ?? 'require';
+
+        if ($dbname === '' || $username === '') {
+            throw new RuntimeException(
+                'Incomplete PostgreSQL connection URL.'
+            );
         }
 
         $dsn = sprintf(
-            'pgsql:host=%s;port=%d;dbname=%s;sslmode=require',
+            'pgsql:host=%s;port=%d;dbname=%s;sslmode=%s',
             $host,
             $port,
-            $dbname
+            $dbname,
+            $sslMode
         );
 
-        self::$connection = new PDO($dsn, $username, $password, [
-            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES => false,
-            PDO::ATTR_PERSISTENT => false,
-        ]);
+        try {
+            self::$connection = new PDO(
+                $dsn,
+                $username,
+                $password,
+                [
+                    PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                    PDO::ATTR_EMULATE_PREPARES => false,
+                    PDO::ATTR_PERSISTENT => false,
+                ]
+            );
 
-        self::$connection->exec("SET TIME ZONE 'UTC'");
+            self::$connection->exec(
+                "SET TIME ZONE 'UTC'"
+            );
 
-        return self::$connection;
+            return self::$connection;
+
+        } catch (PDOException $e) {
+            error_log(
+                '[Workly Database] ' . $e->getMessage()
+            );
+
+            throw $e;
+        }
     }
 }
