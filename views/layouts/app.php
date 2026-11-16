@@ -22,6 +22,7 @@ $initials = substr($initials ?: 'W', 0, 2);
   <meta name="workly-csrf" content="<?= SecurityHelper::e($csrfToken) ?>">
   <title><?= SecurityHelper::e($pageTitle) ?> — Workly</title>
   <link rel="stylesheet" href="/assets/css/workly.css">
+  <link rel="stylesheet" href="/assets/css/workly-enhancements.css">
 </head>
 <body>
   <div class="app-shell">

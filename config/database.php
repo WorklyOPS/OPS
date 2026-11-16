@@ -8,18 +8,6 @@ final class Database
 
     public static function getConnection(): PDO
     {
-    error_log('PDO: ' . (extension_loaded('pdo') ? 'YES' : 'NO'));
-
-    error_log(
-        'PDO_PGSQL: ' .
-        (extension_loaded('pdo_pgsql') ? 'YES' : 'NO')
-    );
-
-    error_log(
-        'DATABASE_URL: ' .
-        (getenv('DATABASE_URL') ? 'AVAILABLE' : 'MISSING')
-    );
-
 
         if (self::$connection instanceof PDO) {
             return self::$connection;
