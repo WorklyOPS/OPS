@@ -2,9 +2,6 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/env_loader.php';
-EnvLoader::load();
-
 final class Database
 {
     private static ?PDO $connection = null;
@@ -15,61 +12,42 @@ final class Database
             return self::$connection;
         }
 
-        $required = [
-            'DB_HOST',
-            'DB_PORT',
-            'DB_NAME',
-            'DB_USER',
-            'DB_PASS',
-        ];
+        $databaseUrl = getenv('DATABASE_URL');
 
-        $config = [];
-
-        foreach ($required as $key) {
-            $value = getenv($key);
-
-            if ($value === false || $value === '') {
-                $value = $_ENV[$key] ?? $_SERVER[$key] ?? '';
-            }
-
-            if ($value === '') {
-                throw new RuntimeException(
-                    "Missing database environment variable: {$key}"
-                );
-            }
-
-            $config[$key] = $value;
+        if (!$databaseUrl) {
+            throw new RuntimeException('DATABASE_URL is not configured.');
         }
 
-        $sslMode = getenv('DB_SSLMODE');
+        $url = parse_url($databaseUrl);
 
-        if ($sslMode === false || $sslMode === '') {
-            $sslMode = $_ENV['DB_SSLMODE'] ?? 'prefer';
+        if ($url === false) {
+            throw new RuntimeException('Invalid DATABASE_URL.');
+        }
+
+        $host = $url['host'] ?? '';
+        $port = $url['port'] ?? 5432;
+        $dbname = ltrim($url['path'] ?? '', '/');
+        $username = $url['user'] ?? '';
+        $password = $url['pass'] ?? '';
+
+        if (!$host || !$dbname || !$username) {
+            throw new RuntimeException('Incomplete database configuration.');
         }
 
         $dsn = sprintf(
-            'pgsql:host=%s;port=%s;dbname=%s;sslmode=%s',
-            $config['DB_HOST'],
-            $config['DB_PORT'],
-            $config['DB_NAME'],
-            $sslMode
+            'pgsql:host=%s;port=%d;dbname=%s;sslmode=require',
+            $host,
+            $port,
+            $dbname
         );
 
-        $options = [
-            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+        self::$connection = new PDO($dsn, $username, $password, [
+            PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
             PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            PDO::ATTR_EMULATE_PREPARES   => false,
-            PDO::ATTR_PERSISTENT         => false,
-        ];
+            PDO::ATTR_EMULATE_PREPARES => false,
+            PDO::ATTR_PERSISTENT => false,
+        ]);
 
-        self::$connection = new PDO(
-            $dsn,
-            $config['DB_USER'],
-            $config['DB_PASS'],
-            $options
-        );
-
-        self::$connection->exec("SET CLIENT_ENCODING TO 'UTF8'");
         self::$connection->exec("SET TIME ZONE 'UTC'");
 
         return self::$connection;
