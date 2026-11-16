@@ -1,7 +1,4 @@
 <?php
-/**
- * Workly PostgreSQL PDO Connection Factory (PHP 8+ / Hostinger)
- */
 
 declare(strict_types=1);
 
@@ -14,18 +11,49 @@ final class Database
 
     public static function getConnection(): PDO
     {
-        if (self::$connection !== null) {
+        if (self::$connection instanceof PDO) {
             return self::$connection;
         }
 
-        $host = $_ENV['DB_HOST'] ?? getenv('DB_HOST') ?: '127.0.0.1';
-        $port = $_ENV['DB_PORT'] ?? getenv('DB_PORT') ?: '5432';
-        $dbName = $_ENV['DB_NAME'] ?? getenv('DB_NAME') ?: 'workly_prod';
-        $username = $_ENV['DB_USER'] ?? getenv('DB_USER') ?: 'workly_pg_user';
-        $password = $_ENV['DB_PASS'] ?? getenv('DB_PASS') ?: '';
-        $sslMode = $_ENV['DB_SSLMODE'] ?? getenv('DB_SSLMODE') ?: 'prefer';
+        $required = [
+            'DB_HOST',
+            'DB_PORT',
+            'DB_NAME',
+            'DB_USER',
+            'DB_PASS',
+        ];
 
-        $dsn = "pgsql:host={$host};port={$port};dbname={$dbName};sslmode={$sslMode}";
+        $config = [];
+
+        foreach ($required as $key) {
+            $value = getenv($key);
+
+            if ($value === false || $value === '') {
+                $value = $_ENV[$key] ?? $_SERVER[$key] ?? '';
+            }
+
+            if ($value === '') {
+                throw new RuntimeException(
+                    "Missing database environment variable: {$key}"
+                );
+            }
+
+            $config[$key] = $value;
+        }
+
+        $sslMode = getenv('DB_SSLMODE');
+
+        if ($sslMode === false || $sslMode === '') {
+            $sslMode = $_ENV['DB_SSLMODE'] ?? 'prefer';
+        }
+
+        $dsn = sprintf(
+            'pgsql:host=%s;port=%s;dbname=%s;sslmode=%s',
+            $config['DB_HOST'],
+            $config['DB_PORT'],
+            $config['DB_NAME'],
+            $sslMode
+        );
 
         $options = [
             PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
@@ -34,7 +62,13 @@ final class Database
             PDO::ATTR_PERSISTENT         => false,
         ];
 
-        self::$connection = new PDO($dsn, $username, $password, $options);
+        self::$connection = new PDO(
+            $dsn,
+            $config['DB_USER'],
+            $config['DB_PASS'],
+            $options
+        );
+
         self::$connection->exec("SET CLIENT_ENCODING TO 'UTF8'");
         self::$connection->exec("SET TIME ZONE 'UTC'");
 
