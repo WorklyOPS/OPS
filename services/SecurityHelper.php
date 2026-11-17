@@ -95,18 +95,6 @@ final class SecurityHelper
         return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
-    public static function toBoolean(mixed $value): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-        if (is_int($value) || is_float($value)) {
-            return $value !== 0 && $value !== 0.0;
-        }
-
-        return in_array(strtolower(trim((string) $value)), ['1', 't', 'true', 'yes', 'on'], true);
-    }
-
     public static function sanitizePlainText(mixed $value, int $maxLength = 4000): string
     {
         if ($value === null) {
@@ -172,5 +160,97 @@ final class SecurityHelper
         }
         $decoded = json_decode($resp, true);
         return !empty($decoded['success']);
+    }
+
+    public static function renderSvgCaptcha(): string
+    {
+        self::configureSecureSession();
+        $alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+        $code = '';
+        for ($i = 0; $i < 5; $i++) {
+            $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
+        }
+
+        $_SESSION['workly_captcha_hash'] = hash_hmac('sha256', $code, Secrets::get('CSRF_SALT'));
+        $_SESSION['workly_captcha_exp'] = time() + 600;
+
+        $lines = '';
+        for ($i = 0; $i < 5; $i++) {
+            $x1 = random_int(0, 40);
+            $y1 = random_int(6, 42);
+            $x2 = random_int(120, 170);
+            $y2 = random_int(6, 42);
+            $lines .= '<line x1="' . $x1 . '" y1="' . $y1 . '" x2="' . $x2 . '" y2="' . $y2 . '" stroke="#D8B4FE" stroke-width="1.3" opacity="0.75"/>';
+        }
+
+        $chars = '';
+        for ($i = 0; $i < 5; $i++) {
+            $x = 18 + ($i * 29);
+            $y = random_int(30, 36);
+            $rot = random_int(-14, 14);
+            $ch = htmlspecialchars($code[$i], ENT_QUOTES, 'UTF-8');
+            $chars .= '<text x="' . $x . '" y="' . $y . '" transform="rotate(' . $rot . ' ' . $x . ' ' . $y . ')" font-family="monospace" font-size="23" font-weight="700" fill="#6B21A8">' . $ch . '</text>';
+        }
+
+        return '<?xml version="1.0" encoding="UTF-8"?>'
+            . '<svg xmlns="http://www.w3.org/2000/svg" width="170" height="48" viewBox="0 0 170 48">'
+            . '<rect width="170" height="48" rx="8" fill="#FAF5FF" stroke="#E9D5FF"/>'
+            . $lines
+            . $chars
+            . '</svg>';
+    }
+
+    public static function verifyLoginCaptcha(string $captchaInput, string $turnstileToken = ''): bool
+    {
+        $hasTurnstile = Secrets::isConfigured('CLOUDFLARE_TURNSTILE_SITE_KEY')
+            && Secrets::isConfigured('CLOUDFLARE_TURNSTILE_SECRET_KEY');
+
+        if ($hasTurnstile) {
+            return self::verifyTurnstile($turnstileToken);
+        }
+
+        self::configureSecureSession();
+        $expected = (string) ($_SESSION['workly_captcha_hash'] ?? '');
+        $exp = (int) ($_SESSION['workly_captcha_exp'] ?? 0);
+        unset($_SESSION['workly_captcha_hash'], $_SESSION['workly_captcha_exp']);
+
+        if ($expected === '' || time() > $exp) {
+            return false;
+        }
+
+        $clean = strtoupper(trim($captchaInput));
+        if ($clean === '') {
+            return false;
+        }
+
+        $given = hash_hmac('sha256', $clean, Secrets::get('CSRF_SALT'));
+        return hash_equals($expected, $given);
+    }
+
+    public static function checkLoginRateLimit(): ?int
+    {
+        self::configureSecureSession();
+        $lockedUntil = (int) ($_SESSION['workly_lock_until'] ?? 0);
+        if ($lockedUntil > time()) {
+            return $lockedUntil - time();
+        }
+        return null;
+    }
+
+    public static function recordLoginFailure(): void
+    {
+        self::configureSecureSession();
+        $fails = (int) ($_SESSION['workly_login_fails'] ?? 0) + 1;
+        $_SESSION['workly_login_fails'] = $fails;
+        if ($fails >= 5) {
+            $_SESSION['workly_lock_until'] = time() + 300;
+            $_SESSION['workly_login_fails'] = 0;
+        }
+    }
+
+    public static function clearLoginFailures(): void
+    {
+        self::configureSecureSession();
+        unset($_SESSION['workly_login_fails'], $_SESSION['workly_lock_until']);
     }
 }

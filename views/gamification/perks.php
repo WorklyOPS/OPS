@@ -1,21 +1,21 @@
 <div class="page-header">
   <div>
-    <h1>Perks, Benefits & Recognition Badges</h1>
+    <h1>Perks, Benefits &amp; Recognition Badges</h1>
     <p class="muted">Company benefit allocations and milestone achievements managed in PostgreSQL.</p>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <?php if (in_array($role, ['admin', 'hrm'], true)): ?>
-      <button type="button" class="btn btn-secondary" data-open-modal="modal-create-perk">+ Add Perk</button>
+      <button type="button" class="btn btn-secondary" data-open-drawer="drawer-create-perk">+ Add Perk</button>
     <?php endif; ?>
     <?php if (in_array($role, ['admin', 'hrm', 'team_leader'], true)): ?>
-      <button type="button" class="btn btn-primary" data-open-modal="modal-create-badge">+ Create Badge</button>
+      <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-badge">+ Create Badge</button>
     <?php endif; ?>
   </div>
 </div>
 
 <div class="grid-2">
   <div class="card">
-    <h3 style="margin-bottom:12px;">Benefit & Perk Programs</h3>
+    <h3 style="margin-bottom:12px;">Benefit &amp; Perk Programs</h3>
     <?php if (empty($data['perks'])): ?>
       <p class="muted">No perks configured yet.</p>
     <?php else: ?>
@@ -110,72 +110,76 @@
 </div>
 
 <?php if (in_array($role, ['admin', 'hrm'], true)): ?>
-  <div id="modal-create-perk" class="modal-backdrop is-hidden">
-    <div class="modal-box">
-      <div class="modal-head">
+  <div id="drawer-create-perk" class="drawer-backdrop is-hidden">
+    <aside class="drawer-panel" role="dialog" aria-label="Create Benefit or Perk">
+      <div class="drawer-head">
         <h3>Create Benefit / Perk</h3>
-        <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
       </div>
-      <form data-api-form="/api/v1/perks" data-api-method="POST">
-        <div class="form-group">
-          <label class="form-label">Title</label>
-          <input class="input" name="title" required placeholder="Home Office Stipend">
-        </div>
-        <div class="grid-2">
+      <div class="drawer-body">
+        <form data-api-form="/api/v1/perks" data-api-method="POST">
           <div class="form-group">
-            <label class="form-label">Category</label>
-            <input class="input" name="category" value="Equipment & Hardware">
+            <label class="form-label">Title</label>
+            <input class="input" name="title" required placeholder="Home Office Stipend">
+          </div>
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Category</label>
+              <input class="input" name="category" value="Equipment & Hardware">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Monetary Value ($)</label>
+              <input class="input" type="number" step="10" min="0" name="value" value="250">
+            </div>
           </div>
           <div class="form-group">
-            <label class="form-label">Monetary Value ($)</label>
-            <input class="input" type="number" step="10" min="0" name="value" value="250">
+            <label class="form-label">Description</label>
+            <textarea class="textarea" name="description" rows="4" required placeholder="Eligibility rules and stipend details..."></textarea>
           </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Description</label>
-          <textarea class="textarea" name="description" required placeholder="Eligibility rules and stipend details..."></textarea>
-        </div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Create Perk</button>
-        </div>
-      </form>
-    </div>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
+            <button type="submit" class="btn btn-primary">Create Perk</button>
+          </div>
+        </form>
+      </div>
+    </aside>
   </div>
 <?php endif; ?>
 
 <?php if (in_array($role, ['admin', 'hrm', 'team_leader'], true)): ?>
-  <div id="modal-create-badge" class="modal-backdrop is-hidden">
-    <div class="modal-box">
-      <div class="modal-head">
+  <div id="drawer-create-badge" class="drawer-backdrop is-hidden">
+    <aside class="drawer-panel" role="dialog" aria-label="Create Recognition Badge">
+      <div class="drawer-head">
         <h3>Create Recognition Badge</h3>
-        <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
       </div>
-      <form data-api-form="/api/v1/perks/badges" data-api-method="POST">
-        <div class="grid-2">
-          <div class="form-group">
-            <label class="form-label">Badge Title</label>
-            <input class="input" name="title" required placeholder="Zero-Miss SLA Streak">
+      <div class="drawer-body">
+        <form data-api-form="/api/v1/perks/badges" data-api-method="POST">
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Badge Title</label>
+              <input class="input" name="title" required placeholder="Zero-Miss SLA Streak">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Tier</label>
+              <select class="select" name="tier">
+                <option value="bronze">Bronze</option>
+                <option value="silver" selected>Silver</option>
+                <option value="gold">Gold</option>
+                <option value="diamond">Diamond</option>
+              </select>
+            </div>
           </div>
           <div class="form-group">
-            <label class="form-label">Tier</label>
-            <select class="select" name="tier">
-              <option value="bronze">Bronze</option>
-              <option value="silver" selected>Silver</option>
-              <option value="gold">Gold</option>
-              <option value="diamond">Diamond</option>
-            </select>
+            <label class="form-label">Criteria Description</label>
+            <textarea class="textarea" name="description" rows="4" required placeholder="Awarded for 100% on-time deliverables..."></textarea>
           </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Criteria Description</label>
-          <textarea class="textarea" name="description" required placeholder="Awarded for 100% on-time deliverables..."></textarea>
-        </div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Create Badge</button>
-        </div>
-      </form>
-    </div>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
+            <button type="submit" class="btn btn-primary">Create Badge</button>
+          </div>
+        </form>
+      </div>
+    </aside>
   </div>
 <?php endif; ?>

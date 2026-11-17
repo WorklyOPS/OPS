@@ -82,6 +82,7 @@ final class PageController
 
             $pendingPto = 0;
             $reviewTasks = 0;
+            $unreadTlNotifications = 0;
 
             if ($role === 'team_leader') {
                 $rStmt = $this->db->prepare("
@@ -101,15 +102,28 @@ final class PageController
                 ");
                 $pStmt->execute([':tl' => $uid]);
                 $pendingPto = (int) $pStmt->fetchColumn();
+
+                try {
+                    $nStmt = $this->db->prepare("
+                        SELECT COUNT(*)::INTEGER
+                        FROM team_lead_notifications
+                        WHERE team_leader_id = :tl AND is_read = FALSE
+                    ");
+                    $nStmt->execute([':tl' => $uid]);
+                    $unreadTlNotifications = (int) $nStmt->fetchColumn();
+                } catch (Throwable) {
+                    $unreadTlNotifications = 0;
+                }
             } elseif ($role === 'hrm' || $role === 'admin') {
                 $pendingPto = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM pto_requests WHERE status = 'pending'")->fetchColumn();
                 $reviewTasks = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM tasks WHERE status = 'in_review'")->fetchColumn();
             }
 
             return [
-                'unread_emails' => $unreadEmails,
-                'pending_pto'   => $pendingPto,
-                'review_tasks'  => $reviewTasks,
+                'unread_emails'           => $unreadEmails,
+                'pending_pto'             => $pendingPto,
+                'review_tasks'            => $reviewTasks,
+                'unread_tl_notifications' => $unreadTlNotifications,
             ];
         });
     }
@@ -162,7 +176,7 @@ final class PageController
             FROM tasks t
             JOIN users u ON t.assigned_va_id = u.id
             JOIN clients c ON t.client_id = c.id
-            WHERE t.archived_at IS NULL AND t.deadline BETWEEN :r_start AND :r_end
+            WHERE t.deadline BETWEEN :r_start AND :r_end
         ";
         $params = [':r_start' => $rangeStart, ':r_end' => $rangeEnd];
 
@@ -188,10 +202,11 @@ final class PageController
         $stmt->execute($params);
         $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Fetch notes & comments indexed by task_id
+        // Fetch notes, comments & extra hours indexed by task_id
         $taskIds = array_column($tasks, 'id');
         $notesByTask = [];
         $commentsByTask = [];
+        $extraHoursByTask = [];
         if (!empty($taskIds)) {
             $placeholders = implode(',', array_fill(0, count($taskIds), '?'));
             $nStmt = $this->db->prepare("SELECT * FROM task_notes WHERE task_id IN ({$placeholders}) ORDER BY created_at ASC");
@@ -204,6 +219,12 @@ final class PageController
             $cStmt->execute($taskIds);
             foreach ($cStmt->fetchAll(PDO::FETCH_ASSOC) as $c) {
                 $commentsByTask[$c['task_id']][] = $c;
+            }
+
+            $ehStmt = $this->db->prepare("SELECT * FROM extra_hours_logs WHERE task_id IN ({$placeholders}) ORDER BY logged_at DESC");
+            $ehStmt->execute($taskIds);
+            foreach ($ehStmt->fetchAll(PDO::FETCH_ASSOC) as $eh) {
+                $extraHoursByTask[$eh['task_id']][] = $eh;
             }
         }
 
@@ -236,25 +257,26 @@ final class PageController
             $vas = $this->db->query("SELECT id, name, email FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
         }
 
-        // Past 6 months list for historical selection
+        // Past 12 months list for historical selection
         $months = [];
-        for ($i = 0; $i < 6; $i++) {
+        for ($i = 0; $i < 12; $i++) {
             $m = (new DateTimeImmutable('first day of this month'))->modify("-{$i} months");
             $months[] = ['value' => $m->format('Y-m'), 'label' => $m->format('F Y')];
         }
 
         return [
-            'tasks'              => $tasks,
-            'notes_by_task'      => $notesByTask,
-            'comments_by_task'   => $commentsByTask,
-            'status_counts'      => $statusCounts,
-            'clients'            => $clients,
-            'vas'                => $vas,
-            'months'             => $months,
-            'weeks'              => $weeks,
-            'selected_month'     => $selectedMonth,
-            'selected_week'      => $selectedWeek,
-            'selected_va_filter' => $selectedVaFilter,
+            'tasks'                => $tasks,
+            'notes_by_task'        => $notesByTask,
+            'comments_by_task'     => $commentsByTask,
+            'extra_hours_by_task'  => $extraHoursByTask,
+            'status_counts'        => $statusCounts,
+            'clients'              => $clients,
+            'vas'                  => $vas,
+            'months'               => $months,
+            'weeks'                => $weeks,
+            'selected_month'       => $selectedMonth,
+            'selected_week'        => $selectedWeek,
+            'selected_va_filter'   => $selectedVaFilter,
         ];
     }
 
@@ -277,8 +299,8 @@ final class PageController
             ")->fetchAll(PDO::FETCH_ASSOC);
 
             $clientCount = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM clients WHERE contract_status = 'active'")->fetchColumn();
-            $totalTasks = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM tasks WHERE archived_at IS NULL")->fetchColumn();
-            $completedTasks = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM tasks WHERE status = 'completed' AND archived_at IS NULL")->fetchColumn();
+            $totalTasks = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM tasks")->fetchColumn();
+            $completedTasks = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM tasks WHERE status = 'completed'")->fetchColumn();
             $pendingPto = (int) $this->db->query("SELECT COUNT(*)::INTEGER FROM pto_requests WHERE status = 'pending'")->fetchColumn();
 
             $res = [
@@ -337,7 +359,6 @@ final class PageController
                     FROM tasks t
                     JOIN users u ON t.assigned_va_id = u.id
                     WHERE (u.team_leader_id = :tl OR t.created_by_id = :tl2)
-                      AND t.archived_at IS NULL
                       AND t.deadline >= CURRENT_DATE - INTERVAL '30 days'
                     GROUP BY TO_CHAR(t.deadline, 'YYYY-MM-DD')
                     ORDER BY day_label ASC
@@ -353,6 +374,13 @@ final class PageController
                 ")->fetchAll(PDO::FETCH_ASSOC);
 
                 $res['extra_hours'] = $this->db->query('SELECT * FROM extra_hours_logs ORDER BY logged_at DESC LIMIT 50')->fetchAll(PDO::FETCH_ASSOC);
+                $res['payroll_projection'] = (float) $this->db->query("SELECT COALESCE(SUM(hourly_rate * 160), 0) FROM users WHERE role = 'va' AND is_active = TRUE")->fetchColumn();
+                $res['clients_compliance'] = $this->db->query("
+                    SELECT c.id, c.agency_name, c.name, c.contract_status, c.contract_signed_date, c.contract_pdf_url, u.name AS focus_va_name
+                    FROM clients c
+                    LEFT JOIN users u ON c.focus_va_id = u.id
+                    ORDER BY c.agency_name ASC
+                ")->fetchAll(PDO::FETCH_ASSOC);
             }
 
             return $res;
@@ -537,55 +565,41 @@ final class PageController
         $mStart = $calMonth . '-01';
         $mEnd = (new DateTimeImmutable($mStart))->modify('last day of this month')->format('Y-m-d');
 
-        // Admin calendar monitoring is read-only and scoped to the selected account.
+        // Strict calendar privacy: own meetings/shared meetings only; Admin can select a user to monitor
         $targetCalUid = ($role === 'admin' && $monitorUser !== '') ? $monitorUser : $uid;
-        $targetCalRole = $role;
-        if ($role === 'admin' && $monitorUser !== '') {
-            $targetRoleStmt = $this->db->prepare('SELECT role FROM users WHERE id = :id AND is_active = TRUE LIMIT 1');
-            $targetRoleStmt->execute([':id' => $targetCalUid]);
-            $targetCalRole = (string) ($targetRoleStmt->fetchColumn() ?: 'va');
-        }
 
         $mStmt = $this->db->prepare("
             SELECT m.*, u.name AS va_name, c.agency_name AS client_name
             FROM calendar_meetings m
             JOIN users u ON m.va_id = u.id
             LEFT JOIN clients c ON m.client_id = c.id
-            WHERE (
-                m.va_id = :u1
-                OR m.created_by_tl_id = :u2
-                OR EXISTS (
-                    SELECT 1 FROM calendar_meeting_participants mp
-                    WHERE mp.meeting_id = m.id AND mp.user_id = :u3
-                )
-            )
+            WHERE (m.va_id = :u1 OR m.created_by_tl_id = :u2)
               AND m.start_time::DATE BETWEEN :ms AND :me
             ORDER BY m.start_time ASC
         ");
-        $mStmt->execute([':u1' => $targetCalUid, ':u2' => $targetCalUid, ':u3' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
+        $mStmt->execute([':u1' => $targetCalUid, ':u2' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
         $meetings = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // VA sees own assigned tasks; Team Leader sees their own tasks and their pod.
-        $taskSql = "
-            SELECT t.id, t.title, t.deadline, t.status, t.priority
-            FROM tasks t
-            JOIN users assigned ON assigned.id = t.assigned_va_id
-            WHERE t.archived_at IS NULL AND t.deadline BETWEEN :ms AND :me
-        ";
-        $taskParams = [':ms' => $mStart, ':me' => $mEnd];
-        if ($targetCalRole === 'team_leader') {
-            $taskSql .= ' AND (assigned.team_leader_id = :uid OR t.assigned_va_id = :uid2 OR t.created_by_id = :uid3)';
-            $taskParams[':uid'] = $targetCalUid;
-            $taskParams[':uid2'] = $targetCalUid;
-            $taskParams[':uid3'] = $targetCalUid;
-        } else {
-            $taskSql .= ' AND t.assigned_va_id = :uid';
-            $taskParams[':uid'] = $targetCalUid;
-        }
-        $taskSql .= ' ORDER BY t.deadline ASC';
-        $tStmt = $this->db->prepare($taskSql);
-        $tStmt->execute($taskParams);
+        // Task milestones in that month (own tasks for VA; pod + own for TL; selected user for Admin)
+        $tStmt = $this->db->prepare("
+            SELECT id, title, deadline, status, priority
+            FROM tasks
+            WHERE assigned_va_id = :uid AND deadline BETWEEN :ms AND :me
+            ORDER BY deadline ASC
+        ");
+        $tStmt->execute([':uid' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
         $calendarTasks = $tStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Approved PTO blocks inside selected month
+        $ptoStmt = $this->db->prepare("
+            SELECT id, va_name, start_date, end_date
+            FROM pto_requests
+            WHERE va_id = :uid AND status = 'approved'
+              AND start_date <= :me AND end_date >= :ms
+            ORDER BY start_date ASC
+        ");
+        $ptoStmt->execute([':uid' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
+        $calendarPto = $ptoStmt->fetchAll(PDO::FETCH_ASSOC);
 
         // SLA Report summary for initial range
         $repSql = "
@@ -593,7 +607,7 @@ final class PageController
             FROM tasks t
             JOIN users u ON t.assigned_va_id = u.id
             JOIN clients c ON t.client_id = c.id
-            WHERE t.archived_at IS NULL AND t.deadline BETWEEN :sd AND :ed
+            WHERE t.deadline BETWEEN :sd AND :ed
         ";
         $repParams = [':sd' => $startDate, ':ed' => $endDate];
         if ($role === 'va') {
@@ -637,6 +651,7 @@ final class PageController
             'monitor_user'    => $monitorUser,
             'meetings'        => $meetings,
             'calendar_tasks'  => $calendarTasks,
+            'calendar_pto'    => $calendarPto,
             'report_tasks'    => $reportTasks,
             'vas'             => $vas,
             'clients'         => $clients,
@@ -671,8 +686,59 @@ final class PageController
             ");
         }
 
+        $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $notifications = [];
+        $trackingByReq = [];
+
+        if ($role === 'team_leader' || $role === 'admin') {
+            try {
+                if ($role === 'team_leader') {
+                    $nStmt = $this->db->prepare("
+                        SELECT n.*, u.name AS va_name
+                        FROM team_lead_notifications n
+                        JOIN users u ON n.va_id = u.id
+                        WHERE n.team_leader_id = :tl
+                        ORDER BY n.is_read ASC, n.created_at DESC
+                        LIMIT 20
+                    ");
+                    $nStmt->execute([':tl' => $uid]);
+                } else {
+                    $nStmt = $this->db->query("
+                        SELECT n.*, u.name AS va_name
+                        FROM team_lead_notifications n
+                        JOIN users u ON n.va_id = u.id
+                        ORDER BY n.is_read ASC, n.created_at DESC
+                        LIMIT 20
+                    ");
+                }
+                $notifications = $nStmt->fetchAll(PDO::FETCH_ASSOC);
+            } catch (Throwable) {
+                $notifications = [];
+            }
+        }
+
+        $reqIds = array_column($requests, 'id');
+        if (!empty($reqIds)) {
+            try {
+                $ph = implode(',', array_fill(0, count($reqIds), '?'));
+                $tStmt = $this->db->prepare("
+                    SELECT * FROM pto_status_tracking
+                    WHERE pto_request_id IN ({$ph})
+                    ORDER BY changed_at ASC
+                ");
+                $tStmt->execute($reqIds);
+                foreach ($tStmt->fetchAll(PDO::FETCH_ASSOC) as $tr) {
+                    $trackingByReq[$tr['pto_request_id']][] = $tr;
+                }
+            } catch (Throwable) {
+                $trackingByReq = [];
+            }
+        }
+
         return [
-            'requests' => $stmt->fetchAll(PDO::FETCH_ASSOC),
+            'requests'      => $requests,
+            'notifications' => $notifications,
+            'tracking'      => $trackingByReq,
         ];
     }
 

@@ -44,13 +44,22 @@ final class AuthController
         SecurityHelper::configureSecureSession();
         CsrfMiddleware::validateForm();
 
+        $waitSeconds = SecurityHelper::checkLoginRateLimit();
+        if ($waitSeconds !== null) {
+            $mins = max(1, (int) ceil($waitSeconds / 60));
+            $this->showLogin("Too many failed login attempts. Try again in {$mins} minute(s).");
+            return;
+        }
+
         $email = strtolower(trim((string) ($_POST['email'] ?? '')));
         $password = (string) ($_POST['password'] ?? '');
         $turnstileToken = (string) ($_POST['cf-turnstile-response'] ?? '');
+        $captchaCode = (string) ($_POST['captcha_code'] ?? '');
 
-        if (!SecurityHelper::verifyTurnstile($turnstileToken)) {
-            AuditLogger::log('LOGIN_TURNSTILE_BLOCKED', 'blocked', "Turnstile verification failed for {$email}", 'anonymous', 'guest', $this->db);
-            $this->showLogin('Security verification failed. Please complete the challenge and try again.');
+        if (!SecurityHelper::verifyLoginCaptcha($captchaCode, $turnstileToken)) {
+            SecurityHelper::recordLoginFailure();
+            AuditLogger::log('LOGIN_CAPTCHA_BLOCKED', 'blocked', "Security CAPTCHA verification failed for {$email}", 'anonymous', 'guest', $this->db);
+            $this->showLogin('Security CAPTCHA verification failed. Please enter the updated characters and try again.');
             return;
         }
 
@@ -69,6 +78,7 @@ final class AuthController
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
         if (!$user || !password_verify($password, (string) $user['password_hash'])) {
+            SecurityHelper::recordLoginFailure();
             AuditLogger::log('LOGIN_FAILED', 'warning', "Failed sign-in attempt for {$email}", 'anonymous', 'guest', $this->db);
             $this->showLogin('Invalid email address or password.');
             return;
@@ -81,6 +91,7 @@ final class AuthController
             return;
         }
 
+        SecurityHelper::clearLoginFailures();
         session_regenerate_id(true);
         $_SESSION['workly_user_id'] = $user['id'];
         $_SESSION['workly_fp'] = SecurityHelper::getClientFingerprint();

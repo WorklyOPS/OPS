@@ -1,6 +1,7 @@
 /* ==========================================================================
-   Workly Virtual Assistant Management Platform — Production Frontend Scripts
-   Zero dependencies, zero demo accounts, strict CSRF-protected REST calls.
+   Workly Platform — Production Client Orchestrator (Vanilla JS, Zero TS)
+   Handles Right-Side Drawers, Kanban Drag & Drop + Right-Click Context Menu,
+   Segmented Tabs, CSV Client Bulk Import, CAPTCHA Refresh, and CSRF Fetch.
    ========================================================================== */
 
 (function () {
@@ -9,9 +10,6 @@
   const csrfMeta = document.querySelector('meta[name="workly-csrf"]');
   const CSRF_TOKEN = csrfMeta ? csrfMeta.getAttribute('content') || '' : '';
 
-  // ------------------------------------------------------------------------
-  // Smooth Skeleton Entrance Transition
-  // ------------------------------------------------------------------------
   window.addEventListener('DOMContentLoaded', () => {
     const skel = document.getElementById('workly-skeleton');
     const content = document.getElementById('workly-view-content');
@@ -21,14 +19,41 @@
         content.classList.remove('is-hidden');
       });
     }
+    initAuthControls();
     initMobileDrawer();
-    initModals();
+    initDrawers();
+    initTabs();
     initKanbanBoard();
+    initClientDossiers();
+    initAdminEditDrawers();
     initForms();
-    initClientCsvImport();
     initInteractiveButtons();
     initOnboardingTour();
   });
+
+  // ------------------------------------------------------------------------
+  // Auth Screen Helpers (CAPTCHA refresh + Password visibility)
+  // ------------------------------------------------------------------------
+  function initAuthControls() {
+    const refreshBtn = document.getElementById('btn-refresh-captcha');
+    const captchaImg = document.getElementById('captcha-svg-img');
+    if (refreshBtn && captchaImg) {
+      refreshBtn.addEventListener('click', () => {
+        captchaImg.src = '/captcha.svg?t=' + Date.now();
+      });
+    }
+
+    document.querySelectorAll('[data-toggle-password]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const targetId = btn.getAttribute('data-toggle-password');
+        const input = targetId ? document.getElementById(targetId) : null;
+        if (!input) return;
+        const isPass = input.type === 'password';
+        input.type = isPass ? 'text' : 'password';
+        btn.textContent = isPass ? 'Hide' : 'Show';
+      });
+    });
+  }
 
   // ------------------------------------------------------------------------
   // Toast & CSRF API Fetch Helper
@@ -63,6 +88,12 @@
     return data;
   }
 
+  function escapeHtml(str) {
+    const d = document.createElement('div');
+    d.textContent = str == null ? '' : String(str);
+    return d.innerHTML;
+  }
+
   // ------------------------------------------------------------------------
   // Mobile Navigation Drawer
   // ------------------------------------------------------------------------
@@ -70,9 +101,7 @@
     const btn = document.getElementById('mobile-menu-toggle');
     const sidebar = document.getElementById('workly-sidebar');
     if (!btn || !sidebar) return;
-    btn.addEventListener('click', () => {
-      sidebar.classList.toggle('open');
-    });
+    btn.addEventListener('click', () => sidebar.classList.toggle('open'));
     document.addEventListener('click', (e) => {
       if (window.innerWidth <= 860 && sidebar.classList.contains('open')) {
         if (!sidebar.contains(e.target) && !btn.contains(e.target)) {
@@ -83,34 +112,72 @@
   }
 
   // ------------------------------------------------------------------------
-  // Accessible Modal System
+  // Right-Side Slide-Over Drawer System
   // ------------------------------------------------------------------------
-  function openModal(id) {
+  function openDrawer(id) {
+    closeAllDrawers();
     const el = document.getElementById(id);
     if (el) el.classList.remove('is-hidden');
   }
 
-  function closeAllModals() {
-    document.querySelectorAll('.modal-backdrop').forEach((m) => m.classList.add('is-hidden'));
+  function closeAllDrawers() {
+    document.querySelectorAll('.drawer-backdrop').forEach((d) => d.classList.add('is-hidden'));
   }
 
-  function initModals() {
-    document.querySelectorAll('[data-open-modal]').forEach((btn) => {
-      btn.addEventListener('click', () => openModal(btn.getAttribute('data-open-modal')));
+  function initDrawers() {
+    document.querySelectorAll('[data-open-drawer]').forEach((btn) => {
+      btn.addEventListener('click', () => openDrawer(btn.getAttribute('data-open-drawer')));
     });
-    document.querySelectorAll('[data-close-modal]').forEach((btn) => {
-      btn.addEventListener('click', closeAllModals);
+    document.querySelectorAll('[data-close-drawer]').forEach((btn) => {
+      btn.addEventListener('click', closeAllDrawers);
     });
-    document.querySelectorAll('.modal-backdrop').forEach((backdrop) => {
+    document.querySelectorAll('.drawer-backdrop').forEach((backdrop) => {
       backdrop.addEventListener('click', (e) => {
-        if (e.target === backdrop) closeAllModals();
+        if (e.target === backdrop) closeAllDrawers();
+      });
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeAllDrawers();
+        hideContextMenu();
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // Reusable Tab Strip Switcher (scoped via data-tab-group)
+  // ------------------------------------------------------------------------
+  function initTabs() {
+    document.querySelectorAll('[data-tab-btn]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const group = btn.getAttribute('data-tab-group');
+        const target = btn.getAttribute('data-tab-btn');
+        document.querySelectorAll('[data-tab-group="' + group + '"][data-tab-btn]').forEach((b) => {
+          b.classList.toggle('active', b === btn);
+        });
+        document.querySelectorAll('[data-tab-group="' + group + '"][data-tab-panel]').forEach((panel) => {
+          panel.classList.toggle('is-hidden', panel.getAttribute('data-tab-panel') !== target);
+        });
       });
     });
   }
 
+  function activateTab(group, tabKey) {
+    const btn = document.querySelector('[data-tab-group="' + group + '"][data-tab-btn="' + tabKey + '"]');
+    if (btn) btn.click();
+  }
+
   // ------------------------------------------------------------------------
-  // Kanban Drag-and-Drop + Quick Context Menu + Detail Modal
+  // Kanban Drag-and-Drop + Right-Click Context Menu + Right Detail Drawer
   // ------------------------------------------------------------------------
+  let contextTaskId = null;
+
+  function hideContextMenu() {
+    const cm = document.getElementById('kanban-context-menu');
+    if (cm) cm.classList.add('is-hidden');
+    contextTaskId = null;
+  }
+
   function initKanbanBoard() {
     const board = document.getElementById('workly-kanban');
     if (!board) return;
@@ -119,7 +186,7 @@
     const placeholder = document.createElement('div');
     placeholder.className = 'drop-placeholder';
 
-    // Real-time search bar filter
+    // Real-time search filter
     const searchInput = document.getElementById('kanban-search');
     if (searchInput) {
       searchInput.addEventListener('input', () => {
@@ -131,8 +198,10 @@
       });
     }
 
+    // Drag & Drop handlers
     board.querySelectorAll('.task-card').forEach((card) => {
       card.addEventListener('dragstart', (e) => {
+        hideContextMenu();
         draggedCard = card;
         card.classList.add('dragging');
         if (e.dataTransfer) {
@@ -147,6 +216,14 @@
         board.querySelectorAll('.kanban-col').forEach((c) => c.classList.remove('drag-over'));
         draggedCard = null;
       });
+
+      // Native Right-Click Context Menu
+      card.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        const tid = card.getAttribute('data-task-id');
+        if (!tid) return;
+        showContextMenuAt(tid, e.clientX, e.clientY);
+      });
     });
 
     board.querySelectorAll('.kanban-col').forEach((col) => {
@@ -154,10 +231,8 @@
       col.addEventListener('dragover', (e) => {
         e.preventDefault();
         col.classList.add('drag-over');
-        if (container && draggedCard) {
-          if (!container.contains(placeholder)) {
-            container.appendChild(placeholder);
-          }
+        if (container && draggedCard && !container.contains(placeholder)) {
+          container.appendChild(placeholder);
         }
       });
 
@@ -190,7 +265,7 @@
             method: 'PATCH',
             body: JSON.stringify({ status: newStatus })
           });
-          showToast('Task status updated', 'success');
+          showToast('Task moved to ' + newStatus.replace('_', ' '), 'success');
         } catch (err) {
           showToast(err.message, 'error');
           window.location.reload();
@@ -198,121 +273,87 @@
       });
     });
 
-    // Native task context menu (right-click); touch users can use a long press.
-    const hideTaskMenus = () => {
-      board.querySelectorAll('.task-dropdown').forEach((menu) => {
-        menu.classList.add('is-hidden');
-        menu.style.removeProperty('left');
-        menu.style.removeProperty('top');
-      });
-    };
-
-    const openTaskMenu = (card, x, y) => {
-      hideTaskMenus();
-      const menu = card.querySelector('.task-dropdown');
-      if (!menu) return;
-      menu.classList.remove('is-hidden');
-      menu.style.position = 'fixed';
-      menu.style.left = Math.max(8, Math.min(x, window.innerWidth - 230)) + 'px';
-      menu.style.top = Math.max(8, Math.min(y, window.innerHeight - 360)) + 'px';
-    };
-
-    board.addEventListener('contextmenu', (e) => {
-      const card = e.target.closest('.task-card');
-      if (!card) return;
-      e.preventDefault();
-      openTaskMenu(card, e.clientX, e.clientY);
-    });
-
-    board.addEventListener('keydown', (e) => {
-      if (e.key !== 'ContextMenu' && !(e.shiftKey && e.key === 'F10')) return;
-      const card = e.target.closest('.task-card');
-      if (!card) return;
-      e.preventDefault();
-      const rect = card.getBoundingClientRect();
-      openTaskMenu(card, rect.left + 12, rect.top + 12);
-      const firstAction = card.querySelector('.task-dropdown button');
-      if (firstAction) firstAction.focus();
-    });
-
-    let touchMenuTimer = null;
-    board.addEventListener('pointerdown', (e) => {
-      if (e.pointerType !== 'touch') return;
-      const card = e.target.closest('.task-card');
-      if (!card) return;
-      touchMenuTimer = window.setTimeout(() => openTaskMenu(card, e.clientX, e.clientY), 650);
-    }, { passive: true });
-    ['pointerup', 'pointercancel', 'pointermove'].forEach((eventName) => {
-      board.addEventListener(eventName, () => {
-        if (touchMenuTimer) window.clearTimeout(touchMenuTimer);
-        touchMenuTimer = null;
-      }, { passive: true });
-    });
-
-    board.addEventListener('click', async (e) => {
-      const actionBtn = e.target.closest('[data-task-action]');
-      if (actionBtn) {
-        e.preventDefault();
+    // Click delegation on cards (trigger drawer tabs or 3-dot menu)
+    board.addEventListener('click', (e) => {
+      const menuBtn = e.target.closest('.task-menu-btn');
+      if (menuBtn) {
         e.stopPropagation();
-        const action = actionBtn.getAttribute('data-task-action');
-        const taskId = actionBtn.getAttribute('data-task-id');
-
-        try {
-          if (action === 'open') {
-            hideTaskMenus();
-            openTaskDetailModal(taskId);
-            return;
-          }
-          if (action === 'delete' && !window.confirm('Permanently delete this task? This cannot be undone.')) return;
-          if (action === 'archive' && !window.confirm('Archive this task? It will be hidden from the active board.')) return;
-
-          let endpoint = '/api/v1/tasks/' + encodeURIComponent(taskId);
-          let method = 'PATCH';
-          let body = {};
-
-          if (action === 'status') {
-            body.status = actionBtn.getAttribute('data-status');
-            endpoint += '/status';
-          } else if (action === 'priority') {
-            body.priority = actionBtn.getAttribute('data-priority');
-          } else if (action === 'urgent') {
-            body.is_urgent = actionBtn.getAttribute('data-urgent') === '1';
-          } else if (action === 'duplicate') {
-            endpoint += '/duplicate';
-            method = 'POST';
-          } else if (action === 'archive') {
-            endpoint += '/archive';
-          } else if (action === 'delete') {
-            method = 'DELETE';
-          } else {
-            return;
-          }
-
-          await apiFetch(endpoint, {
-            method,
-            body: method === 'DELETE' || (method === 'POST' && action === 'duplicate') ? undefined : JSON.stringify(body)
-          });
-          showToast('Task updated', 'success');
-          window.location.reload();
-        } catch (err) {
-          showToast(err.message, 'error');
-        }
+        const tid = menuBtn.getAttribute('data-task-id');
+        const rect = menuBtn.getBoundingClientRect();
+        if (tid) showContextMenuAt(tid, rect.left - 160, rect.bottom + 6);
         return;
       }
 
-      const titleBtn = e.target.closest('[data-open-task]');
-      if (titleBtn) {
-        hideTaskMenus();
-        openTaskDetailModal(titleBtn.getAttribute('data-open-task'));
-        return;
+      const tabTrigger = e.target.closest('[data-open-task]');
+      if (tabTrigger) {
+        const tid = tabTrigger.getAttribute('data-open-task');
+        const initialTab = tabTrigger.getAttribute('data-task-tab') || 'details';
+        openTaskDetailDrawer(tid, initialTab);
       }
-
-      if (!e.target.closest('.task-dropdown')) hideTaskMenus();
     });
+
+    // Context Menu Actions
+    const cm = document.getElementById('kanban-context-menu');
+    if (cm) {
+      cm.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-cm-action]');
+        if (!btn || !contextTaskId) return;
+        const tid = contextTaskId;
+        const action = btn.getAttribute('data-cm-action');
+        hideContextMenu();
+
+        if (action === 'open') {
+          openTaskDetailDrawer(tid, btn.getAttribute('data-cm-tab') || 'details');
+        } else if (action === 'status') {
+          const status = btn.getAttribute('data-status');
+          try {
+            await apiFetch('/api/v1/tasks/' + encodeURIComponent(tid) + '/status', {
+              method: 'PATCH',
+              body: JSON.stringify({ status })
+            });
+            showToast('Status updated', 'success');
+            window.location.reload();
+          } catch (err) {
+            showToast(err.message, 'error');
+          }
+        } else if (action === 'priority') {
+          const priority = btn.getAttribute('data-priority');
+          try {
+            await apiFetch('/api/v1/tasks/' + encodeURIComponent(tid), {
+              method: 'PATCH',
+              body: JSON.stringify({ priority })
+            });
+            showToast('Priority updated to ' + priority, 'success');
+            window.location.reload();
+          } catch (err) {
+            showToast(err.message, 'error');
+          }
+        } else if (action === 'delete') {
+          try {
+            await apiFetch('/api/v1/tasks/' + encodeURIComponent(tid), { method: 'DELETE' });
+            showToast('Task deleted', 'success');
+            window.location.reload();
+          } catch (err) {
+            showToast(err.message, 'error');
+          }
+        }
+      });
+    }
 
     document.addEventListener('click', (e) => {
-      if (!e.target.closest('.task-card')) hideTaskMenus();
+      if (cm && !cm.contains(e.target)) hideContextMenu();
     });
+  }
+
+  function showContextMenuAt(taskId, x, y) {
+    const cm = document.getElementById('kanban-context-menu');
+    if (!cm) return;
+    contextTaskId = taskId;
+    cm.classList.remove('is-hidden');
+    const maxLeft = window.innerWidth - 230;
+    const maxTop = window.innerHeight - 380;
+    cm.style.left = Math.max(10, Math.min(x, maxLeft)) + 'px';
+    cm.style.top = Math.max(10, Math.min(y, maxTop)) + 'px';
   }
 
   function updateColumnCounters() {
@@ -323,72 +364,236 @@
     });
   }
 
-  function openTaskDetailModal(taskId) {
+  function openTaskDetailDrawer(taskId, initialTab) {
     const store = document.getElementById('task-details-json');
     if (!store) return;
     const allData = JSON.parse(store.textContent || '{}');
     const task = (allData.tasks || {})[taskId];
     if (!task) return;
 
-    const modal = document.getElementById('modal-task-detail');
-    if (!modal) return;
+    const drawer = document.getElementById('drawer-task-detail');
+    if (!drawer) return;
 
-    modal.querySelector('#detail-task-title').textContent = task.title;
-    modal.querySelector('#detail-task-meta').textContent =
-      task.client_name + ' • Assigned to ' + task.va_name + ' • Due ' + task.deadline + ' • Est ' + task.estimated_hours + 'h';
-    modal.querySelector('#detail-task-desc').textContent = task.description || 'No description provided.';
+    drawer.querySelector('#detail-task-title').textContent = task.title;
+    drawer.querySelector('#detail-task-meta').textContent =
+      task.client_name + ' • ' + task.va_name + ' • Due ' + task.deadline + ' • Est ' + task.estimated_hours + 'h';
 
-    const activityList = modal.querySelector('#detail-activity-list');
-    if (activityList) {
-      activityList.replaceChildren();
-      const notes = ((allData.notes || {})[taskId] || []).map((item) => ({
-        type: 'note', content: item.content, author_name: item.author_name,
-        author_role: item.author_role, created_at: item.created_at
-      }));
-      const comments = ((allData.comments || {})[taskId] || []).map((item) => ({
-        type: 'comment', content: item.message, author_name: item.author_name,
-        author_role: item.author_role, created_at: item.created_at
-      }));
-      const activity = notes.concat(comments).sort((a, b) =>
-        String(a.created_at || '').localeCompare(String(b.created_at || ''))
-      );
+    // Populate Inline Edit Form inside right drawer
+    const editForm = drawer.querySelector('#form-edit-task');
+    if (editForm) {
+      editForm.setAttribute('data-api-form', '/api/v1/tasks/' + encodeURIComponent(taskId));
+      editForm.querySelector('[name="title"]').value = task.title || '';
+      editForm.querySelector('[name="description"]').value = task.description || '';
+      editForm.querySelector('[name="priority"]').value = task.priority || 'medium';
+      const stSelect = editForm.querySelector('[name="status"]');
+      if (stSelect) stSelect.value = task.status || 'todo';
+      const clSelect = editForm.querySelector('[name="client_id"]');
+      if (clSelect && task.client_id) clSelect.value = task.client_id;
+      editForm.querySelector('[name="deadline"]').value = task.deadline || '';
+      editForm.querySelector('[name="estimated_hours"]').value = task.estimated_hours || 4;
+    }
 
-      if (!activity.length) {
-        const empty = document.createElement('p');
-        empty.className = 'muted';
-        empty.textContent = 'No activity yet. Start the conversation.';
-        activityList.appendChild(empty);
+    // Notes
+    const notesList = drawer.querySelector('#detail-notes-list');
+    notesList.innerHTML = '';
+    const notes = (allData.notes || {})[taskId] || [];
+    if (notes.length === 0) {
+      notesList.innerHTML = '<p class="muted">No execution notes added yet.</p>';
+    } else {
+      notes.forEach((n) => {
+        const div = document.createElement('div');
+        div.className = 'va-note-card';
+        div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;"><strong>' +
+          escapeHtml(n.author_name) + '</strong><span class="badge badge-brand">SLA Note</span></div>' +
+          '<p style="margin-top:6px;">' + escapeHtml(n.content) + '</p>';
+        notesList.appendChild(div);
+      });
+    }
+
+    // Comments
+    const commentsList = drawer.querySelector('#detail-comments-list');
+    commentsList.innerHTML = '';
+    const comments = (allData.comments || {})[taskId] || [];
+    if (comments.length === 0) {
+      commentsList.innerHTML = '<p class="muted">No discussion comments yet.</p>';
+    } else {
+      comments.forEach((c) => {
+        const div = document.createElement('div');
+        div.className = 'comment-card';
+        div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;"><strong>' +
+          escapeHtml(c.author_name) + '</strong><span class="badge badge-neutral">' + escapeHtml(c.author_role) + '</span></div>' +
+          '<p style="margin-top:6px;">' + escapeHtml(c.message) + '</p>';
+        commentsList.appendChild(div);
+      });
+    }
+
+    // Extra hours history
+    const ehList = drawer.querySelector('#detail-extrahours-list');
+    if (ehList) {
+      ehList.innerHTML = '';
+      const logs = (allData.extra_hours || {})[taskId] || [];
+      if (logs.length === 0) {
+        ehList.innerHTML = '<p class="muted">No overtime hours logged on this task.</p>';
       } else {
-        activity.forEach((item) => {
-          const entry = document.createElement('article');
-          entry.className = 'task-activity-item ' + (item.type === 'note' ? 'is-note' : 'is-comment');
-          const meta = document.createElement('div');
-          meta.className = 'task-activity-meta';
-          const author = document.createElement('strong');
-          author.textContent = item.author_name || 'Workspace member';
-          const kind = document.createElement('span');
-          kind.className = 'badge ' + (item.type === 'note' ? 'badge-warn' : 'badge-info');
-          kind.textContent = item.type === 'note' ? 'Internal note' : 'Comment';
-          const role = document.createElement('span');
-          role.className = 'muted';
-          role.textContent = item.author_role || '';
-          const content = document.createElement('p');
-          content.textContent = item.content || '';
-          meta.append(author, kind, role);
-          entry.append(meta, content);
-          activityList.appendChild(entry);
+        logs.forEach((eh) => {
+          const div = document.createElement('div');
+          div.className = 'comment-card';
+          div.innerHTML = '<strong>+' + escapeHtml(eh.extra_hours) + 'h</strong> <span class="muted">(' +
+            escapeHtml(eh.date) + ')</span><p style="margin-top:4px;">' + escapeHtml(eh.justification) + '</p>';
+          ehList.appendChild(div);
         });
       }
     }
 
-    modal.querySelectorAll('input[name="task_id"]').forEach((inp) => { inp.value = taskId; });
-    openModal('modal-task-detail');
+    drawer.querySelectorAll('input[name="task_id"]').forEach((inp) => { inp.value = taskId; });
+    openDrawer('drawer-task-detail');
+    activateTab('task-drawer', initialTab || 'details');
   }
 
-  function escapeHtml(str) {
-    const d = document.createElement('div');
-    d.textContent = str == null ? '' : String(str);
-    return d.innerHTML;
+  // ------------------------------------------------------------------------
+  // Client CRM Right Dossier Drawer & CSV Bulk Importer
+  // ------------------------------------------------------------------------
+  function initClientDossiers() {
+    document.querySelectorAll('[data-open-client]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const cid = btn.getAttribute('data-open-client');
+        const store = document.getElementById('clients-dossier-json');
+        if (!store || !cid) return;
+        const data = JSON.parse(store.textContent || '{}');
+        const cl = (data.clients || {})[cid];
+        if (!cl) return;
+
+        const drawer = document.getElementById('drawer-client-dossier');
+        if (!drawer) return;
+
+        drawer.querySelector('#dossier-agency').textContent = cl.agency_name;
+        drawer.querySelector('#dossier-contact').textContent = cl.name + ' • ' + cl.email;
+
+        const editForm = drawer.querySelector('#form-edit-client');
+        if (editForm) {
+          editForm.setAttribute('data-api-form', '/api/v1/clients/' + encodeURIComponent(cid));
+          editForm.querySelector('[name="agency_name"]').value = cl.agency_name || '';
+          editForm.querySelector('[name="name"]').value = cl.name || '';
+          editForm.querySelector('[name="email"]').value = cl.email || '';
+          editForm.querySelector('[name="phone"]').value = cl.phone || '';
+          editForm.querySelector('[name="contract_status"]').value = cl.contract_status || 'active';
+          editForm.querySelector('[name="contracted_hours_per_month"]').value = cl.contracted_hours_per_month || 40;
+          editForm.querySelector('[name="consumed_hours_month"]').value = cl.consumed_hours_month || 0;
+          const vaSel = editForm.querySelector('[name="focus_va_id"]');
+          if (vaSel && cl.focus_va_id) vaSel.value = cl.focus_va_id;
+          editForm.querySelector('[name="internal_notes"]').value = cl.internal_notes || '';
+        }
+
+        const pdfForm = drawer.querySelector('#form-upload-contract');
+        if (pdfForm) {
+          pdfForm.querySelector('[name="client_id"]').value = cid;
+        }
+        const pdfLink = drawer.querySelector('#dossier-pdf-link');
+        if (pdfLink) {
+          if (cl.contract_pdf_url) {
+            pdfLink.href = cl.contract_pdf_url;
+            pdfLink.classList.remove('is-hidden');
+          } else {
+            pdfLink.classList.add('is-hidden');
+          }
+        }
+
+        const actForm = drawer.querySelector('#form-client-activity');
+        if (actForm) {
+          actForm.setAttribute('data-api-form', '/api/v1/clients/' + encodeURIComponent(cid) + '/activities');
+        }
+
+        const actList = drawer.querySelector('#dossier-activities');
+        if (actList) {
+          actList.innerHTML = '';
+          const acts = (data.activities || {})[cid] || [];
+          if (acts.length === 0) {
+            actList.innerHTML = '<p class="muted">No activity entries yet.</p>';
+          } else {
+            acts.forEach((a) => {
+              const div = document.createElement('div');
+              div.className = 'comment-card';
+              div.innerHTML = '<div style="display:flex;justify-content:space-between;"><strong>' +
+                escapeHtml(a.author_name) + '</strong><span class="badge badge-neutral">' +
+                escapeHtml(a.type) + '</span></div><p style="margin-top:4px;">' +
+                escapeHtml(a.description) + '</p>';
+              actList.appendChild(div);
+            });
+          }
+        }
+
+        openDrawer('drawer-client-dossier');
+      });
+    });
+
+    // Bulk CSV Import
+    const bulkForm = document.getElementById('form-bulk-clients');
+    if (bulkForm) {
+      bulkForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const raw = (bulkForm.querySelector('[name="csv_data"]') || {}).value || '';
+        const defaultVa = (bulkForm.querySelector('[name="default_va_id"]') || {}).value || '';
+        const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (lines.length === 0) {
+          showToast('Paste at least one CSV client line', 'error');
+          return;
+        }
+        const clients = [];
+        lines.forEach((line, idx) => {
+          const cols = line.split(',').map((c) => c.trim());
+          if (idx === 0 && cols[0].toLowerCase().includes('agency')) return;
+          if (!cols[0] || !cols[1] || !cols[2]) return;
+          clients.push({
+            agency_name: cols[0],
+            name: cols[1],
+            email: cols[2],
+            phone: cols[3] || '',
+            contracted_hours_per_month: parseFloat(cols[4] || '40') || 40,
+            focus_va_id: cols[5] || defaultVa
+          });
+        });
+
+        try {
+          const res = await apiFetch('/api/v1/clients/bulk', {
+            method: 'POST',
+            body: JSON.stringify({ clients })
+          });
+          showToast('Imported ' + (res.imported || 0) + ' clients', 'success');
+          window.setTimeout(() => window.location.reload(), 450);
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Admin Right-Side Edit User Drawer
+  // ------------------------------------------------------------------------
+  function initAdminEditDrawers() {
+    document.querySelectorAll('[data-edit-user]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const uid = btn.getAttribute('data-edit-user');
+        const store = document.getElementById('admin-users-json');
+        if (!store || !uid) return;
+        const usersMap = JSON.parse(store.textContent || '{}');
+        const u = usersMap[uid];
+        if (!u) return;
+
+        const drawer = document.getElementById('drawer-edit-user');
+        if (!drawer) return;
+        const form = drawer.querySelector('#form-edit-user');
+        form.setAttribute('data-api-form', '/api/v1/users/' + encodeURIComponent(uid));
+        form.querySelector('[name="name"]').value = u.name || '';
+        form.querySelector('[name="email"]').value = u.email || '';
+        form.querySelector('[name="role"]').value = u.role || 'va';
+        form.querySelector('[name="hourly_rate"]').value = u.hourly_rate || 0;
+        form.querySelector('[name="pto_balance_days"]').value = u.pto_balance_days || 15;
+        const tlSel = form.querySelector('[name="team_leader_id"]');
+        if (tlSel) tlSel.value = u.team_leader_id || '';
+        openDrawer('drawer-edit-user');
+      });
+    });
   }
 
   // ------------------------------------------------------------------------
@@ -419,21 +624,12 @@
             const payload = {};
             fd.forEach((val, key) => {
               if (key === 'task_id') return;
-              if (key.endsWith('[]')) {
-                const cleanKey = key.slice(0, -2);
-                payload[cleanKey] = payload[cleanKey] || [];
-                payload[cleanKey].push(val);
-              } else {
-                payload[key] = val;
-              }
+              payload[key] = val;
             });
-
-            // Handle checkboxes properly
             form.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
               if (cb.name) payload[cb.name] = cb.checked;
             });
 
-            // Special CSV/array parsing for VA specialties
             if (typeof payload.specialties_csv === 'string') {
               payload.specialties = payload.specialties_csv.split(',').map((s) => s.trim()).filter(Boolean);
               delete payload.specialties_csv;
@@ -456,7 +652,7 @@
           }
 
           showToast('Saved to PostgreSQL database', 'success');
-          window.setTimeout(() => window.location.reload(), 450);
+          window.setTimeout(() => window.location.reload(), 420);
         } catch (err) {
           showToast(err.message, 'error');
           if (submitBtn) submitBtn.disabled = false;
@@ -464,14 +660,14 @@
       });
     });
 
-    // Dynamic PTO business day counter (Monday-Friday max 5)
+    // Dynamic PTO business-day counter (Mon-Fri max 5)
     const ptoStart = document.getElementById('pto-start');
     const ptoEnd = document.getElementById('pto-end');
     const ptoPreview = document.getElementById('pto-days-preview');
     if (ptoStart && ptoEnd && ptoPreview) {
       const recalc = () => {
         if (!ptoStart.value || !ptoEnd.value) {
-          ptoPreview.textContent = 'Select start and end dates (Mon-Fri, max 5 business days).';
+          ptoPreview.textContent = 'Select start and end dates (Mon–Fri, max 5 business days).';
           return;
         }
         const s = new Date(ptoStart.value + 'T00:00:00');
@@ -487,7 +683,7 @@
           if (dow >= 1 && dow <= 5) days++;
           cur.setDate(cur.getDate() + 1);
         }
-        ptoPreview.textContent = 'Calculated business days (Mon-Fri): ' + days + (days > 5 ? ' (Exceeds 5-day policy)' : '');
+        ptoPreview.textContent = 'Calculated business days (Mon–Fri): ' + days + (days > 5 ? ' (Exceeds 5-day policy)' : '');
       };
       ptoStart.addEventListener('change', recalc);
       ptoEnd.addEventListener('change', recalc);
@@ -495,147 +691,7 @@
   }
 
   // ------------------------------------------------------------------------
-  // Client CSV Import: header mapping, preview and validated bulk submission
-  // ------------------------------------------------------------------------
-  function initClientCsvImport() {
-    const fileInput = document.getElementById('client-csv-file');
-    const mappingBox = document.getElementById('client-csv-mapping');
-    const previewBox = document.getElementById('client-csv-preview');
-    const statusBox = document.getElementById('client-csv-status');
-    const importBtn = document.getElementById('client-csv-import');
-    if (!fileInput || !mappingBox || !previewBox || !statusBox || !importBtn) return;
-
-    const fields = [
-      { key: 'agency_name', label: 'Company / Agency', aliases: ['agency_name', 'agency', 'company', 'company_name', 'business'] },
-      { key: 'name', label: 'Contact name', aliases: ['name', 'contact', 'contact_name', 'full_name', 'executive_contact'] },
-      { key: 'email', label: 'Email', aliases: ['email', 'primary_email', 'contact_email'] },
-      { key: 'phone', label: 'Phone', aliases: ['phone', 'telephone', 'mobile'] },
-      { key: 'state', label: 'State', aliases: ['state', 'province', 'region'] },
-      { key: 'country', label: 'Country', aliases: ['country'] },
-      { key: 'website', label: 'Website', aliases: ['website', 'url', 'company_website'] },
-      { key: 'linkedin', label: 'LinkedIn', aliases: ['linkedin', 'linkedin_url'] },
-      { key: 'additional_email', label: 'Additional email', aliases: ['additional_email', 'secondary_email', 'email_2'] },
-      { key: 'additional_phone', label: 'Additional phone', aliases: ['additional_phone', 'secondary_phone', 'phone_2'] }
-    ];
-    let headers = [];
-    let rows = [];
-    let mappings = {};
-
-    const normalize = (value) => String(value || '').trim().toLowerCase().replace(/[\s\-./]+/g, '_');
-
-    function parseCsv(text, delimiter) {
-      const result = [];
-      let row = [], value = '', quoted = false;
-      for (let i = 0; i < text.length; i++) {
-        const char = text[i];
-        if (quoted) {
-          if (char === '"' && text[i + 1] === '"') { value += '"'; i++; }
-          else if (char === '"') quoted = false;
-          else value += char;
-        } else if (char === '"') quoted = true;
-        else if (char === delimiter) { row.push(value); value = ''; }
-        else if (char === '\n') { row.push(value.replace(/\r$/, '')); result.push(row); row = []; value = ''; }
-        else value += char;
-      }
-      if (value.length || row.length) { row.push(value.replace(/\r$/, '')); result.push(row); }
-      return result.filter((r) => r.some((cell) => String(cell).trim() !== ''));
-    }
-
-    function renderMapping() {
-      mappingBox.replaceChildren();
-      fields.forEach((field) => {
-        const wrap = document.createElement('div');
-        wrap.className = 'form-group';
-        const label = document.createElement('label');
-        label.className = 'form-label';
-        label.textContent = field.label;
-        const select = document.createElement('select');
-        select.className = 'select';
-        select.dataset.mapField = field.key;
-        const none = document.createElement('option');
-        none.value = '-1'; none.textContent = 'Not mapped'; select.appendChild(none);
-        headers.forEach((header, index) => {
-          const option = document.createElement('option');
-          option.value = String(index); option.textContent = header || ('Column ' + (index + 1));
-          select.appendChild(option);
-        });
-        const found = headers.findIndex((header) => field.aliases.includes(normalize(header)));
-        select.value = found >= 0 ? String(found) : '-1';
-        select.addEventListener('change', () => { mappings[field.key] = Number(select.value); renderPreview(); });
-        wrap.append(label, select); mappingBox.appendChild(wrap);
-        mappings[field.key] = Number(select.value);
-      });
-    }
-
-    function mappedRow(row) {
-      const item = {};
-      fields.forEach((field) => {
-        const index = mappings[field.key];
-        item[field.key] = Number.isInteger(index) && index >= 0 ? String(row[index] || '').trim() : '';
-      });
-      return item;
-    }
-
-    function renderPreview() {
-      const required = ['agency_name', 'name', 'email'];
-      const missing = required.filter((key) => !Number.isInteger(mappings[key]) || mappings[key] < 0);
-      const mapped = rows.slice(0, 5).map(mappedRow);
-      previewBox.replaceChildren();
-      if (!rows.length) return;
-      const table = document.createElement('table'); table.className = 'table';
-      const thead = document.createElement('thead'); const tr = document.createElement('tr');
-      ['Company', 'Contact', 'Email', 'Phone'].forEach((label) => { const th = document.createElement('th'); th.textContent = label; tr.appendChild(th); });
-      thead.appendChild(tr); table.appendChild(thead);
-      const tbody = document.createElement('tbody');
-      mapped.forEach((item) => {
-        const row = document.createElement('tr');
-        ['agency_name', 'name', 'email', 'phone'].forEach((key) => { const td = document.createElement('td'); td.textContent = item[key] || '—'; row.appendChild(td); });
-        tbody.appendChild(row);
-      });
-      table.appendChild(tbody); previewBox.appendChild(table);
-      statusBox.textContent = rows.length + ' data row(s) detected. ' + (missing.length ? 'Map required columns: ' + missing.join(', ') + '.' : 'Previewing first ' + mapped.length + ' row(s).');
-      importBtn.disabled = missing.length > 0 || rows.length === 0;
-    }
-
-    fileInput.addEventListener('change', async () => {
-      importBtn.disabled = true; previewBox.replaceChildren(); mappingBox.replaceChildren(); rows = []; headers = [];
-      const file = fileInput.files && fileInput.files[0];
-      if (!file) { statusBox.textContent = 'Choose a CSV file to begin.'; return; }
-      if (!/\.csv$/i.test(file.name) && file.type !== 'text/csv') { statusBox.textContent = 'Please select a .csv file. XLSX is not supported here.'; return; }
-      if (file.size > 5 * 1024 * 1024) { statusBox.textContent = 'CSV exceeds the 5 MB limit.'; return; }
-      try {
-        const content = (await file.text()).replace(/^\uFEFF/, '');
-        const firstLine = content.split(/\r?\n/, 1)[0] || '';
-        const commaCount = (firstLine.match(/,/g) || []).length;
-        const semicolonCount = (firstLine.match(/;/g) || []).length;
-        const parsed = parseCsv(content, semicolonCount > commaCount ? ';' : ',');
-        if (parsed.length < 2) throw new Error('The CSV must include a header and at least one data row.');
-        headers = parsed.shift().map((h) => h.trim());
-        rows = parsed;
-        renderMapping(); renderPreview();
-      } catch (error) { statusBox.textContent = error.message; }
-    });
-
-    importBtn.addEventListener('click', async () => {
-      const vaId = (document.getElementById('client-csv-va') || {}).value || '';
-      const tlId = (document.getElementById('client-csv-tl') || {}).value || '';
-      if (!vaId || !tlId) { showToast('Select a default VA and Team Leader.', 'error'); return; }
-      const clients = rows.map((row) => Object.assign(mappedRow(row), { focus_va_id: vaId, team_leader_id: tlId }))
-        .filter((item) => item.agency_name && item.name && item.email);
-      if (!clients.length) { showToast('No valid client rows found.', 'error'); return; }
-      importBtn.disabled = true;
-      try {
-        const result = await apiFetch('/api/v1/clients/bulk', { method: 'POST', body: JSON.stringify({ clients }) });
-        showToast((result.imported || 0) + ' client(s) imported.', 'success');
-        window.setTimeout(() => window.location.reload(), 500);
-      } catch (error) {
-        showToast(error.message, 'error'); importBtn.disabled = false;
-      }
-    });
-  }
-
-  // ------------------------------------------------------------------------
-  // Action Buttons (Suspend, Reactivate, Delete, PTO Review, Report Print)
+  // Interactive Buttons (Status Toggles, Audit Log Filter, Print PDF)
   // ------------------------------------------------------------------------
   function initInteractiveButtons() {
     document.addEventListener('click', async (e) => {
@@ -647,25 +703,20 @@
 
       try {
         btn.disabled = true;
-        await apiFetch(url, {
-          method,
-          body: bodyRaw || undefined
-        });
-        showToast('Action completed', 'success');
-        window.setTimeout(() => window.location.reload(), 400);
+        await apiFetch(url, { method, body: bodyRaw || undefined });
+        showToast('Updated in PostgreSQL', 'success');
+        window.setTimeout(() => window.location.reload(), 380);
       } catch (err) {
         showToast(err.message, 'error');
         btn.disabled = false;
       }
     });
 
-    // Print / Export SLA PDF
     const printBtn = document.getElementById('btn-print-sla');
     if (printBtn) {
       printBtn.addEventListener('click', () => window.print());
     }
 
-    // Admin Audit Log Month/User filter reload
     const auditFilterBtn = document.getElementById('btn-filter-audit');
     if (auditFilterBtn) {
       auditFilterBtn.addEventListener('click', async () => {
@@ -686,16 +737,16 @@
   }
 
   // ------------------------------------------------------------------------
-  // Interactive Onboarding Spotlight Tour (Non-blocking UI overlay)
+  // Onboarding Spotlight Tour
   // ------------------------------------------------------------------------
   function initOnboardingTour() {
     const startBtn = document.getElementById('btn-start-tour');
     if (!startBtn) return;
 
     const steps = [
-      { sel: '#workly-sidebar', title: 'Role-Scoped Navigation', text: 'Your sidebar reflects only modules and alerts authorized for your role.' },
-      { sel: '#topbar-user-pill', title: 'Authenticated Session', text: 'Signed-in PostgreSQL session identity with zero demo presets.' },
-      { sel: '#workly-view-content', title: 'Live Workspace', text: 'All tasks, reports, CRM clients, and PTO records query PostgreSQL directly.' }
+      { sel: '#workly-sidebar', title: 'Role-Scoped Workspace', text: 'Navigate modules tailored to your role with live PostgreSQL review & PTO alerts.' },
+      { sel: '#workly-view-content', title: 'Interactive Operations', text: 'Right-click Kanban cards for quick actions, open right-side drawers for details, and inspect clients in depth.' },
+      { sel: '#sidebar-profile-anchor', title: 'Profile & Performance', text: 'Click your profile anchor at any time to review rates, compensation history, badges, and upload photos.' }
     ];
 
     let idx = 0;
@@ -725,21 +776,15 @@
       target.classList.add('tour-highlight');
 
       const rect = target.getBoundingClientRect();
-      const top = Math.min(window.innerHeight - 190, Math.max(16, rect.top + 16));
-      const left = Math.min(window.innerWidth - 330, Math.max(16, rect.left + 20));
-      tooltip.style.top = top + 'px';
-      tooltip.style.left = left + 'px';
+      tooltip.style.top = Math.min(window.innerHeight - 190, Math.max(16, rect.top + 16)) + 'px';
+      tooltip.style.left = Math.min(window.innerWidth - 335, Math.max(16, rect.left + 20)) + 'px';
 
       tooltip.querySelector('#tour-title').textContent = step.title;
       tooltip.querySelector('#tour-desc').textContent = step.text;
       tooltip.querySelector('#tour-progress').textContent = 'Step ' + (i + 1) + ' of ' + steps.length;
     }
 
-    startBtn.addEventListener('click', () => {
-      idx = 0;
-      showStep(idx);
-    });
-
+    startBtn.addEventListener('click', () => { idx = 0; showStep(0); });
     const nextBtn = document.getElementById('tour-next');
     const closeBtn = document.getElementById('tour-close');
     if (nextBtn) nextBtn.addEventListener('click', () => { idx++; showStep(idx); });

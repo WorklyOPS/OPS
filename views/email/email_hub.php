@@ -24,7 +24,7 @@ if ($lastMsg) {
     <?php else: ?>
       <span class="badge badge-neutral">Internal Workspace Mail</span>
     <?php endif; ?>
-    <button type="button" class="btn btn-primary" data-open-modal="modal-compose-email">+ Compose Message</button>
+    <button type="button" class="btn btn-primary" data-open-drawer="drawer-compose-email">+ Compose Message</button>
   </div>
 </div>
 
@@ -88,34 +88,36 @@ if ($lastMsg) {
   </div>
 </div>
 
-<div id="modal-compose-email" class="modal-backdrop is-hidden">
-  <div class="modal-box">
-    <div class="modal-head">
+<div id="drawer-compose-email" class="drawer-backdrop is-hidden">
+  <aside class="drawer-panel" role="dialog" aria-label="New Email Thread">
+    <div class="drawer-head">
       <h3>New Email Thread</h3>
-      <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
     </div>
-    <form data-api-form="/api/v1/email/compose" data-api-method="POST">
-      <div class="form-group">
-        <label class="form-label">Recipient Email</label>
-        <input class="input" type="email" name="recipient_email" list="workly-contacts" required placeholder="recipient@company.com">
-        <datalist id="workly-contacts">
-          <?php foreach ($data['contacts'] as $ct): ?>
-            <option value="<?= SecurityHelper::e($ct['email']) ?>"><?= SecurityHelper::e($ct['name']) ?> (<?= SecurityHelper::e($ct['role']) ?>)</option>
-          <?php endforeach; ?>
-        </datalist>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Subject</label>
-        <input class="input" name="subject" required placeholder="Topic or deliverable inquiry">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Message Body</label>
-        <textarea class="textarea" name="body" required placeholder="Type your message..."></textarea>
-      </div>
-      <div style="display:flex;justify-content:flex-end;gap:10px;">
-        <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-        <button type="submit" class="btn btn-primary">Send Message</button>
-      </div>
-    </form>
-  </div>
+    <div class="drawer-body">
+      <form data-api-form="/api/v1/email/compose" data-api-method="POST">
+        <div class="form-group">
+          <label class="form-label">Recipient Email</label>
+          <input class="input" type="email" name="recipient_email" list="workly-contacts" required placeholder="recipient@company.com">
+          <datalist id="workly-contacts">
+            <?php foreach ($data['contacts'] as $ct): ?>
+              <option value="<?= SecurityHelper::e($ct['email']) ?>"><?= SecurityHelper::e($ct['name']) ?> (<?= SecurityHelper::e($ct['role']) ?>)</option>
+            <?php endforeach; ?>
+          </datalist>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Subject</label>
+          <input class="input" name="subject" required placeholder="Topic or deliverable inquiry">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Message Body</label>
+          <textarea class="textarea" name="body" rows="6" required placeholder="Type your message..."></textarea>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;">
+          <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
+          <button type="submit" class="btn btn-primary">Send Message</button>
+        </div>
+      </form>
+    </div>
+  </aside>
 </div>

@@ -2,6 +2,10 @@
 $podVas = $data['pod_vas'] ?? [];
 $podClients = $data['pod_clients'] ?? [];
 $trend = $data['completion_trend'] ?? [];
+$maxTrendTotal = 1;
+foreach ($trend as $day) {
+    $maxTrendTotal = max($maxTrendTotal, (int) $day['total_count']);
+}
 ?>
 
 <div class="page-header">
@@ -9,9 +13,9 @@ $trend = $data['completion_trend'] ?? [];
     <h1>Team Leader Operations Hub</h1>
     <p class="muted">Real-time visibility into your assigned Virtual Assistants, client capacity, and 30-day task velocity.</p>
   </div>
-  <div style="display:flex;gap:10px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <a href="/tasks" class="btn btn-secondary">Open Kanban Board</a>
-    <a href="/calendar-reports" class="btn btn-primary">Schedule Meeting & SLA Report</a>
+    <a href="/calendar-reports" class="btn btn-primary">Schedule Meeting &amp; SLA Report</a>
   </div>
 </div>
 
@@ -39,25 +43,50 @@ $trend = $data['completion_trend'] ?? [];
 </div>
 
 <div class="card" style="margin-bottom:22px;">
-  <h3 style="margin-bottom:6px;">30-Day Deliverable Completion Trend</h3>
-  <p class="muted" style="font-size:12px;margin-bottom:16px;">PostgreSQL aggregated deliverables due vs. completed across the past 30 days.</p>
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+    <div>
+      <h3>30-Day Deliverable Completion Trend</h3>
+      <p class="muted" style="font-size:12px;">PostgreSQL aggregated deliverables due vs. completed across the past 30 days.</p>
+    </div>
+    <div style="display:flex;gap:12px;font-size:12px;">
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#E9D5FF;margin-right:4px;"></span>Total Due</span>
+      <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#8822CE;margin-right:4px;"></span>Completed</span>
+    </div>
+  </div>
 
   <?php if (empty($trend)): ?>
     <p class="muted">No deliverables recorded in the past 30 days yet.</p>
   <?php else: ?>
-    <div style="display:grid;gap:10px;">
-      <?php foreach ($trend as $day): ?>
-        <?php
-          $pct = (int) $day['total_count'] > 0 ? round(((int) $day['done_count'] / (int) $day['total_count']) * 100, 1) : 0;
-        ?>
-        <div style="display:grid;grid-template-columns:110px 1fr 90px;align-items:center;gap:12px;">
-          <span style="font-size:12px;font-weight:600;"><?= SecurityHelper::e($day['day_label']) ?></span>
-          <div class="progress-track">
-            <div class="progress-fill" style="width:<?= $pct ?>%;"></div>
-          </div>
-          <span class="muted" style="font-size:12px;text-align:right;"><?= (int) $day['done_count'] ?> / <?= (int) $day['total_count'] ?> done</span>
-        </div>
-      <?php endforeach; ?>
+    <?php
+      $barSlot = 44;
+      $chartW = max(560, count($trend) * $barSlot + 24);
+      $chartH = 190;
+      $plotH = 135;
+    ?>
+    <div class="svg-chart-wrap" style="margin-bottom:12px;">
+      <svg width="<?= $chartW ?>" height="<?= $chartH ?>" viewBox="0 0 <?= $chartW ?> <?= $chartH ?>" role="img" aria-label="30-Day Completion Velocity">
+        <line x1="12" y1="<?= $plotH + 14 ?>" x2="<?= $chartW - 12 ?>" y2="<?= $plotH + 14 ?>" stroke="#E8E1F2" stroke-width="1"/>
+        <?php foreach ($trend as $idx => $day): ?>
+          <?php
+            $tot = (int) $day['total_count'];
+            $done = (int) $day['done_count'];
+            $x = 18 + ($idx * $barSlot);
+            $totH = $tot > 0 ? max(8, (int) round(($tot / $maxTrendTotal) * $plotH)) : 4;
+            $doneH = $done > 0 ? max(6, (int) round(($done / $maxTrendTotal) * $plotH)) : 0;
+            $yTot = ($plotH + 14) - $totH;
+            $yDone = ($plotH + 14) - $doneH;
+            $shortDate = substr((string) $day['day_label'], 5);
+          ?>
+          <g>
+            <rect x="<?= $x ?>" y="<?= $yTot ?>" width="24" height="<?= $totH ?>" rx="5" fill="#F3E8FF"/>
+            <?php if ($doneH > 0): ?>
+              <rect x="<?= $x ?>" y="<?= $yDone ?>" width="24" height="<?= $doneH ?>" rx="5" fill="#8822CE"/>
+            <?php endif; ?>
+            <text x="<?= $x + 12 ?>" y="<?= $yTot - 4 ?>" text-anchor="middle" font-size="10" font-weight="700" fill="#475569"><?= $done ?>/<?= $tot ?></text>
+            <text x="<?= $x + 12 ?>" y="<?= $chartH - 12 ?>" text-anchor="middle" font-size="10" fill="#64748B"><?= SecurityHelper::e($shortDate) ?></text>
+          </g>
+        <?php endforeach; ?>
+      </svg>
     </div>
   <?php endif; ?>
 </div>

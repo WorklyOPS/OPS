@@ -47,8 +47,35 @@
   </div>
 <?php endif; ?>
 
+<?php if (!empty($data['notifications']) && in_array($role, ['team_leader', 'admin'], true)): ?>
+  <div class="card" style="margin-bottom:22px;">
+    <h3 style="margin-bottom:12px;">Team Lead PTO Notification Triggers</h3>
+    <div style="display:grid;gap:10px;">
+      <?php foreach ($data['notifications'] as $notif): ?>
+        <div class="message-bubble <?= !$notif['is_read'] ? 'mine' : '' ?>" style="margin-bottom:0;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div>
+            <div style="display:flex;align-items:center;gap:8px;">
+              <strong><?= SecurityHelper::e($notif['title']) ?></strong>
+              <?php if (!$notif['is_read']): ?>
+                <span class="badge badge-brand">Unread</span>
+              <?php endif; ?>
+            </div>
+            <div class="muted" style="font-size:12.5px;margin-top:3px;"><?= SecurityHelper::e($notif['message']) ?></div>
+          </div>
+          <?php if (!$notif['is_read'] && $role === 'team_leader'): ?>
+            <button type="button"
+                    class="btn btn-secondary btn-sm"
+                    data-action-url="/api/v1/pto/notifications/<?= SecurityHelper::e($notif['id']) ?>/read"
+                    data-action-method="PATCH">Mark Read</button>
+          <?php endif; ?>
+        </div>
+      <?php endforeach; ?>
+    </div>
+  </div>
+<?php endif; ?>
+
 <div class="card">
-  <h3 style="margin-bottom:12px;">PTO Request History</h3>
+  <h3 style="margin-bottom:12px;">PTO Request History & Status Tracking</h3>
   <?php if (empty($data['requests'])): ?>
     <p class="muted">No PTO requests recorded yet.</p>
   <?php else: ?>
@@ -60,12 +87,13 @@
             <th>Date Range</th>
             <th>Business Days</th>
             <th>Reason</th>
-            <th>Status</th>
+            <th>Status & Trail</th>
             <th>Action</th>
           </tr>
         </thead>
         <tbody>
           <?php foreach ($data['requests'] as $req): ?>
+            <?php $trail = $data['tracking'][$req['id']] ?? []; ?>
             <tr>
               <td><strong><?= SecurityHelper::e($req['va_name']) ?></strong></td>
               <td><?= SecurityHelper::e($req['start_date']) ?> → <?= SecurityHelper::e($req['end_date']) ?></td>
@@ -75,6 +103,14 @@
                 <span class="badge <?= $req['status'] === 'approved' ? 'badge-success' : ($req['status'] === 'rejected' || $req['status'] === 'cancelled' ? 'badge-danger' : 'badge-warn') ?>">
                   <?= SecurityHelper::e(ucfirst($req['status'])) ?>
                 </span>
+                <?php if (!empty($trail)): ?>
+                  <div class="muted" style="font-size:11px;margin-top:4px;">
+                    <?php
+                      $labels = array_map(static fn(array $t) => (string) $t['current_status'], $trail);
+                      echo SecurityHelper::e(implode(' → ', $labels));
+                    ?>
+                  </div>
+                <?php endif; ?>
               </td>
               <td>
                 <?php if ($req['status'] === 'pending' && in_array($role, ['hrm', 'admin'], true)): ?>

@@ -110,81 +110,21 @@ final class ClientApiController
     {
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
         $rows = $input['clients'] ?? [];
-
-        if (!is_array($rows) || $rows === []) {
+        if (!is_array($rows) || empty($rows)) {
             http_response_code(400);
-            echo json_encode(['error' => 'No client rows supplied']);
-            return;
-        }
-        if (count($rows) > 500) {
-            http_response_code(413);
-            echo json_encode(['error' => 'A maximum of 500 clients can be imported per batch']);
+            echo json_encode(['error' => 'No rows supplied']);
             return;
         }
 
-        $vaCheck = $this->db->prepare("SELECT id FROM users WHERE id = :id AND role = 'va' AND is_active = TRUE AND team_leader_id = :tl LIMIT 1");
-        $tlCheck = $this->db->prepare("SELECT id FROM users WHERE id = :id AND role = 'team_leader' AND is_active = TRUE LIMIT 1");
-        $normalizedRows = [];
-
-        foreach ($rows as $index => $row) {
-            if (!is_array($row)) {
-                http_response_code(422);
-                echo json_encode(['error' => 'Invalid row format', 'row' => $index + 2]);
-                return;
+        $count = 0;
+        foreach ($rows as $row) {
+            if (empty($row['agency_name']) && empty($row['name'])) {
+                continue;
             }
-
-            $agency = SecurityHelper::sanitizePlainText($row['agency_name'] ?? '', 191);
-            $contact = SecurityHelper::sanitizePlainText($row['name'] ?? '', 191);
-            $email = filter_var(trim((string) ($row['email'] ?? '')), FILTER_VALIDATE_EMAIL);
-            $vaId = SecurityHelper::sanitizePlainText($row['focus_va_id'] ?? '', 64);
-            $tlId = $user['role'] === 'team_leader'
-                ? $user['id']
-                : SecurityHelper::sanitizePlainText($row['team_leader_id'] ?? '', 64);
-
-            if ($agency === '' || $contact === '' || !$email || $vaId === '' || $tlId === '') {
-                http_response_code(422);
-                echo json_encode(['error' => 'Company, contact name, valid email, assigned VA and Team Leader are required', 'row' => $index + 2]);
-                return;
-            }
-
-            $tlCheck->execute([':id' => $tlId]);
-            if (!$tlCheck->fetchColumn()) {
-                http_response_code(422);
-                echo json_encode(['error' => 'Invalid or inactive Team Leader', 'row' => $index + 2]);
-                return;
-            }
-            $vaCheck->execute([':id' => $vaId, ':tl' => $tlId]);
-            if (!$vaCheck->fetchColumn()) {
-                http_response_code(422);
-                echo json_encode(['error' => 'The selected VA is not active or does not belong to the selected Team Leader', 'row' => $index + 2]);
-                return;
-            }
-
-            $row['agency_name'] = $agency;
-            $row['name'] = $contact;
-            $row['email'] = $email;
-            $row['focus_va_id'] = $vaId;
-            $row['team_leader_id'] = $tlId;
-            $normalizedRows[] = $row;
+            $this->insertSingle($row, $user);
+            $count++;
         }
 
-        try {
-            $this->db->beginTransaction();
-            foreach ($normalizedRows as $row) {
-                $this->insertSingle($row, $user);
-            }
-            $this->db->commit();
-        } catch (Throwable $e) {
-            if ($this->db->inTransaction()) {
-                $this->db->rollBack();
-            }
-            error_log('Client bulk import failed: ' . $e->getMessage());
-            http_response_code(500);
-            echo json_encode(['error' => 'The import could not be completed. No clients were imported.']);
-            return;
-        }
-
-        $count = count($normalizedRows);
         $this->invalidate();
         AuditLogger::log('CLIENT_BULK_IMPORT', 'success', "Imported {$count} client accounts", $user['id'], $user['role'], $this->db);
         http_response_code(201);

@@ -5,8 +5,8 @@
   </div>
   <?php if (in_array($role, ['admin', 'team_leader', 'hrm'], true)): ?>
     <div style="display:flex;gap:10px;">
-      <button type="button" class="btn btn-secondary" data-open-modal="modal-new-category">+ New Category</button>
-      <button type="button" class="btn btn-primary" data-open-modal="modal-new-sop">+ Publish SOP</button>
+      <button type="button" class="btn btn-secondary" data-open-drawer="drawer-new-category">+ New Category</button>
+      <button type="button" class="btn btn-primary" data-open-drawer="drawer-new-sop">+ Publish SOP</button>
     </div>
   <?php endif; ?>
 </div>
@@ -53,65 +53,69 @@
 <?php endif; ?>
 
 <?php if (in_array($role, ['admin', 'team_leader', 'hrm'], true)): ?>
-  <div id="modal-new-category" class="modal-backdrop is-hidden">
-    <div class="modal-box">
-      <div class="modal-head">
+  <div id="drawer-new-category" class="drawer-backdrop is-hidden">
+    <aside class="drawer-panel" role="dialog" aria-label="Add SOP Category">
+      <div class="drawer-head">
         <h3>Add SOP Category</h3>
-        <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
       </div>
-      <form data-api-form="/api/v1/knowledge/categories" data-api-method="POST">
-        <div class="form-group">
-          <label class="form-label">Category Name</label>
-          <input class="input" name="name" required placeholder="e.g. Client Onboarding, Financial Ops">
-        </div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Save Category</button>
-        </div>
-      </form>
-    </div>
+      <div class="drawer-body">
+        <form data-api-form="/api/v1/knowledge/categories" data-api-method="POST">
+          <div class="form-group">
+            <label class="form-label">Category Name</label>
+            <input class="input" name="name" required placeholder="e.g. Client Onboarding, Financial Ops">
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Category</button>
+          </div>
+        </form>
+      </div>
+    </aside>
   </div>
 
-  <div id="modal-new-sop" class="modal-backdrop is-hidden">
-    <div class="modal-box">
-      <div class="modal-head">
+  <div id="drawer-new-sop" class="drawer-backdrop is-hidden">
+    <aside class="drawer-panel" role="dialog" aria-label="Publish Knowledge Document">
+      <div class="drawer-head">
         <h3>Publish Knowledge Document</h3>
-        <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
       </div>
-      <form data-api-form="/api/v1/knowledge" data-api-method="POST">
-        <div class="form-group">
-          <label class="form-label">Document Title</label>
-          <input class="input" name="title" required placeholder="Weekly Executive Inbox SOP">
-        </div>
-        <div class="grid-2">
+      <div class="drawer-body">
+        <form data-api-form="/api/v1/knowledge" data-api-method="POST">
           <div class="form-group">
-            <label class="form-label">Category</label>
-            <input class="input" name="category" list="sop-cats" required placeholder="Operations">
-            <datalist id="sop-cats">
-              <?php foreach ($data['categories'] as $cat): ?>
-                <option value="<?= SecurityHelper::e($cat['name']) ?>">
-              <?php endforeach; ?>
-            </datalist>
+            <label class="form-label">Document Title</label>
+            <input class="input" name="title" required placeholder="Weekly Executive Inbox SOP">
+          </div>
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Category</label>
+              <input class="input" name="category" list="sop-cats" required placeholder="Operations">
+              <datalist id="sop-cats">
+                <?php foreach ($data['categories'] as $cat): ?>
+                  <option value="<?= SecurityHelper::e($cat['name']) ?>">
+                <?php endforeach; ?>
+              </datalist>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Scope (Optional Client)</label>
+              <select class="select" name="client_id">
+                <option value="">Global (All VAs)</option>
+                <?php foreach ($data['clients'] as $c): ?>
+                  <option value="<?= SecurityHelper::e($c['id']) ?>"><?= SecurityHelper::e($c['agency_name']) ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
           </div>
           <div class="form-group">
-            <label class="form-label">Scope (Optional Client)</label>
-            <select class="select" name="client_id">
-              <option value="">Global (All VAs)</option>
-              <?php foreach ($data['clients'] as $c): ?>
-                <option value="<?= SecurityHelper::e($c['id']) ?>"><?= SecurityHelper::e($c['agency_name']) ?></option>
-              <?php endforeach; ?>
-            </select>
+            <label class="form-label">SOP Content</label>
+            <textarea class="textarea" name="content" rows="8" required placeholder="Step-by-step standard operating procedure..."></textarea>
           </div>
-        </div>
-        <div class="form-group">
-          <label class="form-label">SOP Content</label>
-          <textarea class="textarea" name="content" rows="6" required placeholder="Step-by-step standard operating procedure..."></textarea>
-        </div>
-        <div style="display:flex;justify-content:flex-end;gap:10px;">
-          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
-          <button type="submit" class="btn btn-primary">Publish SOP</button>
-        </div>
-      </form>
-    </div>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
+            <button type="submit" class="btn btn-primary">Publish SOP</button>
+          </div>
+        </form>
+      </div>
+    </aside>
   </div>
 <?php endif; ?>

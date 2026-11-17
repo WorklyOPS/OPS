@@ -1,6 +1,12 @@
 <?php
 $p = $data['profile'];
 $canUploadAvatar = ($role === 'admin' || $p['id'] === $user['id']);
+$earnings = $data['earnings'] ?? [];
+$chartEarnings = array_reverse($earnings);
+$maxEarn = 1.0;
+foreach ($chartEarnings as $er) {
+    $maxEarn = max($maxEarn, (float) $er['amount']);
+}
 ?>
 
 <div class="page-header">
@@ -42,7 +48,7 @@ $canUploadAvatar = ($role === 'admin' || $p['id'] === $user['id']);
 
 <div class="grid-2" style="margin-bottom:22px;">
   <div class="card">
-    <h3 style="margin-bottom:10px;">Role Bio, Specialties & Responsibilities</h3>
+    <h3 style="margin-bottom:10px;">Role Bio, Specialties &amp; Responsibilities</h3>
     <p class="muted" style="margin-bottom:14px;"><?= SecurityHelper::e($p['bio'] ?: 'No biography recorded yet.') ?></p>
 
     <h4 style="margin-bottom:8px;">Specialties</h4>
@@ -69,10 +75,36 @@ $canUploadAvatar = ($role === 'admin' || $p['id'] === $user['id']);
   </div>
 
   <div class="card">
-    <h3 style="margin-bottom:10px;">Monthly Earnings Ledger</h3>
-    <?php if (empty($data['earnings'])): ?>
+    <h3 style="margin-bottom:10px;">Monthly Compensation &amp; Earnings Ledger</h3>
+    <?php if (empty($earnings)): ?>
       <p class="muted" style="margin-bottom:16px;">No monthly payout cycles recorded yet.</p>
     <?php else: ?>
+      <?php
+        $slot = 48;
+        $svgW = max(360, count($chartEarnings) * $slot + 24);
+        $svgH = 155;
+        $maxBarH = 105;
+      ?>
+      <div class="svg-chart-wrap" style="margin-bottom:14px;">
+        <svg width="<?= $svgW ?>" height="<?= $svgH ?>" viewBox="0 0 <?= $svgW ?> <?= $svgH ?>" role="img" aria-label="Monthly Compensation Chart">
+          <line x1="10" y1="<?= $maxBarH + 18 ?>" x2="<?= $svgW - 10 ?>" y2="<?= $maxBarH + 18 ?>" stroke="#E8E1F2" stroke-width="1"/>
+          <?php foreach ($chartEarnings as $i => $row): ?>
+            <?php
+              $amt = (float) $row['amount'];
+              $barH = $amt > 0 ? max(8, (int) round(($amt / $maxEarn) * $maxBarH)) : 4;
+              $x = 18 + ($i * $slot);
+              $y = ($maxBarH + 18) - $barH;
+              $lbl = substr((string) $row['record_month'], 0, 3);
+            ?>
+            <g>
+              <rect x="<?= $x ?>" y="<?= $y ?>" width="28" height="<?= $barH ?>" rx="6" fill="#AE09E9"/>
+              <text x="<?= $x + 14 ?>" y="<?= $y - 4 ?>" text-anchor="middle" font-size="9.5" font-weight="700" fill="#475569">$<?= number_format($amt, 0) ?></text>
+              <text x="<?= $x + 14 ?>" y="<?= $svgH - 10 ?>" text-anchor="middle" font-size="10" fill="#64748B"><?= SecurityHelper::e($lbl) ?></text>
+            </g>
+          <?php endforeach; ?>
+        </svg>
+      </div>
+
       <div class="table-wrap" style="margin-bottom:16px;">
         <table class="table">
           <thead>
@@ -83,7 +115,7 @@ $canUploadAvatar = ($role === 'admin' || $p['id'] === $user['id']);
             </tr>
           </thead>
           <tbody>
-            <?php foreach ($data['earnings'] as $row): ?>
+            <?php foreach ($earnings as $row): ?>
               <tr>
                 <td><?= SecurityHelper::e($row['record_month']) ?> <?= (int) $row['record_year'] ?></td>
                 <td><?= number_format((float) $row['hours_billed'], 1) ?>h</td>

@@ -1,11 +1,16 @@
+<?php
+$payrollProjection = (float) ($data['payroll_projection'] ?? 0.0);
+$complianceClients = $data['clients_compliance'] ?? [];
+?>
+
 <div class="page-header">
   <div>
-    <h1>HR Manager & Compliance Hub</h1>
-    <p class="muted">Review Virtual Assistant PTO requests, monitor balances, and audit overtime logs.</p>
+    <h1>HR Manager &amp; Compliance Hub</h1>
+    <p class="muted">Review Virtual Assistant PTO requests, payroll projections, client PDF contract compliance, and overtime audits.</p>
   </div>
-  <div style="display:flex;gap:10px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <a href="/pto" class="btn btn-secondary">PTO Policy Console</a>
-    <a href="/perks" class="btn btn-primary">Manage Perks & Benefits</a>
+    <a href="/perks" class="btn btn-primary">Manage Perks &amp; Benefits</a>
   </div>
 </div>
 
@@ -16,14 +21,14 @@
     <div class="kpi-sub">Total Virtual Assistants</div>
   </div>
   <div class="card card-hover">
+    <div class="kpi-label">Monthly Payroll Projection</div>
+    <div class="kpi-value">$<?= number_format($payrollProjection, 0) ?></div>
+    <div class="kpi-sub">160h/mo active VA baseline</div>
+  </div>
+  <div class="card card-hover">
     <div class="kpi-label">Pending PTO Requests</div>
     <div class="kpi-value"><?= (int) ($data['pending_pto'] ?? 0) ?></div>
     <div class="kpi-sub">Requires HR decision</div>
-  </div>
-  <div class="card card-hover">
-    <div class="kpi-label">Active Clients</div>
-    <div class="kpi-value"><?= (int) ($data['client_count'] ?? 0) ?></div>
-    <div class="kpi-sub">Contracted accounts</div>
   </div>
   <div class="card card-hover">
     <div class="kpi-label">Extra Hours Entries</div>
@@ -89,36 +94,79 @@
   <?php endif; ?>
 </div>
 
-<div class="card">
-  <h3 style="margin-bottom:12px;">Overtime & Extra Hours Audit</h3>
-  <?php if (empty($data['extra_hours'])): ?>
-    <p class="muted">No overtime logs recorded yet.</p>
-  <?php else: ?>
-    <div class="table-wrap">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>VA</th>
-            <th>Client</th>
-            <th>Task</th>
-            <th>Hours</th>
-            <th>Date</th>
-            <th>Justification</th>
-          </tr>
-        </thead>
-        <tbody>
-          <?php foreach ($data['extra_hours'] as $eh): ?>
+<div class="grid-2">
+  <div class="card">
+    <h3 style="margin-bottom:12px;">Client Contract Compliance</h3>
+    <?php if (empty($complianceClients)): ?>
+      <p class="muted">No client contracts recorded yet.</p>
+    <?php else: ?>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
             <tr>
-              <td><?= SecurityHelper::e($eh['va_name']) ?></td>
-              <td><?= SecurityHelper::e($eh['client_name']) ?></td>
-              <td><?= SecurityHelper::e($eh['task_title']) ?></td>
-              <td><strong>+<?= number_format((float) $eh['extra_hours'], 2) ?>h</strong></td>
-              <td><?= SecurityHelper::e($eh['date']) ?></td>
-              <td><?= SecurityHelper::e($eh['justification']) ?></td>
+              <th>Agency</th>
+              <th>Assigned VA</th>
+              <th>Status</th>
+              <th>Signed Agreement</th>
             </tr>
-          <?php endforeach; ?>
-        </tbody>
-      </table>
-    </div>
-  <?php endif; ?>
+          </thead>
+          <tbody>
+            <?php foreach ($complianceClients as $cc): ?>
+              <tr>
+                <td>
+                  <strong><?= SecurityHelper::e($cc['agency_name']) ?></strong>
+                  <div class="muted" style="font-size:11.5px;"><?= SecurityHelper::e($cc['name']) ?></div>
+                </td>
+                <td><?= SecurityHelper::e($cc['focus_va_name'] ?: 'Unassigned') ?></td>
+                <td>
+                  <span class="badge <?= $cc['contract_status'] === 'active' ? 'badge-success' : 'badge-warn' ?>">
+                    <?= SecurityHelper::e(ucfirst($cc['contract_status'])) ?>
+                  </span>
+                </td>
+                <td>
+                  <?php if (!empty($cc['contract_pdf_url'])): ?>
+                    <a class="btn btn-secondary btn-sm" href="<?= SecurityHelper::e(SecurityHelper::sanitizeUrl($cc['contract_pdf_url'])) ?>" target="_blank" rel="noopener">PDF On File</a>
+                  <?php else: ?>
+                    <span class="badge badge-danger">Missing PDF</span>
+                  <?php endif; ?>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    <?php endif; ?>
+  </div>
+
+  <div class="card">
+    <h3 style="margin-bottom:12px;">Overtime &amp; Extra Hours Audit</h3>
+    <?php if (empty($data['extra_hours'])): ?>
+      <p class="muted">No overtime logs recorded yet.</p>
+    <?php else: ?>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>VA</th>
+              <th>Client</th>
+              <th>Hours</th>
+              <th>Date</th>
+              <th>Justification</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($data['extra_hours'] as $eh): ?>
+              <tr>
+                <td><?= SecurityHelper::e($eh['va_name']) ?></td>
+                <td><?= SecurityHelper::e($eh['client_name']) ?></td>
+                <td><strong>+<?= number_format((float) $eh['extra_hours'], 2) ?>h</strong></td>
+                <td><?= SecurityHelper::e($eh['date']) ?></td>
+                <td><?= SecurityHelper::e($eh['justification']) ?></td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    <?php endif; ?>
+  </div>
 </div>

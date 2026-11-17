@@ -7,9 +7,6 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/config/env_loader.php';
-
-EnvLoader::load();
-
 require_once __DIR__ . '/config/secrets.php';
 require_once __DIR__ . '/config/database.php';
 require_once __DIR__ . '/services/SecurityHelper.php';
@@ -17,7 +14,7 @@ require_once __DIR__ . '/services/CacheService.php';
 require_once __DIR__ . '/services/AuditLogger.php';
 require_once __DIR__ . '/middleware/AuthMiddleware.php';
 
-
+EnvLoader::load();
 
 $rawUri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 $uri = '/' . ltrim($rawUri, '/');
@@ -146,6 +143,15 @@ if (str_starts_with($uri, '/api/v1/')) {
 
     http_response_code(404);
     echo json_encode(['error' => 'API endpoint not found']);
+    exit;
+}
+
+// CAPTCHA SVG Challenge Endpoint
+if ($uri === '/captcha.svg') {
+    header('Content-Type: image/svg+xml; charset=UTF-8');
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('X-Content-Type-Options: nosniff');
+    echo SecurityHelper::renderSvgCaptcha();
     exit;
 }
 

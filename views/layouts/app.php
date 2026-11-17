@@ -21,13 +21,16 @@ $initials = substr($initials ?: 'W', 0, 2);
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="workly-csrf" content="<?= SecurityHelper::e($csrfToken) ?>">
   <title><?= SecurityHelper::e($pageTitle) ?> — Workly</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/css/workly.css">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar" id="workly-sidebar">
       <div class="sidebar-head">
-        <a href="<?= $role === 'va' ? '/tasks' : '/dashboard' ?>" class="sidebar-brand">
+        <a href="<?= $role === 'va' ? '/tasks' : '/dashboard' ?>" class="sidebar-brand" style="text-decoration:none;">
           <span class="brand-mark" style="width:30px;height:30px;font-size:14px;">W</span>
           <span>Workly</span>
         </a>
@@ -75,16 +78,16 @@ $initials = substr($initials ?: 'W', 0, 2);
         <a href="/calendar-reports" class="nav-link <?= $activeSection === 'calendar_reports' ? 'active' : '' ?>">
           <span class="nav-link-inner">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
-            <span>Calendar & Reports</span>
+            <span>Calendar &amp; Reports</span>
           </span>
         </a>
 
-        <div class="nav-section-label">People & Comms</div>
+        <div class="nav-section-label">People &amp; Comms</div>
 
         <a href="/pto" class="nav-link <?= $activeSection === 'pto' ? 'active' : '' ?>">
           <span class="nav-link-inner">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
-            <span>PTO & Leave</span>
+            <span>PTO &amp; Leave</span>
           </span>
           <?php if (($alerts['pending_pto'] ?? 0) > 0 && in_array($role, ['team_leader', 'hrm', 'admin'], true)): ?>
             <span class="nav-badge" title="Pending PTO requests"><?= (int) $alerts['pending_pto'] ?></span>
@@ -111,7 +114,7 @@ $initials = substr($initials ?: 'W', 0, 2);
         <a href="/perks" class="nav-link <?= $activeSection === 'perks' ? 'active' : '' ?>">
           <span class="nav-link-inner">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6 6 .9-4.5 4.4 1 6.2L12 16.5 6.5 19.5l1-6.2L3 8.9 9 8z"/></svg>
-            <span>Perks & Badges</span>
+            <span>Perks &amp; Badges</span>
           </span>
         </a>
 
@@ -123,8 +126,8 @@ $initials = substr($initials ?: 'W', 0, 2);
         </a>
       </nav>
 
-      <?php if ($role === 'team_leader' && (($alerts['review_tasks'] ?? 0) > 0 || ($alerts['pending_pto'] ?? 0) > 0)): ?>
-        <div class="sidebar-foot">
+      <div class="sidebar-foot">
+        <?php if ($role === 'team_leader' && (($alerts['review_tasks'] ?? 0) > 0 || ($alerts['pending_pto'] ?? 0) > 0 || ($alerts['unread_tl_notifications'] ?? 0) > 0)): ?>
           <div class="sidebar-alert-box">
             <strong style="display:block;margin-bottom:4px;color:var(--brand);">Team Leader Alerts</strong>
             <?php if (($alerts['review_tasks'] ?? 0) > 0): ?>
@@ -133,9 +136,24 @@ $initials = substr($initials ?: 'W', 0, 2);
             <?php if (($alerts['pending_pto'] ?? 0) > 0): ?>
               <div><?= (int) $alerts['pending_pto'] ?> PTO request(s) pending</div>
             <?php endif; ?>
+            <?php if (($alerts['unread_tl_notifications'] ?? 0) > 0): ?>
+              <div><a href="/pto"><?= (int) $alerts['unread_tl_notifications'] ?> unread PTO alert(s)</a></div>
+            <?php endif; ?>
           </div>
-        </div>
-      <?php endif; ?>
+        <?php endif; ?>
+
+        <a href="/profile" id="sidebar-profile-anchor" class="sidebar-profile-card">
+          <?php if (!empty($user['avatar_url'])): ?>
+            <img src="<?= SecurityHelper::e($user['avatar_url']) ?>" alt="Profile" class="avatar">
+          <?php else: ?>
+            <span class="avatar"><?= SecurityHelper::e($initials) ?></span>
+          <?php endif; ?>
+          <div style="min-width:0;flex:1;">
+            <div style="font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= SecurityHelper::e($user['name']) ?></div>
+            <div class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= SecurityHelper::e($roleLabel) ?></div>
+          </div>
+        </a>
+      </div>
     </aside>
 
     <div class="main-wrap">
