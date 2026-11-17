@@ -44,14 +44,136 @@
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-arc: cubic-bezier(0.22, 1, 0.36, 1);
 }
+
+
 :root[data-theme="dark"] {
-    color-scheme: dark;
-    --bg: #101010;
-    --surface: #191919;
-    --ink: #f5f5f5;
-    --muted: #a1a1aa;
-    --border: #303030;
-    --brand-accent: #a99aff;
+  color-scheme: dark;
+
+  /* ── Brand · Workly Violet ── */
+  --brand-primary: #C05AF0;
+  --brand-secondary: #B77AE8;
+  --brand: #B77AE8;
+  --brand-hover: #CE91F5;
+  --brand-accent: #D19AFF;
+  --brand-tint: rgba(174, 9, 233, 0.12);
+  --brand-soft: rgba(174, 9, 233, 0.18);
+
+  /* ── Backgrounds & Surfaces ── */
+  --bg: #111019;
+  --surface: #1B1925;
+  --surface-alt: #242131;
+  --surface-neutral: #292735;
+
+  /* ── Borders ── */
+  --border: #353044;
+  --border-strong: #49405D;
+
+  /* ── Typography ── */
+  --ink: #F5F3FA;
+  --ink-soft: #C6C0D2;
+  --muted: #9690A5;
+  --text: #F5F3FA;
+
+  /* ── Semantic Colors ── */
+  --success: #34D399;
+  --success-soft: rgba(16, 185, 129, 0.13);
+
+  --warn: #FBBF24;
+  --warn-soft: rgba(245, 158, 11, 0.13);
+
+  --danger: #FB7185;
+  --danger-soft: rgba(239, 68, 68, 0.13);
+
+  --info: #60A5FA;
+  --info-soft: rgba(59, 130, 246, 0.13);
+
+  /* ── Shadows ── */
+  --shadow-xs: 0 1px 3px rgba(0, 0, 0, 0.20);
+
+  --shadow-sm:
+    0 2px 6px rgba(0, 0, 0, 0.22),
+    0 1px 2px rgba(0, 0, 0, 0.15);
+
+  --shadow-md:
+    0 12px 32px rgba(0, 0, 0, 0.30),
+    0 4px 12px rgba(174, 9, 233, 0.07);
+
+  --shadow-3d:
+    0 20px 44px rgba(0, 0, 0, 0.40),
+    0 6px 16px rgba(174, 9, 233, 0.12);
+
+  --shadow-drawer:
+    -14px 0 46px rgba(0, 0, 0, 0.40);
+}
+
+/* --------------------------------------------------------------------------
+   Options extra for Dark mode
+   -------------------------------------------------------------------------- */
+/* Dark theme component refinements */
+
+:root[data-theme="dark"] {
+  scrollbar-color: #49405D transparent;
+}
+
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #49405D;
+}
+
+:root[data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
+  background: #68577F;
+}
+
+:root[data-theme="dark"] .topbar {
+  background: rgba(27, 25, 37, 0.92);
+}
+
+:root[data-theme="dark"] .nav-link.active {
+  background: rgba(174, 9, 233, 0.16);
+  color: #D19AFF;
+  border-color: rgba(174, 9, 233, 0.30);
+}
+
+:root[data-theme="dark"] .sidebar-alert-box {
+  border-color: rgba(174, 9, 233, 0.25);
+}
+
+:root[data-theme="dark"] .auth-body {
+  background: radial-gradient(
+    circle at top right,
+    #292039 0%,
+    #171421 45%,
+    #111019 100%
+  );
+}
+
+:root[data-theme="dark"] .auth-hero-pane {
+  background: linear-gradient(
+    145deg,
+    #292039 0%,
+    #211A30 55%,
+    #30203D 100%
+  );
+}
+
+:root[data-theme="dark"] .auth-pillar {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(174, 9, 233, 0.22);
+}
+
+:root[data-theme="dark"] .table tbody tr:hover {
+  background: rgba(174, 9, 233, 0.07);
+}
+
+:root[data-theme="dark"] .input:hover,
+:root[data-theme="dark"] .select:hover,
+:root[data-theme="dark"] .textarea:hover {
+  background-color: var(--surface-alt);
+}
+
+:root[data-theme="dark"] input[type="date"],
+:root[data-theme="dark"] input[type="datetime-local"],
+:root[data-theme="dark"] input[type="month"] {
+  color-scheme: dark;
 }
 
 *, *::before, *::after {

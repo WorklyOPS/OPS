@@ -14,8 +14,8 @@
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <?php endif; ?>
 </head>
-<body class="auth-body">
-<!-- Button for theme Dark/Light mode  -->
+
+<div style="top: 10px; right: 10px; position: absolute;">
 <button class="theme-toggle" id="themeToggle">
     <svg id="themeIcon" viewBox="0 0 24 24"
           fill="none" stroke="currentColor"
@@ -24,6 +24,9 @@
         <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>
     </svg>
 </button>
+</div>
+
+<body class="auth-body">
   <main class="auth-split">
     <section class="auth-hero-pane">
       <div>
