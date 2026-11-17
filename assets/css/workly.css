@@ -163,6 +163,10 @@
   );
 }
 
+:root[data-theme="dark"] .comment-card {
+  background: rgba(27, 25, 37, 0.92);
+}
+
 :root[data-theme="dark"] .auth-pillar {
   background: rgba(255, 255, 255, 0.04);
   border-color: rgba(174, 9, 233, 0.22);
