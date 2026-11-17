@@ -105,7 +105,7 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
                  autocomplete="off"
                  value="<?= SecurityHelper::e($data['search'] ?? '') ?>"
                  placeholder="Type 2+ letters to filter by agency, contact, or email..."
-                 style="max-width:400px;">
+                 style="flex:1 1 220px;min-width:0;max-width:420px;">
           <button type="submit" class="btn btn-secondary">Search Clients</button>
           <?php if (!empty($data['search'])): ?>
             <a href="/clients" class="btn btn-secondary">Reset</a>
@@ -152,7 +152,7 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
                 </span>
               </div>
 
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12.5px;margin-bottom:12px;">
+              <div class="crm-card-meta-grid">
                 <div>Assigned VA: <strong><?= SecurityHelper::e($cl['focus_va_name'] ?: 'Unassigned') ?></strong></div>
                 <div>Team Leader: <strong><?= SecurityHelper::e($cl['tl_name'] ?: 'Unassigned') ?></strong></div>
                 <div>Location: <?= SecurityHelper::e(trim(($cl['state'] ? $cl['state'] . ', ' : '') . $cl['country'])) ?></div>
@@ -236,7 +236,7 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
                   </div>
                 </div>
 
-                <div style="flex:1;min-width:210px;">
+                <div class="crm-va-accounts-col">
                   <div class="muted" style="font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:5px;">
                     Assigned Accounts (<?= (int) $av['client_count'] ?> • <?= number_format((float) $av['total_retainer_hours'], 0) ?>h/mo)
                   </div>
@@ -269,9 +269,9 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
             <h3>Communication History Logs</h3>
             <p class="muted" style="font-size:12.5px;">Unified timeline combining client email correspondence and logged CRM dossier notes.</p>
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <input id="crm-comm-search" type="search" class="input" placeholder="Filter messages or contacts..." style="min-width:220px;">
-            <select id="crm-comm-client-filter" class="select" style="min-width:190px;">
+          <div class="crm-comm-controls">
+            <input id="crm-comm-search" type="search" class="input crm-comm-filter-input" placeholder="Filter messages or contacts...">
+            <select id="crm-comm-client-filter" class="select crm-comm-filter-select">
               <option value="">All Client Accounts</option>
               <?php foreach ($clients as $cl): ?>
                 <option value="<?= SecurityHelper::e($cl['id']) ?>"><?= SecurityHelper::e($cl['agency_name']) ?></option>
@@ -353,7 +353,7 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
               <form id="form-upload-client-avatar" data-api-form="/api/v1/uploads/client-avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                 <input type="hidden" name="client_id" value="">
-                <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="max-width:210px;padding:6px 10px;">
+                <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="flex:1 1 180px;min-width:0;max-width:100%;padding:6px 10px;">
                 <button type="submit" class="btn btn-secondary btn-sm">Upload</button>
               </form>
               <button type="button" id="btn-delete-client-avatar" class="btn btn-danger btn-sm">Delete Photo</button>
@@ -477,8 +477,8 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
       <div style="border-top:1px solid var(--border);padding-top:16px;">
         <h4 style="margin-bottom:10px;">Activity Stream</h4>
         <div id="dossier-activities" style="margin-bottom:12px;"></div>
-        <form id="form-client-activity" data-api-form="/api/v1/clients" data-api-method="POST" style="display:flex;gap:8px;">
-          <input class="input" name="description" required placeholder="Log meeting update, call summary, or renewal note...">
+        <form id="form-client-activity" data-api-form="/api/v1/clients" data-api-method="POST" style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input class="input" name="description" required placeholder="Log meeting update, call summary, or renewal note..." style="flex:1 1 200px;min-width:0;">
           <button type="submit" class="btn btn-primary btn-sm">Log Activity</button>
         </form>
       </div>
@@ -507,7 +507,7 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
               <div class="photo-preview-meta">
                 <h4>Optional Client Logo / Image</h4>
                 <p>Select an image (JPG, PNG, WEBP) to upload automatically when saved.</p>
-                <input id="create-client-avatar-file" class="input" type="file" accept="image/jpeg,image/png,image/webp" style="max-width:250px;padding:6px 10px;">
+                <input id="create-client-avatar-file" class="input" type="file" accept="image/jpeg,image/png,image/webp" style="max-width:100%;padding:6px 10px;">
               </div>
             </div>
 

@@ -243,15 +243,15 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
       <?php endif; ?>
     </div>
 
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex:0 1 420px;">
-      <select id="kanban-priority-filter" class="select" style="width:auto;min-width:142px;" aria-label="Filter by priority">
+    <div class="kanban-search-group">
+      <select id="kanban-priority-filter" class="select kanban-prio-select" aria-label="Filter by priority">
         <option value="all">All Priorities</option>
         <option value="urgent">Urgent</option>
         <option value="high">High</option>
         <option value="medium">Medium</option>
         <option value="low">Low</option>
       </select>
-      <input id="kanban-search" type="search" class="input" style="flex:1;min-width:190px;" placeholder="Search tasks by title, client, or VA...">
+      <input id="kanban-search" type="search" class="input kanban-search-input" placeholder="Search tasks by title, client, or VA...">
     </div>
   </form>
 </div>

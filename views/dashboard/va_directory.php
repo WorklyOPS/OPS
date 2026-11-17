@@ -23,13 +23,12 @@ foreach ($vas as $v) {
 <?php else: ?>
   <div class="card" style="margin-bottom:16px;padding:14px;">
     <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
-      <div style="display:flex;gap:10px;flex-wrap:wrap;flex:1;min-width:260px;">
+      <div class="va-dir-filter-controls">
         <input id="va-dir-search"
                type="search"
                class="input"
-               placeholder="Search Virtual Assistant by name, email, or skill..."
-               style="max-width:340px;">
-        <select id="va-dir-spec-filter" class="select" style="max-width:240px;">
+               placeholder="Search Virtual Assistant by name, email, or skill...">
+        <select id="va-dir-spec-filter" class="select">
           <option value="">All Specialty Categories</option>
           <?php foreach ($specCats as $cat): ?>
             <option value="<?= SecurityHelper::e($cat) ?>"><?= SecurityHelper::e($cat) ?></option>
@@ -203,7 +202,7 @@ foreach ($vas as $v) {
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
               <form id="form-dir-upload-avatar" data-api-form="/api/v1/uploads/avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                 <input type="hidden" name="user_id" id="dir-va-avatar-id">
-                <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="max-width:215px;padding:6px 10px;">
+                <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="flex:1 1 180px;min-width:0;max-width:100%;padding:6px 10px;">
                 <button type="submit" class="btn btn-secondary btn-sm">Upload</button>
               </form>
               <button type="button" id="btn-dir-delete-avatar" class="btn btn-danger btn-sm">Delete Photo</button>

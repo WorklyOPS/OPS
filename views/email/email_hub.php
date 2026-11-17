@@ -183,8 +183,8 @@ $defaultBadgeClass = $mailbox ? 'badge badge-success' : 'badge badge-neutral';
         </div>
 
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
-          <div>
-            <input class="input" type="file" name="attachments[]" multiple data-email-files-input="reply-files-preview" style="max-width:290px;padding:6px 10px;">
+          <div style="flex:1 1 220px;min-width:0;">
+            <input class="input" type="file" name="attachments[]" multiple data-email-files-input="reply-files-preview" style="width:100%;max-width:100%;padding:6px 10px;">
             <div id="reply-files-preview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;"></div>
           </div>
           <button type="submit" class="btn btn-primary">Send Reply</button>

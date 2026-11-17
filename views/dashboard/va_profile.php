@@ -26,21 +26,21 @@ $tls = $data['team_leaders'] ?? [];
 ?>
 
 <div class="page-header">
-  <div style="display:flex;align-items:center;gap:14px;">
+  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;min-width:0;">
     <?php if (!empty($p['avatar_url'])): ?>
       <img src="<?= SecurityHelper::e($p['avatar_url']) ?>" alt="Profile Avatar" class="avatar avatar-lg">
     <?php else: ?>
       <span class="avatar avatar-lg"><?= SecurityHelper::e(strtoupper(substr((string) $p['name'], 0, 2))) ?></span>
     <?php endif; ?>
-    <div>
+    <div style="min-width:0;">
       <h1><?= SecurityHelper::e($p['name']) ?></h1>
       <p class="muted"><?= SecurityHelper::e(strtoupper((string) $p['role'])) ?> • <?= SecurityHelper::e($p['email']) ?> • Joined <?= SecurityHelper::e($p['hire_date']) ?><?= !empty($p['phone']) ? ' • ' . SecurityHelper::e($p['phone']) : '' ?></p>
     </div>
   </div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;max-width:100%;">
     <?php if (!empty($allStaff) && count($allStaff) > 1): ?>
-      <form method="GET" action="/profile" style="display:flex;gap:8px;align-items:center;">
-        <select name="va_id" class="select" style="width:auto;min-width:210px;">
+      <form method="GET" action="/profile" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;width:100%;max-width:100%;">
+        <select name="va_id" class="select va-inspect-select">
           <?php foreach ($allStaff as $st): ?>
             <option value="<?= SecurityHelper::e($st['id']) ?>"<?= $st['id'] === $p['id'] ? ' selected' : '' ?>>
               <?= SecurityHelper::e($st['name']) ?> (<?= SecurityHelper::e(strtoupper((string) $st['role'])) ?>)
@@ -293,9 +293,9 @@ $tls = $data['team_leaders'] ?? [];
             <h4>Profile Photo</h4>
             <p>Replace or delete the profile photo stored for this staff member.</p>
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-              <form data-api-form="/api/v1/uploads/avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <form data-api-form="/api/v1/uploads/avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%;">
                 <input type="hidden" name="user_id" value="<?= SecurityHelper::e($p['id']) ?>">
-                <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="max-width:210px;padding:6px 10px;">
+                <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="flex:1 1 180px;min-width:0;max-width:100%;padding:6px 10px;">
                 <button type="submit" class="btn btn-secondary btn-sm">Upload Photo</button>
               </form>
               <?php if (!empty($p['avatar_url'])): ?>

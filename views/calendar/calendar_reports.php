@@ -160,50 +160,52 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
     </div>
   </form>
 
-  <div class="calendar-grid">
-    <?php foreach (['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as $dow): ?>
-      <div class="cal-dow"><?= $dow ?></div>
-    <?php endforeach; ?>
+  <div class="calendar-scroll-wrap">
+    <div class="calendar-grid">
+      <?php foreach (['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as $dow): ?>
+        <div class="cal-dow"><?= $dow ?></div>
+      <?php endforeach; ?>
 
-    <?php for ($pad = 1; $pad < $startDow; $pad++): ?>
-      <div class="cal-cell outside"></div>
-    <?php endfor; ?>
+      <?php for ($pad = 1; $pad < $startDow; $pad++): ?>
+        <div class="cal-cell outside"></div>
+      <?php endfor; ?>
 
-    <?php for ($day = 1; $day <= $daysInMonth; $day++): ?>
-      <?php
-        $dateStr = $calMonth . '-' . str_pad((string) $day, 2, '0', STR_PAD_LEFT);
-        $isToday = $dateStr === $todayYmd;
-      ?>
-      <div class="cal-cell<?= $isToday ? ' is-today' : '' ?>" data-cal-date="<?= SecurityHelper::e($dateStr) ?>">
-        <div class="cal-day-num"><?= $day ?></div>
-        <?php foreach (($eventsByDate[$dateStr] ?? []) as $ev): ?>
-          <?php
-            $evType = (string) ($ev['type'] ?? 'team_sync');
-            $chipClass = match ($evType) {
-                'task'                => 'task-chip',
-                'pto'                 => 'pto-chip',
-                'focus_block'         => 'focus-chip',
-                'availability_window' => 'avail-chip',
-                default               => '',
-            };
-          ?>
-          <div class="cal-event-chip <?= $chipClass ?>"
-               <?= !empty($ev['draggable']) ? 'draggable="true"' : '' ?>
-               <?= !empty($ev['id']) ? 'data-meeting-id="' . SecurityHelper::e($ev['id']) . '"' : '' ?>
-               data-meeting-type="<?= SecurityHelper::e($evType) ?>"
-               title="<?= SecurityHelper::e($ev['tooltip'] ?? $ev['label']) ?>">
-            <span class="cal-chip-label"><?= SecurityHelper::e($ev['label']) ?></span>
-            <?php if (!empty($ev['draggable']) && !empty($ev['id'])): ?>
-              <button type="button"
-                      class="cal-chip-del"
-                      data-delete-meeting="<?= SecurityHelper::e($ev['id']) ?>"
-                      title="Remove scheduled block"
-                      aria-label="Remove scheduled block">&times;</button>
-            <?php endif; ?>
-          </div>
-        <?php endforeach; ?>
-      </div>
-    <?php endfor; ?>
+      <?php for ($day = 1; $day <= $daysInMonth; $day++): ?>
+        <?php
+          $dateStr = $calMonth . '-' . str_pad((string) $day, 2, '0', STR_PAD_LEFT);
+          $isToday = $dateStr === $todayYmd;
+        ?>
+        <div class="cal-cell<?= $isToday ? ' is-today' : '' ?>" data-cal-date="<?= SecurityHelper::e($dateStr) ?>">
+          <div class="cal-day-num"><?= $day ?></div>
+          <?php foreach (($eventsByDate[$dateStr] ?? []) as $ev): ?>
+            <?php
+              $evType = (string) ($ev['type'] ?? 'team_sync');
+              $chipClass = match ($evType) {
+                  'task'                => 'task-chip',
+                  'pto'                 => 'pto-chip',
+                  'focus_block'         => 'focus-chip',
+                  'availability_window' => 'avail-chip',
+                  default               => '',
+              };
+            ?>
+            <div class="cal-event-chip <?= $chipClass ?>"
+                 <?= !empty($ev['draggable']) ? 'draggable="true"' : '' ?>
+                 <?= !empty($ev['id']) ? 'data-meeting-id="' . SecurityHelper::e($ev['id']) . '"' : '' ?>
+                 data-meeting-type="<?= SecurityHelper::e($evType) ?>"
+                 title="<?= SecurityHelper::e($ev['tooltip'] ?? $ev['label']) ?>">
+              <span class="cal-chip-label"><?= SecurityHelper::e($ev['label']) ?></span>
+              <?php if (!empty($ev['draggable']) && !empty($ev['id'])): ?>
+                <button type="button"
+                        class="cal-chip-del"
+                        data-delete-meeting="<?= SecurityHelper::e($ev['id']) ?>"
+                        title="Remove scheduled block"
+                        aria-label="Remove scheduled block">&times;</button>
+              <?php endif; ?>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      <?php endfor; ?>
+    </div>
   </div>
 </div>
 
@@ -492,7 +494,7 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
         <input type="hidden" name="start_date" value="<?= SecurityHelper::e($data['start_date']) ?>">
         <input type="hidden" name="end_date" value="<?= SecurityHelper::e($data['end_date']) ?>">
         <input type="hidden" name="summary_text" value="<?= SecurityHelper::e($summaryPlainText) ?>">
-        <div class="form-group" style="margin-bottom:0;min-width:260px;flex:1;">
+        <div class="form-group" style="margin-bottom:0;min-width:0;flex:1 1 240px;">
           <label class="form-label">Recipient Team Leader / Admin</label>
           <select class="select" name="recipient_email" required>
             <?php foreach ($data['team_leaders'] as $tl): ?>

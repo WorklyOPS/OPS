@@ -203,19 +203,19 @@ $roleCats = $data['roles'] ?? [
   <?php endif; ?>
 
   <div style="display:flex;flex-direction:column;gap:12px;max-width:560px;">
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
       <span>Cloudflare Turnstile (or Built-in SVG CAPTCHA fallback)</span>
       <span class="badge <?= !empty($sec['turnstile_configured']) ? 'badge-success' : 'badge-brand' ?>">
         <?= !empty($sec['turnstile_configured']) ? 'Turnstile Active' : 'SVG CAPTCHA Active' ?>
       </span>
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
       <span>Google Workspace OAuth Keys</span>
       <span class="badge <?= !empty($sec['google_configured']) ? 'badge-success' : 'badge-neutral' ?>">
         <?= !empty($sec['google_configured']) ? 'Configured' : 'Optional / Off' ?>
       </span>
     </div>
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
       <span>Outbound SMTP Mailer</span>
       <span class="badge <?= !empty($sec['smtp_configured']) ? 'badge-success' : 'badge-neutral' ?>">
         <?= !empty($sec['smtp_configured']) ? 'Configured' : 'Optional / Off' ?>
@@ -323,9 +323,9 @@ $roleCats = $data['roles'] ?? [
           <h4>Staff Profile Photo</h4>
           <p>Preview current photo, remove it, or upload a new JPG/PNG/WEBP file.</p>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-            <form id="form-edit-user-avatar" data-api-form="/api/v1/uploads/avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <form id="form-edit-user-avatar" data-api-form="/api/v1/uploads/avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%;">
               <input type="hidden" name="user_id" id="edit-user-avatar-id">
-              <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="max-width:215px;padding:6px 10px;">
+              <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="flex:1 1 180px;min-width:0;max-width:100%;padding:6px 10px;">
               <button type="submit" class="btn btn-secondary btn-sm">Upload Photo</button>
             </form>
             <button type="button" id="btn-delete-user-avatar" class="btn btn-danger btn-sm">Delete Photo</button>

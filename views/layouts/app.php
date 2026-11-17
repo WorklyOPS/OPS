@@ -224,7 +224,7 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
           </span>
         </a>
 
-        <?php if (in_array($role, ['admin', 'team_leader'], true)): ?>
+        <?php if (in_array($role, ['admin', 'team_leader', 'hrm'], true)): ?>
           <a href="/perks" class="nav-link <?= $activeSection === 'perks' ? 'active' : '' ?>">
             <span class="nav-link-inner">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6 6 .9-4.5 4.4 1 6.2L12 16.5 6.5 19.5l1-6.2L3 8.9 9 8z"/></svg>
@@ -378,17 +378,19 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
             </div>
 
           <?php elseif ($activeSection === 'calendar_reports'): ?>
-            <div class="skeleton-bar" style="width:340px;height:42px;border-radius:12px;"></div>
+            <div class="skeleton-bar" style="width:340px;max-width:100%;height:42px;border-radius:12px;"></div>
             <div class="skeleton-bar" style="height:68px;border-radius:12px;"></div>
-            <div class="calendar-grid">
-              <?php for ($d = 0; $d < 28; $d++): ?>
-                <div class="cal-cell" style="min-height:92px;">
-                  <div class="skeleton-bar" style="width:24px;height:14px;margin-bottom:6px;"></div>
-                  <?php if ($d % 3 === 0): ?>
-                    <div class="skeleton-bar" style="height:18px;border-radius:6px;"></div>
-                  <?php endif; ?>
-                </div>
-              <?php endfor; ?>
+            <div class="calendar-scroll-wrap">
+              <div class="calendar-grid">
+                <?php for ($d = 0; $d < 28; $d++): ?>
+                  <div class="cal-cell" style="min-height:92px;">
+                    <div class="skeleton-bar" style="width:24px;height:14px;margin-bottom:6px;"></div>
+                    <?php if ($d % 3 === 0): ?>
+                      <div class="skeleton-bar" style="height:18px;border-radius:6px;"></div>
+                    <?php endif; ?>
+                  </div>
+                <?php endfor; ?>
+              </div>
             </div>
 
           <?php elseif ($activeSection === 'pto'): ?>
@@ -502,7 +504,7 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
           <span><strong>Knowledge Base</strong> — SOP playbooks, WYSIWYG &amp; PDF export</span>
           <span class="kbd-hint">SOPs</span>
         </button>
-        <?php if (in_array($role, ['admin', 'team_leader'], true)): ?>
+        <?php if (in_array($role, ['admin', 'team_leader', 'hrm'], true)): ?>
           <button type="button" class="cmdk-item" data-cmdk-href="/perks">
             <span><strong>Perks &amp; Badges</strong> — Recognition tiers &amp; staff benefits</span>
             <span class="kbd-hint">Perks</span>

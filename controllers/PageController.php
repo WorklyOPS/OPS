@@ -1448,36 +1448,34 @@ final class PageController
 
     private function loadPerksData(array $user): array
     {
+        $board = PerksApiController::fetchBoardPayload($this->db, $user);
+
         try {
-            $this->db->exec("ALTER TABLE perks ADD COLUMN IF NOT EXISTS icon_name VARCHAR(64) NOT NULL DEFAULT 'Award'");
+            $vas = $this->db->query("
+                SELECT u.id, u.name, u.email, COALESCE(u.avatar_url, '') AS avatar_url
+                FROM users u
+                WHERE u.is_active = TRUE
+                  AND (
+                    u.role = 'va'
+                    OR EXISTS (SELECT 1 FROM user_roles ur WHERE ur.user_id = u.id AND ur.role_slug = 'va')
+                  )
+                ORDER BY u.name ASC
+            ")->fetchAll(PDO::FETCH_ASSOC);
         } catch (Throwable) {
+            $vas = $this->db->query("
+                SELECT id, name, email, COALESCE(avatar_url, '') AS avatar_url
+                FROM users
+                WHERE role = 'va' AND is_active = TRUE
+                ORDER BY name ASC
+            ")->fetchAll(PDO::FETCH_ASSOC);
         }
 
-        $perks = $this->db->query("SELECT id, title, category, COALESCE(icon_name, 'Award') AS icon_name, value, description, active, created_at FROM perks ORDER BY created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
-        $grants = $this->db->query("
-            SELECT up.perk_id, up.user_id, u.name AS va_name, COALESCE(u.avatar_url, '') AS va_avatar, p.title AS perk_title, up.granted_at
-            FROM user_perks up
-            JOIN users u ON up.user_id = u.id
-            JOIN perks p ON up.perk_id = p.id
-            ORDER BY up.granted_at DESC
-        ")->fetchAll(PDO::FETCH_ASSOC);
-
-        $badges = $this->db->query("SELECT id, title, description, COALESCE(icon_name, 'Medal') AS icon_name, tier, trigger_type, required_threshold, created_at FROM badges ORDER BY created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
-        $awards = $this->db->query("
-            SELECT ub.badge_id, ub.user_id, u.name AS va_name, COALESCE(u.avatar_url, '') AS va_avatar, b.title AS badge_title, b.tier, COALESCE(b.icon_name, 'Medal') AS icon_name, ub.earned_at
-            FROM user_badges ub
-            JOIN users u ON ub.user_id = u.id
-            JOIN badges b ON ub.badge_id = b.id
-            ORDER BY ub.earned_at DESC
-        ")->fetchAll(PDO::FETCH_ASSOC);
-
-        $vas = $this->db->query("SELECT id, name, email, COALESCE(avatar_url, '') AS avatar_url FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
-
         return [
-            'perks'           => $perks,
-            'grants'          => $grants,
-            'badges'          => $badges,
-            'awards'          => $awards,
+            'perks'           => $board['perks'],
+            'grants'          => $board['grants'],
+            'badges'          => $board['badges'],
+            'awards'          => $board['awards'],
+            'history'         => $board['history'],
             'vas'             => $vas,
             'available_icons' => PerksApiController::VALID_ICONS,
         ];

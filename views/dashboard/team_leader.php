@@ -433,16 +433,16 @@ $urgentOpenCount = count(array_filter($activeDeliverables, static fn(array $d): 
           </div>
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12.5px;margin-bottom:12px;">
+        <div class="tl-va-stats-grid">
           <div>Completed: <strong class="tabular-nums"><?= (int) $va['completed_tasks'] ?></strong></div>
           <div>In Progress: <strong class="tabular-nums"><?= (int) $va['in_progress_tasks'] ?></strong></div>
           <div>PTO Balance: <strong class="tabular-nums"><?= (int) $va['pto_balance_days'] ?>d</strong></div>
           <div>Rate: <strong class="tabular-nums">$<?= number_format((float) $va['hourly_rate'], 2) ?>/h</strong></div>
         </div>
 
-        <div style="display:flex;gap:8px;">
-          <a href="/tasks?va=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm" style="flex:1;">Tasks</a>
-          <a href="/profile?va_id=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm" style="flex:1;">Inspect Profile</a>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <a href="/tasks?va=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm" style="flex:1 1 110px;">Tasks</a>
+          <a href="/profile?va_id=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm" style="flex:1 1 110px;">Inspect Profile</a>
         </div>
       </div>
     <?php endforeach; ?>

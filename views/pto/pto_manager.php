@@ -168,13 +168,13 @@ foreach ($requests as $r) {
         <h3>VA Monthly PTO Register &amp; Free Days Governance</h3>
         <p class="muted" style="font-size:12.5px;">Track monthly leave utilization per Virtual Assistant and adjust available PTO / free days.</p>
       </div>
-      <form method="GET" action="/pto" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+      <form method="GET" action="/pto" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;width:100%;max-width:440px;">
         <input id="pto-va-search"
                type="search"
                class="input"
                placeholder="Search VA by name..."
-               style="min-width:220px;">
-        <select name="month" class="select" data-auto-submit style="min-width:170px;">
+               style="flex:1 1 180px;min-width:0;">
+        <select name="month" class="select" data-auto-submit style="flex:1 1 150px;min-width:0;">
           <?php foreach ($months as $m): ?>
             <option value="<?= SecurityHelper::e($m['value']) ?>" <?= $m['value'] === $selectedMonth ? 'selected' : '' ?>>
               <?= SecurityHelper::e($m['label']) ?>

@@ -2718,6 +2718,7 @@
       const avatarsTray = ms.querySelector('[data-va-ms-avatars]');
       const counter = ms.querySelector('[data-va-ms-counter]');
       const selectAllBtn = ms.querySelector('[data-select-all-vas]');
+      const doneBtn = ms.querySelector('[data-va-ms-done]');
       const checkboxes = Array.from(ms.querySelectorAll('input[type="checkbox"][name="user_ids[]"]'));
 
       const syncMultiselectUi = () => {
@@ -2800,6 +2801,14 @@
         });
       }
 
+      if (doneBtn && menu && trigger) {
+        doneBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          menu.classList.add('is-hidden');
+          trigger.setAttribute('aria-expanded', 'false');
+        });
+      }
+
       if (searchInp) {
         searchInp.addEventListener('input', () => {
           const q = searchInp.value.trim().toLowerCase();
@@ -2817,6 +2826,17 @@
           syncMultiselectUi();
         });
       }
+
+      ms.addEventListener('workly:reset-ms', () => {
+        checkboxes.forEach((cb) => { cb.checked = false; });
+        if (searchInp) {
+          searchInp.value = '';
+          ms.querySelectorAll('.va-ms-option').forEach((opt) => { opt.style.display = ''; });
+        }
+        if (menu) menu.classList.add('is-hidden');
+        if (trigger) trigger.setAttribute('aria-expanded', 'false');
+        syncMultiselectUi();
+      });
 
       checkboxes.forEach((cb) => cb.addEventListener('change', syncMultiselectUi));
       syncMultiselectUi();
@@ -2845,6 +2865,195 @@
         });
       });
     });
+
+    // Real-time Perks & Badges live DOM renderer, revoke handler & background sync
+    const perksView = document.getElementById('workly-perks-view');
+    if (!perksView) return;
+
+    const grantsCountEl = document.getElementById('perks-grants-count');
+    const grantsBoxEl = document.getElementById('perks-grants-container');
+    const awardsCountEl = document.getElementById('perks-awards-count');
+    const awardsBoxEl = document.getElementById('perks-awards-container');
+    const historyCountEl = document.getElementById('perks-history-count');
+    const historyBoxEl = document.getElementById('perks-history-container');
+
+    let historyTypeFilter = 'all';
+    let lastBoardPayload = null;
+
+    function badgeIconSvg(name, size) {
+      const sz = size || 12;
+      const bodies = {
+        Award: '<circle cx="12" cy="8" r="6"/><path d="M15.477 12.89 17 22l-5-3-5 3 1.523-9.11"/>',
+        Medal: '<path d="M7.21 15 2.66 7.14a2 2 0 0 1 .13-2.2L4.4 2.8A2 2 0 0 1 6 2h12a2 2 0 0 1 1.6.8l1.6 2.14a2 2 0 0 1 .14 2.2L16.79 15"/><path d="M11 12 5.12 2.2"/><path d="m13 12 5.88-9.8"/><path d="M8 7h8"/><circle cx="12" cy="17" r="5"/>',
+        Trophy: '<path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/>',
+        Star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+        Shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/>',
+        Crown: '<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7zm3 16h14"/>',
+        Zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+        Heart: '<path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/>'
+      };
+      const body = bodies[name] || bodies.Medal;
+      return '<svg viewBox="0 0 24 24" width="' + sz + '" height="' + sz + '" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + body + '</svg>';
+    }
+
+    function smallAvatarHtml(url, name) {
+      if (url) {
+        return '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(name || 'VA') + '" class="avatar-xs">';
+      }
+      const init = String(name || 'VA').trim().slice(0, 2).toUpperCase() || 'VA';
+      return '<span class="avatar-xs">' + escapeHtml(init) + '</span>';
+    }
+
+    function historyEventMeta(etype) {
+      switch (etype) {
+        case 'perk_granted': return ['Perk Granted', 'badge-success'];
+        case 'perk_revoked': return ['Perk Revoked', 'badge-danger'];
+        case 'badge_awarded': return ['Badge Awarded', 'badge-brand'];
+        case 'perk_created': return ['Perk Added', 'badge-info'];
+        case 'perk_deleted': return ['Perk Deleted', 'badge-neutral'];
+        case 'badge_created': return ['Badge Created', 'badge-info'];
+        default: return ['Recorded', 'badge-neutral'];
+      }
+    }
+
+    function renderPerksBoard(board) {
+      if (!board) return;
+      lastBoardPayload = board;
+      const canManage = perksView.getAttribute('data-can-manage') === '1' || !!board.can_manage;
+      const grants = Array.isArray(board.grants) ? board.grants : [];
+      const awards = Array.isArray(board.awards) ? board.awards : [];
+      const historyAll = Array.isArray(board.history) ? board.history : [];
+
+      if (grantsCountEl) grantsCountEl.textContent = grants.length + ' active';
+      if (grantsBoxEl) {
+        if (grants.length === 0) {
+          grantsBoxEl.innerHTML = '<p class="muted">No staff benefit grants issued yet.</p>';
+        } else {
+          grantsBoxEl.innerHTML = '<div class="table-wrap"><table class="table"><thead><tr><th>Virtual Assistant</th><th>Perk Benefit</th><th>Action</th></tr></thead><tbody>' +
+            grants.map((g) => {
+              const actionCell = canManage
+                ? '<button type="button" class="btn btn-danger btn-sm" data-perk-revoke="/api/v1/perks/' + encodeURIComponent(g.perk_id) + '/grant?user_id=' + encodeURIComponent(g.user_id) + '">Revoke</button>'
+                : '<span class="muted">Active</span>';
+              return '<tr>' +
+                '<td><div style="display:flex;align-items:center;gap:8px;">' + smallAvatarHtml(g.va_avatar, g.va_name) + '<strong>' + escapeHtml(g.va_name) + '</strong></div></td>' +
+                '<td><span class="badge badge-success">' + escapeHtml(g.perk_title || g.perk_id) + '</span></td>' +
+                '<td>' + actionCell + '</td>' +
+                '</tr>';
+            }).join('') +
+            '</tbody></table></div>';
+        }
+      }
+
+      if (awardsCountEl) awardsCountEl.textContent = awards.length + ' awarded';
+      if (awardsBoxEl) {
+        if (awards.length === 0) {
+          awardsBoxEl.innerHTML = '<p class="muted">No recognition badges awarded yet.</p>';
+        } else {
+          awardsBoxEl.innerHTML = '<div style="display:grid;gap:8px;">' +
+            awards.map((aw) => {
+              const tierSlug = String(aw.tier || 'silver').toLowerCase().replace(/[^a-z]/g, '') || 'silver';
+              const dateLabel = String(aw.earned_at || '').slice(0, 10);
+              return '<div class="perk-award-row">' +
+                '<div style="display:flex;align-items:center;gap:9px;min-width:0;flex-wrap:wrap;">' +
+                  smallAvatarHtml(aw.va_avatar, aw.va_name) +
+                  '<span style="font-size:13px;"><strong>' + escapeHtml(aw.va_name) + '</strong> earned ' +
+                    '<span class="badge tier-' + escapeHtml(tierSlug) + '">' + badgeIconSvg(aw.icon_name || 'Medal', 12) + ' ' + escapeHtml(aw.badge_title) + '</span>' +
+                  '</span>' +
+                '</div>' +
+                '<span class="muted mono" style="font-size:11px;">' + escapeHtml(dateLabel) + '</span>' +
+              '</div>';
+            }).join('') +
+            '</div>';
+        }
+      }
+
+      const filteredHistory = historyTypeFilter === 'all'
+        ? historyAll
+        : historyAll.filter((ev) => String(ev.item_type || '') === historyTypeFilter);
+
+      if (historyCountEl) historyCountEl.textContent = filteredHistory.length + ' event(s)';
+      if (historyBoxEl) {
+        if (filteredHistory.length === 0) {
+          historyBoxEl.innerHTML = '<div class="collab-empty">No matching perk or badge history events recorded yet.</div>';
+        } else {
+          historyBoxEl.innerHTML = '<div class="table-wrap"><table class="table"><thead><tr><th>Event</th><th>Perk / Badge</th><th>Virtual Assistant</th><th>Assigned By</th><th>Recorded</th></tr></thead><tbody>' +
+            filteredHistory.map((ev) => {
+              const meta = historyEventMeta(ev.event_type);
+              const vaCell = ev.va_name
+                ? '<div style="display:flex;align-items:center;gap:8px;">' + smallAvatarHtml(ev.va_avatar, ev.va_name) + '<span>' + escapeHtml(ev.va_name) + '</span></div>'
+                : '<span class="muted">Catalog Update</span>';
+              const subMeta = ev.item_meta
+                ? '<div class="muted" style="font-size:11px;">' + escapeHtml(ev.item_meta) + '</div>'
+                : '';
+              return '<tr data-history-item-type="' + escapeHtml(ev.item_type || 'perk') + '">' +
+                '<td><span class="badge ' + meta[1] + '">' + escapeHtml(meta[0]) + '</span></td>' +
+                '<td><strong>' + escapeHtml(ev.item_title) + '</strong>' + subMeta + '</td>' +
+                '<td>' + vaCell + '</td>' +
+                '<td>' + escapeHtml(ev.actor_name || 'Staff') + '</td>' +
+                '<td class="muted mono" style="font-size:11.5px;">' + escapeHtml(String(ev.created_at || '').slice(0, 16)) + '</td>' +
+              '</tr>';
+            }).join('') +
+            '</tbody></table></div>';
+        }
+      }
+    }
+
+    window.worklyRenderPerksBoard = renderPerksBoard;
+
+    if (grantsBoxEl) {
+      grantsBoxEl.addEventListener('click', async (e) => {
+        const btn = e.target.closest('[data-perk-revoke]');
+        if (!btn) return;
+        const url = btn.getAttribute('data-perk-revoke');
+        if (!url) return;
+        try {
+          btn.disabled = true;
+          const res = await apiFetch(url, { method: 'DELETE' });
+          if (res && res.board) renderPerksBoard(res.board);
+          showToast('Perk revoked and logged to history', 'success');
+        } catch (err) {
+          showToast(err.message, 'error');
+          btn.disabled = false;
+        }
+      });
+    }
+
+    perksView.querySelectorAll('[data-perks-history-filter]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        historyTypeFilter = chip.getAttribute('data-perks-history-filter') || 'all';
+        perksView.querySelectorAll('[data-perks-history-filter]').forEach((c) => c.classList.toggle('is-active', c === chip));
+        if (lastBoardPayload) {
+          renderPerksBoard(lastBoardPayload);
+        } else if (historyBoxEl) {
+          const rows = Array.from(historyBoxEl.querySelectorAll('tr[data-history-item-type]'));
+          let visibleCount = 0;
+          rows.forEach((tr) => {
+            const match = historyTypeFilter === 'all' || tr.getAttribute('data-history-item-type') === historyTypeFilter;
+            tr.style.display = match ? '' : 'none';
+            if (match) visibleCount++;
+          });
+          if (historyCountEl) historyCountEl.textContent = visibleCount + ' event(s)';
+        }
+      });
+    });
+
+    async function refreshPerksLive() {
+      if (document.hidden) return;
+      try {
+        const res = await fetch('/api/v1/perks', {
+          method: 'GET',
+          headers: { 'Accept': 'application/json', 'X-CSRF-Token': CSRF_TOKEN }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && Array.isArray(data.grants)) {
+          renderPerksBoard(data);
+        }
+      } catch (_err) {
+      }
+    }
+
+    window.setInterval(refreshPerksLive, 12000);
   }
 
   // ------------------------------------------------------------------------
@@ -3245,6 +3454,12 @@
               targetUrl = targetUrl.replace('{task_id}', encodeURIComponent(resolvedTid));
             }
 
+            if (form.hasAttribute('data-perk-assign-form') && (!Array.isArray(payload.user_ids) || payload.user_ids.length === 0)) {
+              showToast('Select at least one Virtual Assistant recipient first', 'error');
+              if (submitBtn) submitBtn.disabled = false;
+              return;
+            }
+
             const res = await apiFetch(targetUrl, {
               method,
               body: JSON.stringify(payload)
@@ -3262,6 +3477,20 @@
                   body: logoFd
                 });
               }
+            }
+
+            // Real-time no-reload update for Perks & Badges assignments
+            if (form.hasAttribute('data-no-reload') && form.hasAttribute('data-perk-assign-form')) {
+              const msEl = form.querySelector('[data-va-multiselect]');
+              if (msEl) msEl.dispatchEvent(new CustomEvent('workly:reset-ms'));
+              if (res && res.board && typeof window.worklyRenderPerksBoard === 'function') {
+                window.worklyRenderPerksBoard(res.board);
+              }
+              const kind = form.getAttribute('data-perk-assign-form') === 'badge' ? 'Badge awarded' : 'Perk granted';
+              const count = (res && res.count) ? res.count : 1;
+              showToast(kind + ' to ' + count + ' VA(s) in real time', 'success');
+              if (submitBtn) submitBtn.disabled = false;
+              return;
             }
 
             // Real-time no-reload update for task notes and comments forms
