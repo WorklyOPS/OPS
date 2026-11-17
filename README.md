@@ -5,7 +5,7 @@ Workly is a production Virtual Assistant (VA) operations, client CRM, SLA perfor
 
 ---
 
-## Architecture Overviews - UPDATES
+## Architecture Overviews - UPDATESs
 
 - **Root Front Controller**: `/index.php` + Apache/LiteSpeed rules in `/.htaccess`
 - **PostgreSQL Connection & Secrets**:
