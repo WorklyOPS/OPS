@@ -59,6 +59,7 @@ try {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Workly — Workspace Configuration Required</title>
   <link rel="stylesheet" href="/assets/css/workly.css">
+  <script src="/assets/js/localtheme.js"></script>
 </head>
 <body class="auth-body">
   <div class="auth-card">
@@ -67,6 +68,7 @@ try {
     <p class="muted">Workly could not establish a database connection. Verify your environment credentials and initialize the workspace schema before continuing.</p>
     <div class="notice notice-warn">System Status: Database Connection Pending</div>
   </div>
+  <script src="/assets/js/theme-mode.js"></script>
 </body>
 </html>
     <?php
@@ -280,6 +282,7 @@ SecurityHelper::sendHtmlHeaders();
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>404 — Page Not Found | Workly</title>
   <link rel="stylesheet" href="/assets/css/workly.css">
+  <script src="/assets/js/localtheme.js"></script>
 </head>
 <body class="auth-body">
   <div class="auth-card">

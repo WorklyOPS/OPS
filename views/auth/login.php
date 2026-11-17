@@ -9,11 +9,21 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/assets/css/workly.css">
+  <script src="/assets/js/localtheme.js"></script>
   <?php if (!empty($secretsStatus['turnstile_configured'])): ?>
     <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <?php endif; ?>
 </head>
 <body class="auth-body">
+<!-- Button for theme Dark/Light mode  -->
+<button class="theme-toggle" id="themeToggle">
+    <svg id="themeIcon" viewBox="0 0 24 24"
+          fill="none" stroke="currentColor"
+          stroke-width="1.8" stroke-linecap="round">
+        <circle cx="12" cy="12" r="4"></circle>
+        <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>
+    </svg>
+</button>
   <main class="auth-split">
     <section class="auth-hero-pane">
       <div>
@@ -118,5 +128,6 @@
   </main>
 
   <script src="/assets/js/app.js"></script>
+  <script src="/assets/js/theme-mode.js"></script>
 </body>
 </html>
