@@ -12,6 +12,8 @@ require_once __DIR__ . '/../services/AuditLogger.php';
 require_once __DIR__ . '/../middleware/AuthMiddleware.php';
 require_once __DIR__ . '/../middleware/CsrfMiddleware.php';
 
+require_once __DIR__ . '/api/UserApiController.php';
+
 final class AuthController
 {
     public function __construct(private PDO $db) {}
@@ -68,10 +70,15 @@ final class AuthController
             return;
         }
 
+        UserApiController::ensureRolesSchema($this->db);
         $stmt = $this->db->prepare("
-            SELECT id, name, email, password_hash, role, is_active, is_suspended, suspended_reason
-            FROM users
-            WHERE LOWER(email) = LOWER(:email)
+            SELECT u.id, u.name, u.email, u.password_hash,
+                   COALESCE(ur.role_slug, u.role) AS role,
+                   u.is_active, u.is_suspended, u.suspended_reason
+            FROM users u
+            LEFT JOIN user_roles ur ON u.id = ur.user_id
+            WHERE LOWER(u.email) = LOWER(:email)
+            ORDER BY ur.assigned_at DESC NULLS LAST
             LIMIT 1
         ");
         $stmt->execute([':email' => $email]);
@@ -121,10 +128,15 @@ final class AuthController
             return;
         }
 
+        UserApiController::ensureRolesSchema($this->db);
         $stmt = $this->db->prepare("
-            SELECT id, name, email, password_hash, role, is_active, is_suspended
-            FROM users
-            WHERE LOWER(email) = LOWER(:email)
+            SELECT u.id, u.name, u.email, u.password_hash,
+                   COALESCE(ur.role_slug, u.role) AS role,
+                   u.is_active, u.is_suspended
+            FROM users u
+            LEFT JOIN user_roles ur ON u.id = ur.user_id
+            WHERE LOWER(u.email) = LOWER(:email)
+            ORDER BY ur.assigned_at DESC NULLS LAST
             LIMIT 1
         ");
         $stmt->execute([':email' => $email]);
@@ -183,7 +195,7 @@ final class AuthController
         SecurityHelper::configureSecureSession();
         CsrfMiddleware::validateForm();
 
-        // Permanently locked once any user exists in PostgreSQL
+        // Permanently locked once any user exists
         if (AuthMiddleware::userCount($this->db) > 0) {
             header('Location: /login');
             exit;
@@ -209,7 +221,8 @@ final class AuthController
             return;
         }
 
-        $id = 'admin-' . bin2hex(random_bytes(5));
+        UserApiController::ensureRolesSchema($this->db);
+        $id = UserApiController::nextNumericUserId($this->db);
         $hash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 11]);
 
         $stmt = $this->db->prepare("
@@ -222,6 +235,9 @@ final class AuthController
             ':email' => $email,
             ':hash'  => $hash,
         ]);
+
+        $rStmt = $this->db->prepare("INSERT INTO user_roles (user_id, role_slug) VALUES (:uid, 'admin') ON CONFLICT (user_id, role_slug) DO NOTHING");
+        $rStmt->execute([':uid' => $id]);
 
         session_regenerate_id(true);
         $_SESSION['workly_user_id'] = $id;

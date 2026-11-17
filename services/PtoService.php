@@ -10,6 +10,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/CacheService.php';
 require_once __DIR__ . '/AuditLogger.php';
 require_once __DIR__ . '/SecurityHelper.php';
+require_once __DIR__ . '/../controllers/api/NotificationApiController.php';
 
 final class PtoService
 {
@@ -235,6 +236,17 @@ final class PtoService
             }
             throw $e;
         }
+
+        $targetLabel = ucfirst($cleanStatus);
+        NotificationApiController::notifyUser(
+            $this->db,
+            (string) $row['va_id'],
+            'pto',
+            "PTO {$targetLabel}: {$row['start_date']} to {$row['end_date']}",
+            $cleanNote !== '' ? $cleanNote : "Reviewed by {$reviewer['name']}",
+            '/pto',
+            $ptoId
+        );
 
         $this->invalidateCaches();
         AuditLogger::log('PTO_REVIEWED', 'success', "PTO {$ptoId} marked {$cleanStatus}", (string) $reviewer['id'], (string) $reviewer['role'], $this->db);

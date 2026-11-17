@@ -5,12 +5,18 @@ foreach (($data['all_users'] ?? []) as $uRow) {
 }
 $sec = $data['secrets_status'] ?? [];
 $specCats = $data['specialty_categories'] ?? [];
+$roleCats = $data['roles'] ?? [
+    ['slug' => 'va', 'label' => 'Virtual Assistant (VA)'],
+    ['slug' => 'team_leader', 'label' => 'Team Leader'],
+    ['slug' => 'hrm', 'label' => 'HR Manager'],
+    ['slug' => 'admin', 'label' => 'System Admin'],
+];
 ?>
 
 <div class="page-header">
   <div>
     <h1>System Administrator Governance</h1>
-    <p class="muted">Manage PostgreSQL staff accounts, RBAC permissions, VA specialty categories, Gmail linkage, and security audit logs.</p>
+    <p class="muted">Manage staff accounts, numeric IDs, role assignments, VA specialty categories, Gmail linkage, and security audit logs.</p>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <button type="button" class="btn btn-secondary" data-open-drawer="drawer-link-gmail">Link Staff Mailbox</button>
@@ -27,7 +33,7 @@ $specCats = $data['specialty_categories'] ?? [];
   <div class="card card-hover">
     <div class="kpi-label">Active Client Accounts</div>
     <div class="kpi-value"><?= (int) ($data['client_count'] ?? 0) ?></div>
-    <div class="kpi-sub">PostgreSQL CRM</div>
+    <div class="kpi-sub">Active CRM Portfolio</div>
   </div>
   <div class="card card-hover">
     <div class="kpi-label">Deliverables Completed</div>
@@ -79,7 +85,7 @@ $specCats = $data['specialty_categories'] ?? [];
                   <span class="avatar"><?= SecurityHelper::e(strtoupper(substr((string) $u['name'], 0, 2))) ?></span>
                 <?php endif; ?>
                 <div>
-                  <strong><?= SecurityHelper::e($u['name']) ?></strong>
+                  <strong><?= SecurityHelper::e($u['name']) ?> <span class="muted mono" style="font-size:11px;font-weight:500;">#<?= SecurityHelper::e($u['id']) ?></span></strong>
                   <div class="muted" style="font-size:12px;"><?= SecurityHelper::e($u['email']) ?></div>
                 </div>
               </div>
@@ -141,7 +147,7 @@ $specCats = $data['specialty_categories'] ?? [];
   <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;">
     <div>
       <h3>Cybersecurity &amp; Audit Logs</h3>
-      <p class="muted" style="font-size:12px;">PostgreSQL audit trail with monthly filtering and .txt export.</p>
+      <p class="muted" style="font-size:12px;">Workspace security audit trail with monthly filtering and .txt export.</p>
     </div>
     <a class="btn btn-secondary btn-sm" href="/api/v1/logs?download=1">Download Full .txt</a>
   </div>
@@ -175,8 +181,8 @@ $specCats = $data['specialty_categories'] ?? [];
 <div class="card is-hidden" data-tab-group="admin-tabs" data-tab-panel="security">
   <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
     <div>
-      <h3>Environment Keys, PostgreSQL Footprint &amp; Cache Control</h3>
-      <p class="muted" style="font-size:12px;">Live runtime configuration and PostgreSQL table metrics without exposing secret keys.</p>
+      <h3>Environment Keys, Workspace Metrics &amp; Cache Control</h3>
+      <p class="muted" style="font-size:12px;">Live runtime configuration and workspace record metrics without exposing secret keys.</p>
     </div>
     <button type="button"
             class="btn btn-secondary btn-sm"
@@ -245,10 +251,9 @@ $specCats = $data['specialty_categories'] ?? [];
           <div class="form-group">
             <label class="form-label">Role</label>
             <select class="select" name="role" data-role-select required>
-              <option value="va">Virtual Assistant (VA)</option>
-              <option value="team_leader">Team Leader</option>
-              <option value="hrm">HR Manager</option>
-              <option value="admin">System Admin</option>
+              <?php foreach ($roleCats as $rc): ?>
+                <option value="<?= SecurityHelper::e($rc['slug']) ?>"><?= SecurityHelper::e($rc['label']) ?></option>
+              <?php endforeach; ?>
             </select>
           </div>
           <div class="form-group">
@@ -344,10 +349,9 @@ $specCats = $data['specialty_categories'] ?? [];
           <div class="form-group">
             <label class="form-label">Role</label>
             <select class="select" name="role" data-role-select required>
-              <option value="va">Virtual Assistant (VA)</option>
-              <option value="team_leader">Team Leader</option>
-              <option value="hrm">HR Manager</option>
-              <option value="admin">System Admin</option>
+              <?php foreach ($roleCats as $rc): ?>
+                <option value="<?= SecurityHelper::e($rc['slug']) ?>"><?= SecurityHelper::e($rc['label']) ?></option>
+              <?php endforeach; ?>
             </select>
           </div>
           <div class="form-group">

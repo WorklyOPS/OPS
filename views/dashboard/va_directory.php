@@ -19,48 +19,90 @@ foreach ($vas as $v) {
 </div>
 
 <?php if (empty($vas)): ?>
-  <div class="card"><p class="muted">No active Virtual Assistants registered in PostgreSQL yet.</p></div>
+  <div class="card"><p class="muted">No active Virtual Assistants registered yet.</p></div>
 <?php else: ?>
-  <div class="grid-3">
+  <div class="card" style="margin-bottom:16px;padding:14px;">
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;flex:1;min-width:260px;">
+        <input id="va-dir-search"
+               type="search"
+               class="input"
+               placeholder="Search Virtual Assistant by name, email, or skill..."
+               style="max-width:340px;">
+        <select id="va-dir-spec-filter" class="select" style="max-width:240px;">
+          <option value="">All Specialty Categories</option>
+          <?php foreach ($specCats as $cat): ?>
+            <option value="<?= SecurityHelper::e($cat) ?>"><?= SecurityHelper::e($cat) ?></option>
+          <?php endforeach; ?>
+        </select>
+      </div>
+      <div class="muted" style="font-size:12.5px;">
+        Showing <strong id="va-dir-count"><?= count($vas) ?></strong> of <?= count($vas) ?> Virtual Assistant(s)
+      </div>
+    </div>
+  </div>
+
+  <div class="va-dir-list" id="va-dir-list">
     <?php foreach ($vas as $va): ?>
-      <div class="card card-hover">
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px;">
+      <?php
+        $specsArr = $va['specialties'] ?? [];
+        $specsLower = strtolower(implode('||', $specsArr));
+        $hay = strtolower(trim($va['va_name'] . ' ' . $va['va_email'] . ' ' . ($va['specialties_csv'] ?? '')));
+      ?>
+      <article class="card card-hover va-dir-row"
+               data-va-search="<?= SecurityHelper::e($hay) ?>"
+               data-va-specs="<?= SecurityHelper::e($specsLower) ?>">
+        <div class="va-dir-identity">
           <?php if (!empty($va['avatar_url'])): ?>
-            <img src="<?= SecurityHelper::e($va['avatar_url']) ?>" alt="Avatar" class="avatar avatar-lg">
+            <img src="<?= SecurityHelper::e($va['avatar_url']) ?>" alt="<?= SecurityHelper::e($va['va_name']) ?>" class="avatar avatar-lg">
           <?php else: ?>
             <span class="avatar avatar-lg"><?= SecurityHelper::e(strtoupper(substr((string) $va['va_name'], 0, 2))) ?></span>
           <?php endif; ?>
-          <div>
-            <strong style="font-size:15px;"><?= SecurityHelper::e($va['va_name']) ?></strong>
-            <div class="muted" style="font-size:12px;"><?= SecurityHelper::e($va['va_email']) ?></div>
-            <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;">
-              <span class="badge badge-success"><?= number_format((float) $va['on_time_rate'], 1) ?>% SLA</span>
-              <span class="badge badge-neutral">$<?= number_format((float) $va['hourly_rate'], 2) ?>/hr</span>
+          <div style="min-width:0;">
+            <strong style="font-size:15px;display:block;"><?= SecurityHelper::e($va['va_name']) ?></strong>
+            <div class="muted" style="font-size:12px;word-break:break-word;"><?= SecurityHelper::e($va['va_email']) ?></div>
+            <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;">
+              <?php if (empty($specsArr)): ?>
+                <span class="badge badge-neutral">General Operations</span>
+              <?php else: ?>
+                <?php foreach ($specsArr as $sp): ?>
+                  <span class="badge badge-brand"><?= SecurityHelper::e($sp) ?></span>
+                <?php endforeach; ?>
+              <?php endif; ?>
             </div>
           </div>
         </div>
 
-        <?php if (!empty($va['specialties_csv'])): ?>
-          <div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:6px;">
-            <?php foreach (explode(', ', (string) $va['specialties_csv']) as $sp): ?>
-              <span class="badge badge-brand"><?= SecurityHelper::e($sp) ?></span>
-            <?php endforeach; ?>
+        <div class="va-dir-metrics">
+          <div>
+            <span class="va-metric-lbl">SLA Rate</span>
+            <span class="badge badge-success"><?= number_format((float) $va['on_time_rate'], 1) ?>%</span>
           </div>
-        <?php endif; ?>
-
-        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--ink-soft);margin-bottom:12px;">
-          <span>Completed: <strong><?= (int) $va['completed_tasks'] ?></strong></span>
-          <span>Active: <strong><?= (int) $va['in_progress_tasks'] ?></strong></span>
-          <span>PTO Left: <strong><?= (int) $va['pto_balance_days'] ?>d</strong></span>
+          <div>
+            <span class="va-metric-lbl">Rate</span>
+            <strong class="tabular-nums">$<?= number_format((float) $va['hourly_rate'], 2) ?>/hr</strong>
+          </div>
+          <div>
+            <span class="va-metric-lbl">Completed</span>
+            <strong class="tabular-nums"><?= (int) $va['completed_tasks'] ?></strong>
+          </div>
+          <div>
+            <span class="va-metric-lbl">Active</span>
+            <strong class="tabular-nums"><?= (int) $va['in_progress_tasks'] ?></strong>
+          </div>
+          <div>
+            <span class="va-metric-lbl">PTO Left</span>
+            <strong class="tabular-nums"><?= (int) $va['pto_balance_days'] ?>d</strong>
+          </div>
         </div>
 
-        <div style="display:flex;gap:8px;">
-          <a href="/profile?va_id=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm" style="flex:1;">View Full Profile</a>
+        <div class="va-dir-actions">
+          <a href="/profile?va_id=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm">View Profile</a>
           <?php if ($role === 'admin'): ?>
             <button type="button" class="btn btn-primary btn-sm" data-dir-edit-va="<?= SecurityHelper::e($va['va_id']) ?>">Edit VA</button>
           <?php endif; ?>
         </div>
-      </div>
+      </article>
     <?php endforeach; ?>
   </div>
 <?php endif; ?>

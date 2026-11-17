@@ -356,6 +356,7 @@
   }
 
   function closeAllDrawers(immediate) {
+    stopCollabPolling();
     document.querySelectorAll('.drawer-backdrop:not(.is-hidden)').forEach((d) => {
       if (immediate || reducedMotion) {
         d.classList.remove('is-closing');
@@ -640,6 +641,254 @@
     openModal('modal-task-edit');
   }
 
+  let activeCollabTaskId = null;
+  let collabPollTimer = null;
+
+  function stopCollabPolling() {
+    activeCollabTaskId = null;
+    if (collabPollTimer) {
+      window.clearInterval(collabPollTimer);
+      collabPollTimer = null;
+    }
+  }
+
+  function renderSmallAvatarHtml(url, name) {
+    if (url) {
+      return '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(name || 'User') + '" class="avatar-xs">';
+    }
+    const parts = String(name || 'WK').trim().split(/\s+/).filter(Boolean);
+    const init = parts.length >= 2
+      ? (parts[0][0] + parts[1][0]).toUpperCase()
+      : String(name || 'WK').slice(0, 2).toUpperCase();
+    return '<span class="avatar-xs">' + escapeHtml(init) + '</span>';
+  }
+
+  function formatShortTs(ts) {
+    if (!ts) return '';
+    return String(ts).replace('T', ' ').slice(0, 16);
+  }
+
+  function saveTaskDataset(allData) {
+    const store = document.getElementById('task-details-json');
+    if (store && allData) {
+      store.textContent = JSON.stringify(allData);
+    }
+  }
+
+  function syncTaskCardIndicators(taskId, allData) {
+    const notes = ((allData.notes || {})[taskId]) || [];
+    const comments = ((allData.comments || {})[taskId]) || [];
+    const authors = ((allData.comment_authors || {})[taskId]) || [];
+
+    document.querySelectorAll('[data-task-note-count="' + taskId + '"]').forEach((el) => {
+      el.textContent = String(notes.length);
+    });
+    document.querySelectorAll('[data-task-comment-count="' + taskId + '"]').forEach((el) => {
+      el.textContent = String(comments.length);
+    });
+    document.querySelectorAll('[data-task-commenter-avatars="' + taskId + '"]').forEach((wrap) => {
+      wrap.innerHTML = '';
+      authors.slice(0, 3).forEach((ca) => {
+        const init = String(ca.name || 'U').slice(0, 2).toUpperCase();
+        if (ca.avatar_url) {
+          const img = document.createElement('img');
+          img.src = ca.avatar_url;
+          img.alt = ca.name || 'User';
+          img.title = 'Commented by ' + (ca.name || 'User');
+          img.className = 'avatar avatar-xs commenter-avatar-item';
+          wrap.appendChild(img);
+        } else {
+          const sp = document.createElement('span');
+          sp.className = 'avatar avatar-xs commenter-avatar-item';
+          sp.title = 'Commented by ' + (ca.name || 'User');
+          sp.textContent = init;
+          wrap.appendChild(sp);
+        }
+      });
+      if (authors.length > 3) {
+        const more = document.createElement('span');
+        more.className = 'commenter-more';
+        more.textContent = '+' + (authors.length - 3);
+        wrap.appendChild(more);
+      }
+    });
+  }
+
+  function renderTaskCollabLists(taskId, allData) {
+    const drawer = document.getElementById('drawer-task-collab');
+    if (!drawer || !allData) return;
+
+    const notes = ((allData.notes || {})[taskId]) || [];
+    const comments = ((allData.comments || {})[taskId]) || [];
+
+    // Combined Timeline uniting Notes (color-highlighted) + Comments (with commenter avatar photo)
+    const combinedList = drawer.querySelector('#detail-combined-list');
+    if (combinedList) {
+      combinedList.innerHTML = '';
+      const merged = [];
+      notes.forEach((n) => {
+        merged.push({
+          kind: 'note',
+          author_name: n.author_name || 'Staff',
+          author_role: n.author_role || 'va',
+          avatar_url: n.avatar_url || '',
+          text: n.content || '',
+          created_at: n.created_at || ''
+        });
+      });
+      comments.forEach((c) => {
+        merged.push({
+          kind: 'comment',
+          author_name: c.author_name || 'Staff',
+          author_role: c.author_role || 'va',
+          avatar_url: c.avatar_url || '',
+          text: c.message || '',
+          created_at: c.created_at || ''
+        });
+      });
+      merged.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+
+      if (merged.length === 0) {
+        combinedList.innerHTML = '<p class="muted">No notes or comments on this deliverable yet. Start the conversation below.</p>';
+      } else {
+        merged.forEach((item) => {
+          const el = document.createElement('div');
+          if (item.kind === 'note') {
+            el.className = 'collab-note-item';
+            el.innerHTML =
+              '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;">' +
+                '<div style="display:flex;align-items:center;gap:7px;">' +
+                  renderSmallAvatarHtml(item.avatar_url, item.author_name) +
+                  '<strong>' + escapeHtml(item.author_name) + '</strong>' +
+                '</div>' +
+                '<div style="display:flex;align-items:center;gap:6px;">' +
+                  '<span class="badge badge-warn">VA / SLA Note</span>' +
+                  '<span class="muted mono" style="font-size:11px;">' + escapeHtml(formatShortTs(item.created_at)) + '</span>' +
+                '</div>' +
+              '</div>' +
+              '<p style="margin:0;font-size:13px;">' + escapeHtml(item.text) + '</p>';
+          } else {
+            el.className = 'collab-comment-item';
+            el.innerHTML =
+              renderSmallAvatarHtml(item.avatar_url, item.author_name) +
+              '<div class="collab-entry-body">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">' +
+                  '<div><strong>' + escapeHtml(item.author_name) + '</strong> <span class="badge badge-brand">' + escapeHtml(item.author_role) + '</span></div>' +
+                  '<span class="muted mono" style="font-size:11px;">' + escapeHtml(formatShortTs(item.created_at)) + '</span>' +
+                '</div>' +
+                '<p style="margin:0;font-size:13px;">' + escapeHtml(item.text) + '</p>' +
+              '</div>';
+          }
+          combinedList.appendChild(el);
+        });
+      }
+    }
+
+    const notesList = drawer.querySelector('#detail-notes-list');
+    if (notesList) {
+      notesList.innerHTML = '';
+      if (notes.length === 0) {
+        notesList.innerHTML = '<p class="muted">No execution notes added yet.</p>';
+      } else {
+        notes.forEach((n) => {
+          const div = document.createElement('div');
+          div.className = 'collab-note-item';
+          div.style.marginBottom = '8px';
+          div.innerHTML =
+            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+              '<strong>' + escapeHtml(n.author_name) + '</strong>' +
+              '<span class="badge badge-warn">SLA Note</span>' +
+            '</div>' +
+            '<p style="margin-top:6px;">' + escapeHtml(n.content) + '</p>';
+          notesList.appendChild(div);
+        });
+      }
+    }
+
+    const commentsList = drawer.querySelector('#detail-comments-list');
+    if (commentsList) {
+      commentsList.innerHTML = '';
+      if (comments.length === 0) {
+        commentsList.innerHTML = '<p class="muted">No discussion comments yet.</p>';
+      } else {
+        comments.forEach((c) => {
+          const div = document.createElement('div');
+          div.className = 'collab-comment-item';
+          div.style.marginBottom = '8px';
+          div.innerHTML =
+            renderSmallAvatarHtml(c.avatar_url, c.author_name) +
+            '<div class="collab-entry-body">' +
+              '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+                '<strong>' + escapeHtml(c.author_name) + '</strong>' +
+                '<span class="badge badge-neutral">' + escapeHtml(c.author_role) + '</span>' +
+              '</div>' +
+              '<p style="margin-top:6px;">' + escapeHtml(c.message) + '</p>' +
+            '</div>';
+          commentsList.appendChild(div);
+        });
+      }
+    }
+
+    syncTaskCardIndicators(taskId, allData);
+  }
+
+  async function refreshTaskActivityLive(taskId) {
+    if (!taskId) return;
+    try {
+      const res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskId) + '/activity', {
+        headers: { 'Accept': 'application/json', 'X-CSRF-Token': CSRF_TOKEN }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data || !data.success || activeCollabTaskId !== taskId) return;
+
+      const allData = getTaskDataset() || {};
+      allData.notes = allData.notes || {};
+      allData.comments = allData.comments || {};
+      allData.comment_authors = allData.comment_authors || {};
+
+      const prevN = (allData.notes[taskId] || []).length;
+      const prevC = (allData.comments[taskId] || []).length;
+      allData.notes[taskId] = Array.isArray(data.notes) ? data.notes : [];
+      allData.comments[taskId] = Array.isArray(data.comments) ? data.comments : [];
+      allData.comment_authors[taskId] = Array.isArray(data.comment_authors) ? data.comment_authors : [];
+
+      saveTaskDataset(allData);
+      if (allData.notes[taskId].length !== prevN || allData.comments[taskId].length !== prevC) {
+        renderTaskCollabLists(taskId, allData);
+      }
+    } catch (_err) {
+    }
+  }
+
+  function appendCollabItemLocal(taskId, kind, item) {
+    const allData = getTaskDataset() || {};
+    allData.notes = allData.notes || {};
+    allData.comments = allData.comments || {};
+    allData.comment_authors = allData.comment_authors || {};
+
+    if (kind === 'note') {
+      allData.notes[taskId] = allData.notes[taskId] || [];
+      allData.notes[taskId].push(item);
+    } else {
+      allData.comments[taskId] = allData.comments[taskId] || [];
+      allData.comments[taskId].push(item);
+
+      allData.comment_authors[taskId] = allData.comment_authors[taskId] || [];
+      const aid = String(item.author_id || '');
+      if (aid && !allData.comment_authors[taskId].some((a) => String(a.id) === aid)) {
+        allData.comment_authors[taskId].push({
+          id: aid,
+          name: item.author_name || 'Staff',
+          avatar_url: item.avatar_url || ''
+        });
+      }
+    }
+
+    saveTaskDataset(allData);
+    renderTaskCollabLists(taskId, allData);
+  }
+
   function openTaskCollabDrawer(taskId, initialTab) {
     const allData = getTaskDataset();
     const task = allData && allData.tasks ? allData.tasks[taskId] : null;
@@ -651,45 +900,24 @@
     if (tEl) tEl.textContent = task.title || 'Deliverable Conversation';
     if (mEl) mEl.textContent = (task.client_name || '') + ' · ' + (task.va_name || '') + ' · Due ' + (task.deadline || '');
 
-    const notesList = drawer.querySelector('#detail-notes-list');
-    if (notesList) {
-      notesList.innerHTML = '';
-      const notes = (allData.notes || {})[taskId] || [];
-      if (notes.length === 0) {
-        notesList.innerHTML = '<p class="muted">No execution notes added yet.</p>';
-      } else {
-        notes.forEach((n) => {
-          const div = document.createElement('div');
-          div.className = 'va-note-card';
-          div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;"><strong>' +
-            escapeHtml(n.author_name) + '</strong><span class="badge badge-brand">SLA Note</span></div>' +
-            '<p style="margin-top:6px;">' + escapeHtml(n.content) + '</p>';
-          notesList.appendChild(div);
-        });
-      }
-    }
-
-    const commentsList = drawer.querySelector('#detail-comments-list');
-    if (commentsList) {
-      commentsList.innerHTML = '';
-      const comments = (allData.comments || {})[taskId] || [];
-      if (comments.length === 0) {
-        commentsList.innerHTML = '<p class="muted">No discussion comments yet.</p>';
-      } else {
-        comments.forEach((c) => {
-          const div = document.createElement('div');
-          div.className = 'comment-card';
-          div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;"><strong>' +
-            escapeHtml(c.author_name) + '</strong><span class="badge badge-neutral">' + escapeHtml(c.author_role) + '</span></div>' +
-            '<p style="margin-top:6px;">' + escapeHtml(c.message) + '</p>';
-          commentsList.appendChild(div);
-        });
-      }
-    }
+    renderTaskCollabLists(taskId, allData);
 
     drawer.querySelectorAll('input[name="task_id"]').forEach((inp) => { inp.value = taskId; });
     openDrawer('drawer-task-collab');
-    activateTab('task-collab', initialTab === 'comments' ? 'comments' : 'notes');
+
+    activeCollabTaskId = taskId;
+    const tabKey = (initialTab === 'comments' || initialTab === 'notes') ? initialTab : 'combined';
+    activateTab('task-collab', tabKey);
+
+    refreshTaskActivityLive(taskId);
+    if (collabPollTimer) window.clearInterval(collabPollTimer);
+    collabPollTimer = window.setInterval(() => {
+      if (!activeCollabTaskId || drawer.classList.contains('is-hidden')) {
+        stopCollabPolling();
+        return;
+      }
+      refreshTaskActivityLive(activeCollabTaskId);
+    }, 4000);
   }
 
   function openTaskOvertimeModal(taskId) {
@@ -985,11 +1213,11 @@
       if (cm && !cm.contains(e.target)) hideContextMenu();
     });
 
-    // Deep link from Notification Bell (e.g. /tasks?open_task=task-1&tab=comments)
+    // Deep link from Notification Bell (e.g. /tasks?open_task=task-1&tab=combined)
     const params = new URLSearchParams(window.location.search);
     const openTaskId = params.get('open_task');
     if (openTaskId) {
-      const requestedTab = params.get('tab') || 'comments';
+      const requestedTab = params.get('tab') || 'combined';
       window.setTimeout(() => {
         openTaskCollabDrawer(openTaskId, requestedTab);
         params.delete('open_task');
@@ -998,6 +1226,57 @@
         const cleanUrl = window.location.pathname + (nextQs ? '?' + nextQs : '');
         window.history.replaceState({}, '', cleanUrl);
       }, 240);
+    }
+
+    // Combined Timeline No-Reload Submission (Note or Comment toggle)
+    const combinedForm = document.getElementById('form-task-combined');
+    if (combinedForm) {
+      const pills = combinedForm.querySelectorAll('.choice-pill');
+      combinedForm.querySelectorAll('input[name="entry_kind"]').forEach((radio) => {
+        radio.addEventListener('change', () => {
+          pills.forEach((p) => {
+            const r = p.querySelector('input[type="radio"]');
+            p.classList.toggle('is-checked', Boolean(r && r.checked));
+          });
+        });
+      });
+
+      combinedForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const tid = (combinedForm.querySelector('input[name="task_id"]') || {}).value || '';
+        const bodyInp = combinedForm.querySelector('textarea[name="body"]');
+        const kindInp = combinedForm.querySelector('input[name="entry_kind"]:checked');
+        const kind = kindInp ? kindInp.value : 'comment';
+        const text = bodyInp ? bodyInp.value.trim() : '';
+        if (!tid || !text) return;
+
+        const submitBtn = combinedForm.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
+
+        try {
+          if (kind === 'note') {
+            const res = await apiFetch('/api/v1/tasks/' + encodeURIComponent(tid) + '/notes', {
+              method: 'POST',
+              body: JSON.stringify({ content: text })
+            });
+            if (res && res.item) appendCollabItemLocal(tid, 'note', res.item);
+            showToast('VA Note added', 'success');
+          } else {
+            const res = await apiFetch('/api/v1/tasks/' + encodeURIComponent(tid) + '/comments', {
+              method: 'POST',
+              body: JSON.stringify({ message: text })
+            });
+            if (res && res.item) appendCollabItemLocal(tid, 'comment', res.item);
+            showToast('Comment posted', 'success');
+          }
+          if (bodyInp) bodyInp.value = '';
+          refreshTaskActivityLive(tid);
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          if (submitBtn) submitBtn.disabled = false;
+        }
+      });
     }
   }
 
@@ -1113,7 +1392,7 @@
       if (vaInput && vaInput.value) params.set('va_id', vaInput.value);
       if (clInput && clInput.value) params.set('client_id', clInput.value);
 
-      box.textContent = 'Scanning PostgreSQL schedule & client hours for ' + dateStr + '...';
+      box.textContent = 'Scanning live schedule & client hours for ' + dateStr + '...';
 
       try {
         const res = await apiFetch('/api/v1/meetings/availability?' + params.toString(), { method: 'GET' });
@@ -1435,43 +1714,265 @@
       });
     });
 
-    const bulkForm = document.getElementById('form-bulk-clients');
-    if (bulkForm) {
-      bulkForm.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const raw = (bulkForm.querySelector('[name="csv_data"]') || {}).value || '';
-        const defaultVa = (bulkForm.querySelector('[name="default_va_id"]') || {}).value || '';
-        const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-        if (lines.length === 0) {
-          showToast('Paste at least one CSV client line', 'error');
+    // CRM Left Sidebar Navigation (Directory / Associated VAs / Communication Logs)
+    document.querySelectorAll('[data-crm-tab]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const target = btn.getAttribute('data-crm-tab');
+        document.querySelectorAll('[data-crm-tab]').forEach((b) => b.classList.toggle('active', b === btn));
+        document.querySelectorAll('[data-crm-panel]').forEach((panel) => {
+          panel.classList.toggle('is-hidden', panel.getAttribute('data-crm-panel') !== target);
+        });
+      });
+    });
+
+    // Communication Logs Filter
+    const commSearch = document.getElementById('crm-comm-search');
+    const commClientSel = document.getElementById('crm-comm-client-filter');
+    if (commSearch || commClientSel) {
+      const filterComms = () => {
+        const q = commSearch ? commSearch.value.trim().toLowerCase() : '';
+        const cid = commClientSel ? commClientSel.value : '';
+        document.querySelectorAll('.crm-comm-row').forEach((row) => {
+          const hay = (row.getAttribute('data-comm-search') || '').toLowerCase();
+          const rc = row.getAttribute('data-comm-client') || '';
+          const matchQ = (q === '' || hay.includes(q));
+          const matchC = (cid === '' || rc === cid);
+          row.style.display = (matchQ && matchC) ? '' : 'none';
+        });
+      };
+      if (commSearch) commSearch.addEventListener('input', filterComms);
+      if (commClientSel) commClientSel.addEventListener('change', filterComms);
+    }
+
+    // 3-Step Queued Bulk CSV Import Wizard (Analyze -> Verify Mapping -> Batched Queue Worker)
+    const step1 = document.getElementById('bulk-step-1');
+    const step2 = document.getElementById('bulk-step-2');
+    const step3 = document.getElementById('bulk-step-3');
+    const analyzeBtn = document.getElementById('btn-bulk-analyze');
+    const backBtn = document.getElementById('btn-bulk-back-1');
+    const enqueueBtn = document.getElementById('btn-bulk-enqueue');
+    const doneBtn = document.getElementById('btn-bulk-done');
+
+    let analyzedBulkState = null;
+
+    function setWizardStep(stepNum) {
+      if (step1) step1.classList.toggle('is-hidden', stepNum !== 1);
+      if (step2) step2.classList.toggle('is-hidden', stepNum !== 2);
+      if (step3) step3.classList.toggle('is-hidden', stepNum !== 3);
+      document.querySelectorAll('[data-wizard-indicator]').forEach((ind) => {
+        const n = parseInt(ind.getAttribute('data-wizard-indicator') || '1', 10);
+        ind.classList.toggle('active', n === stepNum);
+        ind.classList.toggle('is-done', n < stepNum);
+      });
+    }
+
+    const crmFieldOptions = [
+      { value: '', label: '— Ignore Column —' },
+      { value: 'agency_name', label: 'Agency / Company Name (Required)' },
+      { value: 'name', label: 'Executive Contact Name (Required)' },
+      { value: 'email', label: 'Primary Email (Required)' },
+      { value: 'phone', label: 'Phone Number' },
+      { value: 'contracted_hours_per_month', label: 'Monthly Contracted Hours' },
+      { value: 'country', label: 'Country' },
+      { value: 'state', label: 'State / Region' },
+      { value: 'website', label: 'Website URL' },
+      { value: 'contract_status', label: 'Contract Status (active/pending)' },
+      { value: 'internal_notes', label: 'Internal Notes' }
+    ];
+
+    if (analyzeBtn && step1 && step2) {
+      analyzeBtn.addEventListener('click', async () => {
+        const fileInp = document.getElementById('bulk-csv-file');
+        const textInp = document.getElementById('bulk-csv-text');
+        const hasFile = fileInp && fileInp.files && fileInp.files[0];
+        const rawText = textInp ? textInp.value.trim() : '';
+
+        if (!hasFile && !rawText) {
+          showToast('Upload a CSV file or paste CSV rows first', 'error');
           return;
         }
-        const clients = [];
-        lines.forEach((line, idx) => {
-          const cols = line.split(',').map((c) => c.trim());
-          if (idx === 0 && cols[0].toLowerCase().includes('agency')) return;
-          if (!cols[0] || !cols[1] || !cols[2]) return;
-          clients.push({
-            agency_name: cols[0],
-            name: cols[1],
-            email: cols[2],
-            phone: cols[3] || '',
-            contracted_hours_per_month: parseFloat(cols[4] || '40') || 40,
-            focus_va_id: cols[5] || defaultVa
-          });
-        });
 
+        const fd = new FormData();
+        if (hasFile) {
+          fd.append('csv_file', fileInp.files[0]);
+        } else {
+          fd.append('csv_data', rawText);
+        }
+
+        analyzeBtn.disabled = true;
         try {
-          const res = await apiFetch('/api/v1/clients/bulk', {
+          const res = await apiFetch('/api/v1/clients/bulk/analyze', {
             method: 'POST',
-            body: JSON.stringify({ clients })
+            body: fd
           });
-          showToast('Imported ' + (res.imported || 0) + ' clients', 'success');
-          window.setTimeout(() => window.location.reload(), 420);
+          analyzedBulkState = res;
+
+          const sumEl = document.getElementById('bulk-analyze-summary');
+          if (sumEl) {
+            sumEl.textContent = 'Detected ' + (res.total_rows || 0) + ' row(s) and ' +
+              (res.headers || []).length + ' column(s) in "' + (res.filename || 'upload.csv') +
+              '" (delimiter: ' + (res.delimiter || ',') + '). Verify mapped CRM fields below.';
+          }
+
+          const mapGrid = document.getElementById('bulk-mapping-grid');
+          if (mapGrid) {
+            mapGrid.innerHTML = '';
+            (res.headers || []).forEach((hdr, idx) => {
+              const rowDiv = document.createElement('div');
+              rowDiv.className = 'csv-map-row';
+
+              const lblDiv = document.createElement('div');
+              const sampleVal = (res.rows && res.rows[0] && res.rows[0][idx]) ? res.rows[0][idx] : '—';
+              lblDiv.innerHTML = '<strong style="font-size:12.5px;">' + escapeHtml(hdr) +
+                '</strong><div class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Sample: ' +
+                escapeHtml(sampleVal) + '</div>';
+
+              const sel = document.createElement('select');
+              sel.className = 'select';
+              sel.setAttribute('data-csv-col-idx', String(idx));
+              const suggested = (res.suggested_mapping || {})[String(idx)] || '';
+              crmFieldOptions.forEach((optDef) => {
+                const opt = document.createElement('option');
+                opt.value = optDef.value;
+                opt.textContent = optDef.label;
+                if (optDef.value === suggested) opt.selected = true;
+                sel.appendChild(opt);
+              });
+
+              rowDiv.appendChild(lblDiv);
+              rowDiv.appendChild(sel);
+              mapGrid.appendChild(rowDiv);
+            });
+          }
+
+          const prevTbl = document.getElementById('bulk-preview-table');
+          if (prevTbl) {
+            prevTbl.innerHTML = '';
+            const thead = document.createElement('thead');
+            const htr = document.createElement('tr');
+            (res.headers || []).forEach((hdr) => {
+              const th = document.createElement('th');
+              th.textContent = hdr;
+              htr.appendChild(th);
+            });
+            thead.appendChild(htr);
+            prevTbl.appendChild(thead);
+
+            const tbody = document.createElement('tbody');
+            (res.rows || []).slice(0, 5).forEach((r) => {
+              const tr = document.createElement('tr');
+              (res.headers || []).forEach((_h, idx) => {
+                const td = document.createElement('td');
+                td.textContent = (r[idx] != null && r[idx] !== '') ? r[idx] : '—';
+                tr.appendChild(td);
+              });
+              tbody.appendChild(tr);
+            });
+            prevTbl.appendChild(tbody);
+          }
+
+          setWizardStep(2);
         } catch (err) {
           showToast(err.message, 'error');
+        } finally {
+          analyzeBtn.disabled = false;
         }
       });
+    }
+
+    if (backBtn) {
+      backBtn.addEventListener('click', () => setWizardStep(1));
+    }
+
+    if (enqueueBtn && step3) {
+      enqueueBtn.addEventListener('click', async () => {
+        if (!analyzedBulkState || !Array.isArray(analyzedBulkState.rows)) return;
+        const mapGrid = document.getElementById('bulk-mapping-grid');
+        const defaultVaSel = document.getElementById('bulk-default-va');
+        const mapping = {};
+        if (mapGrid) {
+          mapGrid.querySelectorAll('[data-csv-col-idx]').forEach((sel) => {
+            const idx = sel.getAttribute('data-csv-col-idx');
+            if (sel.value) mapping[idx] = sel.value;
+          });
+        }
+        const mappedValues = Object.values(mapping);
+        const missing = ['agency_name', 'name', 'email'].filter((req) => !mappedValues.includes(req));
+        if (missing.length > 0) {
+          showToast('Please map required columns: ' + missing.join(', '), 'error');
+          return;
+        }
+
+        enqueueBtn.disabled = true;
+        try {
+          const jobRes = await apiFetch('/api/v1/clients/bulk/jobs', {
+            method: 'POST',
+            body: JSON.stringify({
+              filename: analyzedBulkState.filename || 'clients_import.csv',
+              mapping,
+              rows: analyzedBulkState.rows,
+              default_va_id: defaultVaSel ? defaultVaSel.value : ''
+            })
+          });
+
+          setWizardStep(3);
+          const jobId = jobRes.job_id;
+          const totalRows = jobRes.total_rows || analyzedBulkState.rows.length;
+          const fillEl = document.getElementById('bulk-progress-fill');
+          const pctEl = document.getElementById('bulk-worker-pct');
+          const statusEl = document.getElementById('bulk-worker-status');
+          const procEl = document.getElementById('bulk-stat-processed');
+          const succEl = document.getElementById('bulk-stat-succeeded');
+          const failEl = document.getElementById('bulk-stat-failed');
+          const errList = document.getElementById('bulk-errors-list');
+
+          let finished = false;
+          while (!finished) {
+            const bRes = await apiFetch('/api/v1/clients/bulk/jobs/' + encodeURIComponent(jobId) + '/process', {
+              method: 'POST'
+            });
+            const processed = Number(bRes.processed_rows || 0);
+            const total = Math.max(1, Number(bRes.total_rows || totalRows));
+            const pct = Math.min(100, Math.round((processed / total) * 100));
+
+            if (fillEl) fillEl.style.width = pct + '%';
+            if (pctEl) pctEl.textContent = pct + '%';
+            if (procEl) procEl.textContent = processed + ' / ' + total;
+            if (succEl) succEl.textContent = String(bRes.succeeded_rows || 0);
+            if (failEl) failEl.textContent = String(bRes.failed_rows || 0);
+
+            if (errList && Array.isArray(bRes.errors) && bRes.errors.length > 0) {
+              errList.innerHTML = '';
+              bRes.errors.forEach((er) => {
+                const d = document.createElement('div');
+                d.className = 'notice notice-warn';
+                d.style.marginBottom = '6px';
+                d.style.padding = '7px 10px';
+                d.style.fontSize = '12px';
+                d.textContent = er;
+                errList.appendChild(d);
+              });
+            }
+
+            if (bRes.status === 'completed' || Number(bRes.remaining_rows || 0) === 0) {
+              finished = true;
+              if (statusEl) statusEl.textContent = 'Worker queue finished!';
+              if (doneBtn) doneBtn.classList.remove('is-hidden');
+              showToast('Imported ' + (bRes.succeeded_rows || 0) + ' client account(s)', 'success');
+            } else {
+              await new Promise((r) => window.setTimeout(r, 120));
+            }
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          enqueueBtn.disabled = false;
+        }
+      });
+    }
+
+    if (doneBtn) {
+      doneBtn.addEventListener('click', () => window.location.reload());
     }
   }
 
@@ -1693,9 +2194,33 @@
   }
 
   // ------------------------------------------------------------------------
-  // VA Directory Admin Edit VA Drawer
+  // VA Directory Search, Specialty Category Filter & Admin Edit VA Drawer
   // ------------------------------------------------------------------------
   function initVaDirectory() {
+    const dirSearch = document.getElementById('va-dir-search');
+    const dirSpec = document.getElementById('va-dir-spec-filter');
+    const dirCount = document.getElementById('va-dir-count');
+
+    if (dirSearch || dirSpec) {
+      const filterVas = () => {
+        const q = dirSearch ? dirSearch.value.trim().toLowerCase() : '';
+        const spec = dirSpec ? dirSpec.value.trim().toLowerCase() : '';
+        let visible = 0;
+        document.querySelectorAll('.va-dir-row[data-va-search]').forEach((row) => {
+          const hay = (row.getAttribute('data-va-search') || '').toLowerCase();
+          const specsList = (row.getAttribute('data-va-specs') || '').toLowerCase().split('||').filter(Boolean);
+          const matchQ = (q === '' || hay.includes(q));
+          const matchS = (spec === '' || specsList.includes(spec));
+          const show = matchQ && matchS;
+          row.style.display = show ? '' : 'none';
+          if (show) visible++;
+        });
+        if (dirCount) dirCount.textContent = String(visible);
+      };
+      if (dirSearch) dirSearch.addEventListener('input', filterVas);
+      if (dirSpec) dirSpec.addEventListener('change', filterVas);
+    }
+
     const store = document.getElementById('va-dir-json');
     if (!store) return;
 
@@ -1889,19 +2414,63 @@
         }, 60);
       });
     });
+
+    // Knowledge Base Height Clamp (400px Desktop / 300px Mobile) + "View More" Toggle
+    function measureKbClips() {
+      document.querySelectorAll('.kb-doc-card').forEach((card) => {
+        const clip = card.querySelector('.kb-rich-clip');
+        const btn = card.querySelector('[data-kb-expand]');
+        if (!clip || !btn) return;
+        if (clip.classList.contains('is-expanded')) {
+          btn.classList.remove('is-hidden');
+          return;
+        }
+        const hasOverflow = clip.scrollHeight > clip.clientHeight + 8;
+        clip.classList.toggle('has-overflow', hasOverflow);
+        btn.classList.toggle('is-hidden', !hasOverflow);
+      });
+    }
+
+    document.querySelectorAll('[data-kb-expand]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const card = btn.closest('.kb-doc-card');
+        const clip = card ? card.querySelector('.kb-rich-clip') : null;
+        if (!clip) return;
+        const expanded = clip.classList.toggle('is-expanded');
+        btn.textContent = expanded ? 'Show Less' : 'View More';
+      });
+    });
+
+    window.setTimeout(measureKbClips, 260);
+    window.addEventListener('resize', measureKbClips);
   }
 
   // ------------------------------------------------------------------------
-  // Perks & Badges Controls (Select All VAs + Minimalist Icon Picker)
+  // Perks & Badges Controls (Vibrant VA Recipient Pills + Icon Picker)
   // ------------------------------------------------------------------------
   function initPerksControls() {
+    document.querySelectorAll('.va-recipient-pill').forEach((pill) => {
+      const cb = pill.querySelector('input[type="checkbox"]');
+      if (!cb) return;
+      pill.classList.toggle('is-checked', cb.checked);
+      cb.addEventListener('change', () => {
+        pill.classList.toggle('is-checked', cb.checked);
+      });
+    });
+
     document.querySelectorAll('[data-select-all-vas]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const form = btn.closest('form');
         if (!form) return;
         const boxes = Array.from(form.querySelectorAll('input[type="checkbox"][name="user_ids[]"]'));
-        const allChecked = boxes.length > 0 && boxes.every((cb) => cb.checked);
-        boxes.forEach((cb) => { cb.checked = !allChecked; });
+        const nextChecked = !(boxes.length > 0 && boxes.every((cb) => cb.checked));
+        boxes.forEach((cb) => {
+          cb.checked = nextChecked;
+          const pill = cb.closest('.va-recipient-pill');
+          if (pill) pill.classList.toggle('is-checked', nextChecked);
+        });
+        const span = btn.querySelector('span');
+        if (span) span.textContent = nextChecked ? 'Clear All' : 'Select All VAs';
       });
     });
 
@@ -1920,7 +2489,7 @@
   }
 
   // ------------------------------------------------------------------------
-  // HRM Custom Rejection Reason Drawer
+  // HRM & Admin PTO Controls (Rejection Drawer, VA Search, Edit Free Days)
   // ------------------------------------------------------------------------
   function initHrmPtoRejection() {
     document.querySelectorAll('[data-pto-reject]').forEach((btn) => {
@@ -1938,10 +2507,44 @@
         openDrawer('drawer-pto-reject');
       });
     });
+
+    const ptoSearch = document.getElementById('pto-va-search');
+    if (ptoSearch) {
+      ptoSearch.addEventListener('input', () => {
+        const q = ptoSearch.value.trim().toLowerCase();
+        document.querySelectorAll('.pto-va-row, .pto-req-row').forEach((row) => {
+          const hay = (row.getAttribute('data-va-name') || '').toLowerCase();
+          row.style.display = (q === '' || hay.includes(q)) ? '' : 'none';
+        });
+      });
+    }
+
+    document.querySelectorAll('[data-edit-pto-va]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const vaId = btn.getAttribute('data-edit-pto-va');
+        const vaName = btn.getAttribute('data-va-label') || 'Virtual Assistant';
+        const bal = btn.getAttribute('data-va-balance') || '15';
+        const taken = btn.getAttribute('data-va-taken') || '0';
+        const drawer = document.getElementById('drawer-edit-pto-balance');
+        if (!drawer || !vaId) return;
+
+        const targetLbl = drawer.querySelector('#pto-balance-target');
+        if (targetLbl) targetLbl.textContent = vaName;
+        const form = drawer.querySelector('#form-edit-pto-balance');
+        if (form) {
+          form.setAttribute('data-api-form', '/api/v1/pto/balances/' + encodeURIComponent(vaId));
+          const bInp = form.querySelector('[name="pto_balance_days"]');
+          const tInp = form.querySelector('[name="pto_taken_days"]');
+          if (bInp) bInp.value = bal;
+          if (tInp) tInp.value = taken;
+        }
+        openDrawer('drawer-edit-pto-balance');
+      });
+    });
   }
 
   // ------------------------------------------------------------------------
-  // Client-Side CSV Export of Rendered PostgreSQL Tables
+  // Client-Side CSV Export of Rendered Tables
   // ------------------------------------------------------------------------
   function initCsvExports() {
     document.querySelectorAll('[data-export-csv]').forEach((btn) => {
@@ -2069,9 +2672,11 @@
             }
 
             let targetUrl = endpoint;
+            let resolvedTid = '';
             if (targetUrl.includes('{task_id}')) {
               const tidInput = form.querySelector('input[name="task_id"]');
-              targetUrl = targetUrl.replace('{task_id}', encodeURIComponent(tidInput ? tidInput.value : ''));
+              resolvedTid = tidInput ? tidInput.value : '';
+              targetUrl = targetUrl.replace('{task_id}', encodeURIComponent(resolvedTid));
             }
 
             const res = await apiFetch(targetUrl, {
@@ -2092,9 +2697,23 @@
                 });
               }
             }
+
+            // Real-time no-reload update for task notes and comments forms
+            if (form.hasAttribute('data-no-reload') && resolvedTid) {
+              const ta = form.querySelector('textarea');
+              if (ta) ta.value = '';
+              if (res && res.item) {
+                const kind = targetUrl.includes('/notes') ? 'note' : 'comment';
+                appendCollabItemLocal(resolvedTid, kind, res.item);
+              }
+              refreshTaskActivityLive(resolvedTid);
+              showToast('Posted live update', 'success');
+              if (submitBtn) submitBtn.disabled = false;
+              return;
+            }
           }
 
-          showToast('Saved to PostgreSQL database', 'success');
+          showToast('Saved successfully', 'success');
           window.setTimeout(() => window.location.reload(), 380);
         } catch (err) {
           showToast(err.message, 'error');
@@ -2146,7 +2765,7 @@
       try {
         btn.disabled = true;
         await apiFetch(url, { method, body: bodyRaw || undefined });
-        showToast('Updated in PostgreSQL', 'success');
+        showToast('Updated successfully', 'success');
         window.setTimeout(() => window.location.reload(), 340);
       } catch (err) {
         showToast(err.message, 'error');
@@ -2189,7 +2808,7 @@
     if (!startBtn) return;
 
     const steps = [
-      { sel: '#workly-sidebar', title: 'Role-Scoped Workspace', text: 'Navigate modules tailored to your role with live PostgreSQL review & PTO alerts.' },
+      { sel: '#workly-sidebar', title: 'Role-Scoped Workspace', text: 'Navigate modules tailored to your role with live review & PTO alerts.' },
       { sel: '#workly-view-content', title: 'Clean Operations Hub', text: 'Organize Kanban tasks by Client Swimlanes, scan client-synced open slots, press Ctrl+K for Quick Jump, and use right-side drawers.' },
       { sel: '#btn-profile-menu', title: 'Header Notifications & Profile', text: 'Use the header bell for incoming alerts and click your profile pill to open My Profile or Sign Out.' }
     ];

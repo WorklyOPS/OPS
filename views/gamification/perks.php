@@ -9,7 +9,7 @@ $availableIcons = $data['available_icons'] ?? ['Award', 'Medal', 'Trophy', 'Star
 <div class="page-header">
   <div>
     <h1>Perks, Benefits &amp; Recognition Badges</h1>
-    <p class="muted">Tiered minimalist medal badges, benefit programs, and multi-select VA recognition managed by Admins &amp; Team Leaders.</p>
+    <p class="muted">Tiered minimalist medal badges, benefit programs, and visual VA recognition managed by Admins &amp; Team Leaders.</p>
   </div>
   <?php if ($canManagePerks): ?>
     <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -19,15 +19,19 @@ $availableIcons = $data['available_icons'] ?? ['Award', 'Medal', 'Trophy', 'Star
   <?php endif; ?>
 </div>
 
-<div class="grid-2">
+<div class="grid-2" style="margin-bottom:22px;">
+  <!-- Catalog Card 1: Benefit & Perk Programs -->
   <div class="card">
-    <h3 style="margin-bottom:12px;">Benefit &amp; Perk Programs</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <h3>Benefit &amp; Perk Programs</h3>
+      <span class="badge badge-success tabular-nums"><?= count($data['perks'] ?? []) ?> active</span>
+    </div>
     <?php if (empty($data['perks'])): ?>
       <p class="muted">No perks configured yet.</p>
     <?php else: ?>
-      <div style="display:grid;gap:12px;">
+      <div style="display:grid;gap:14px;">
         <?php foreach ($data['perks'] as $pk): ?>
-          <div class="message-bubble" style="margin-bottom:0;">
+          <div class="perk-catalog-card">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
               <div style="display:flex;align-items:center;gap:10px;">
                 <span class="tier-icon-wrap tier-gold">
@@ -44,15 +48,23 @@ $availableIcons = $data['available_icons'] ?? ['Award', 'Medal', 'Trophy', 'Star
 
             <?php if ($canManagePerks && !empty($vas)): ?>
               <form data-api-form="/api/v1/perks/<?= SecurityHelper::e($pk['id']) ?>/grant" data-api-method="POST">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                  <span class="form-label">Select VA Recipients (Multi-Choice)</span>
-                  <button type="button" class="icon-chip-btn" data-select-all-vas>Toggle All VAs</button>
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                  <span class="form-label" style="margin-bottom:0;">Select VA Recipients</span>
+                  <button type="button" class="btn-select-all-vas" data-select-all-vas>
+                    <?= workly_icon_svg('Check', 13) ?>
+                    <span>Select All VAs</span>
+                  </button>
                 </div>
-                <div class="choice-grid" style="max-height:130px;overflow-y:auto;margin-bottom:10px;">
+                <div class="va-recipient-grid" style="margin-bottom:12px;">
                   <?php foreach ($vas as $v): ?>
-                    <label class="choice-pill">
+                    <label class="va-recipient-pill">
                       <input type="checkbox" name="user_ids[]" value="<?= SecurityHelper::e($v['id']) ?>">
-                      <span><?= SecurityHelper::e($v['name']) ?></span>
+                      <?php if (!empty($v['avatar_url'])): ?>
+                        <img src="<?= SecurityHelper::e($v['avatar_url']) ?>" alt="<?= SecurityHelper::e($v['name']) ?>" class="avatar-xs">
+                      <?php else: ?>
+                        <span class="avatar-xs"><?= SecurityHelper::e(strtoupper(substr((string) $v['name'], 0, 2))) ?></span>
+                      <?php endif; ?>
+                      <span class="va-rec-name"><?= SecurityHelper::e($v['name']) ?></span>
                     </label>
                   <?php endforeach; ?>
                 </div>
@@ -63,42 +75,21 @@ $availableIcons = $data['available_icons'] ?? ['Award', 'Medal', 'Trophy', 'Star
         <?php endforeach; ?>
       </div>
     <?php endif; ?>
-
-    <?php if (!empty($data['grants'])): ?>
-      <h4 style="margin:18px 0 8px;">Active Staff Grants</h4>
-      <div class="table-wrap">
-        <table class="table">
-          <thead><tr><th>VA</th><th>Perk ID</th><th>Action</th></tr></thead>
-          <tbody>
-            <?php foreach ($data['grants'] as $g): ?>
-              <tr>
-                <td><?= SecurityHelper::e($g['va_name']) ?></td>
-                <td class="mono" style="font-size:11.5px;"><?= SecurityHelper::e($g['perk_id']) ?></td>
-                <td>
-                  <?php if ($canManagePerks): ?>
-                    <button type="button"
-                            class="btn btn-danger btn-sm"
-                            data-action-url="/api/v1/perks/<?= SecurityHelper::e($g['perk_id']) ?>/grant?user_id=<?= urlencode((string) $g['user_id']) ?>"
-                            data-action-method="DELETE">Revoke</button>
-                  <?php endif; ?>
-                </td>
-              </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
-      </div>
-    <?php endif; ?>
   </div>
 
+  <!-- Catalog Card 2: Achievement Badges -->
   <div class="card">
-    <h3 style="margin-bottom:12px;">Achievement Badges</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+      <h3>Achievement Badges</h3>
+      <span class="badge badge-brand tabular-nums"><?= count($data['badges'] ?? []) ?> medal(s)</span>
+    </div>
     <?php if (empty($data['badges'])): ?>
       <p class="muted">No recognition badges created yet.</p>
     <?php else: ?>
-      <div style="display:grid;gap:12px;">
+      <div style="display:grid;gap:14px;">
         <?php foreach ($data['badges'] as $bdg): ?>
           <?php $tierSlug = strtolower(preg_replace('/[^a-z]/', '', (string) ($bdg['tier'] ?? 'silver')) ?: 'silver'); ?>
-          <div class="message-bubble" style="margin-bottom:0;">
+          <div class="perk-catalog-card">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
               <div style="display:flex;align-items:center;gap:10px;">
                 <span class="tier-icon-wrap tier-<?= SecurityHelper::e($tierSlug) ?>">
@@ -115,15 +106,23 @@ $availableIcons = $data['available_icons'] ?? ['Award', 'Medal', 'Trophy', 'Star
 
             <?php if ($canManagePerks && !empty($vas)): ?>
               <form data-api-form="/api/v1/perks/badges/<?= SecurityHelper::e($bdg['id']) ?>/award" data-api-method="POST">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
-                  <span class="form-label">Select VA Recipients (Multi-Choice)</span>
-                  <button type="button" class="icon-chip-btn" data-select-all-vas>Toggle All VAs</button>
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                  <span class="form-label" style="margin-bottom:0;">Select VA Recipients</span>
+                  <button type="button" class="btn-select-all-vas" data-select-all-vas>
+                    <?= workly_icon_svg('Check', 13) ?>
+                    <span>Select All VAs</span>
+                  </button>
                 </div>
-                <div class="choice-grid" style="max-height:130px;overflow-y:auto;margin-bottom:10px;">
+                <div class="va-recipient-grid" style="margin-bottom:12px;">
                   <?php foreach ($vas as $v): ?>
-                    <label class="choice-pill">
+                    <label class="va-recipient-pill">
                       <input type="checkbox" name="user_ids[]" value="<?= SecurityHelper::e($v['id']) ?>">
-                      <span><?= SecurityHelper::e($v['name']) ?></span>
+                      <?php if (!empty($v['avatar_url'])): ?>
+                        <img src="<?= SecurityHelper::e($v['avatar_url']) ?>" alt="<?= SecurityHelper::e($v['name']) ?>" class="avatar-xs">
+                      <?php else: ?>
+                        <span class="avatar-xs"><?= SecurityHelper::e(strtoupper(substr((string) $v['name'], 0, 2))) ?></span>
+                      <?php endif; ?>
+                      <span class="va-rec-name"><?= SecurityHelper::e($v['name']) ?></span>
                     </label>
                   <?php endforeach; ?>
                 </div>
@@ -134,22 +133,90 @@ $availableIcons = $data['available_icons'] ?? ['Award', 'Medal', 'Trophy', 'Star
         <?php endforeach; ?>
       </div>
     <?php endif; ?>
+  </div>
+</div>
 
-    <?php if (!empty($data['awards'])): ?>
-      <h4 style="margin:18px 0 8px;">Recent Badge Awards</h4>
-      <?php foreach ($data['awards'] as $aw): ?>
-        <?php $awTier = strtolower(preg_replace('/[^a-z]/', '', (string) ($aw['tier'] ?? 'silver')) ?: 'silver'); ?>
-        <div style="font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
-          <span>
-            <strong><?= SecurityHelper::e($aw['va_name']) ?></strong> earned
-            <span class="badge tier-<?= SecurityHelper::e($awTier) ?>">
-              <?= workly_icon_svg((string) ($aw['icon_name'] ?? 'Medal'), 12) ?>
-              <?= SecurityHelper::e($aw['badge_title']) ?>
-            </span>
-          </span>
-          <span class="muted mono" style="font-size:11px;"><?= SecurityHelper::e($aw['earned_at']) ?></span>
-        </div>
-      <?php endforeach; ?>
+<!-- Standalone Sections Below Catalog Cards: Active Staff Grants & Recent Badge Awards -->
+<div class="grid-2">
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h3>Active Staff Grants</h3>
+      <span class="badge badge-neutral tabular-nums"><?= count($data['grants'] ?? []) ?> active</span>
+    </div>
+    <?php if (empty($data['grants'])): ?>
+      <p class="muted">No staff benefit grants issued yet.</p>
+    <?php else: ?>
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Virtual Assistant</th>
+              <th>Perk Benefit</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($data['grants'] as $g): ?>
+              <tr>
+                <td>
+                  <div style="display:flex;align-items:center;gap:8px;">
+                    <?php if (!empty($g['va_avatar'])): ?>
+                      <img src="<?= SecurityHelper::e($g['va_avatar']) ?>" alt="<?= SecurityHelper::e($g['va_name']) ?>" class="avatar-xs">
+                    <?php else: ?>
+                      <span class="avatar-xs"><?= SecurityHelper::e(strtoupper(substr((string) $g['va_name'], 0, 2))) ?></span>
+                    <?php endif; ?>
+                    <strong><?= SecurityHelper::e($g['va_name']) ?></strong>
+                  </div>
+                </td>
+                <td><span class="badge badge-success"><?= SecurityHelper::e($g['perk_title'] ?? $g['perk_id']) ?></span></td>
+                <td>
+                  <?php if ($canManagePerks): ?>
+                    <button type="button"
+                            class="btn btn-danger btn-sm"
+                            data-action-url="/api/v1/perks/<?= SecurityHelper::e($g['perk_id']) ?>/grant?user_id=<?= urlencode((string) $g['user_id']) ?>"
+                            data-action-method="DELETE">Revoke</button>
+                  <?php else: ?>
+                    <span class="muted">Active</span>
+                  <?php endif; ?>
+                </td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    <?php endif; ?>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h3>Recent Badge Awards</h3>
+      <span class="badge badge-neutral tabular-nums"><?= count($data['awards'] ?? []) ?> awarded</span>
+    </div>
+    <?php if (empty($data['awards'])): ?>
+      <p class="muted">No recognition badges awarded yet.</p>
+    <?php else: ?>
+      <div style="display:grid;gap:8px;">
+        <?php foreach ($data['awards'] as $aw): ?>
+          <?php $awTier = strtolower(preg_replace('/[^a-z]/', '', (string) ($aw['tier'] ?? 'silver')) ?: 'silver'); ?>
+          <div style="padding:9px 11px;border:1px solid var(--border);border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:9px;">
+              <?php if (!empty($aw['va_avatar'])): ?>
+                <img src="<?= SecurityHelper::e($aw['va_avatar']) ?>" alt="<?= SecurityHelper::e($aw['va_name']) ?>" class="avatar-xs">
+              <?php else: ?>
+                <span class="avatar-xs"><?= SecurityHelper::e(strtoupper(substr((string) $aw['va_name'], 0, 2))) ?></span>
+              <?php endif; ?>
+              <span style="font-size:13px;">
+                <strong><?= SecurityHelper::e($aw['va_name']) ?></strong> earned
+                <span class="badge tier-<?= SecurityHelper::e($awTier) ?>">
+                  <?= workly_icon_svg((string) ($aw['icon_name'] ?? 'Medal'), 12) ?>
+                  <?= SecurityHelper::e($aw['badge_title']) ?>
+                </span>
+              </span>
+            </div>
+            <span class="muted mono" style="font-size:11px;"><?= SecurityHelper::e(substr((string) $aw['earned_at'], 0, 10)) ?></span>
+          </div>
+        <?php endforeach; ?>
+      </div>
     <?php endif; ?>
   </div>
 </div>

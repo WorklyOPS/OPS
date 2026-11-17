@@ -24,6 +24,13 @@ final class UserApiController
         'Accounting',
     ];
 
+    public const DEFAULT_ROLES = [
+        ['slug' => 'va', 'label' => 'Virtual Assistant (VA)', 'description' => 'Operational tasks, assigned clients, calendar & PTO submissions'],
+        ['slug' => 'team_leader', 'label' => 'Team Leader', 'description' => 'Pod supervision, task review, client orchestration & badges'],
+        ['slug' => 'hrm', 'label' => 'HR Manager', 'description' => 'PTO approval workflow, balance governance & compliance audits'],
+        ['slug' => 'admin', 'label' => 'System Admin', 'description' => 'Full governance, staff provisioning & security controls'],
+    ];
+
     public function __construct(private PDO $db) {}
 
     public function handle(string $method, string $uri): void
@@ -31,11 +38,16 @@ final class UserApiController
         $actor = AuthMiddleware::authenticateApi($this->db);
         CsrfMiddleware::validateApi($method);
         self::ensureSpecialtyCategoriesTable($this->db);
+        self::ensureRolesSchema($this->db);
 
         $parts = explode('/', trim($uri, '/'));
         $targetId = $parts[3] ?? ($_GET['id'] ?? null);
         $action = $parts[4] ?? null;
 
+        if ($method === 'GET' && $targetId === 'roles') {
+            echo json_encode(['data' => self::listRoleCategories($this->db)]);
+            return;
+        }
         if ($method === 'GET' && $targetId === 'specialties') {
             echo json_encode(['data' => self::listSpecialtyCategories($this->db)]);
             return;
@@ -104,6 +116,73 @@ final class UserApiController
             }
         } catch (Throwable) {
             // Schema already aligned
+        }
+    }
+
+    public static function ensureRolesSchema(PDO $db): void
+    {
+        try {
+            $db->exec("CREATE SEQUENCE IF NOT EXISTS user_numeric_id_seq START WITH 1 INCREMENT BY 1");
+            $db->exec("
+                CREATE TABLE IF NOT EXISTS roles (
+                    slug VARCHAR(32) PRIMARY KEY,
+                    label VARCHAR(64) NOT NULL,
+                    description VARCHAR(255) NOT NULL DEFAULT '',
+                    is_default BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            ");
+            $ins = $db->prepare("
+                INSERT INTO roles (slug, label, description, is_default)
+                VALUES (:slug, :label, :desc, TRUE)
+                ON CONFLICT (slug) DO NOTHING
+            ");
+            foreach (self::DEFAULT_ROLES as $r) {
+                $ins->execute([':slug' => $r['slug'], ':label' => $r['label'], ':desc' => $r['description']]);
+            }
+            $db->exec("
+                CREATE TABLE IF NOT EXISTS user_roles (
+                    user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    role_slug VARCHAR(32) NOT NULL REFERENCES roles(slug) ON DELETE RESTRICT,
+                    assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (user_id, role_slug)
+                )
+            ");
+            $db->exec("INSERT INTO user_roles (user_id, role_slug) SELECT id, role FROM users ON CONFLICT (user_id, role_slug) DO NOTHING");
+        } catch (Throwable) {
+            // Schema already aligned
+        }
+    }
+
+    public static function listRoleCategories(PDO $db): array
+    {
+        self::ensureRolesSchema($db);
+        try {
+            return $db->query('SELECT slug, label, description, is_default FROM roles ORDER BY is_default DESC, label ASC')->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable) {
+            return self::DEFAULT_ROLES;
+        }
+    }
+
+    public static function nextNumericUserId(PDO $db): string
+    {
+        self::ensureRolesSchema($db);
+        try {
+            $maxNum = (int) $db->query("SELECT COALESCE(MAX(id::BIGINT), 0) FROM users WHERE id ~ '^[0-9]+$'")->fetchColumn();
+            $candidate = (int) $db->query("SELECT nextval('user_numeric_id_seq')")->fetchColumn();
+            if ($candidate <= $maxNum) {
+                $target = $maxNum + 1;
+                $db->query("SELECT setval('user_numeric_id_seq', {$target}, TRUE)");
+                $candidate = $target;
+            }
+            return (string) $candidate;
+        } catch (Throwable) {
+            try {
+                $maxNum = (int) $db->query("SELECT COALESCE(MAX(id::BIGINT), 0) FROM users WHERE id ~ '^[0-9]+$'")->fetchColumn();
+                return (string) ($maxNum + 1);
+            } catch (Throwable) {
+                return (string) random_int(1000, 999999);
+            }
         }
     }
 
@@ -177,14 +256,15 @@ final class UserApiController
         $hit = false;
         $payload = CacheService::remember($this->db, 'users:all', 45, function (): array {
             $stmt = $this->db->query("
-                SELECT u.id, u.name, u.email, u.role, u.avatar_url, u.phone, u.bio, u.hire_date,
+                SELECT u.id, u.name, u.email, COALESCE(MAX(ur.role_slug), u.role) AS role, u.avatar_url, u.phone, u.bio, u.hire_date,
                        u.hourly_rate, u.total_earnings, u.pto_balance_days, u.pto_taken_days,
                        u.team_leader_id, u.is_active, u.is_suspended, u.suspended_reason,
                        COALESCE(STRING_AGG(DISTINCT s.specialty, '||'), '') AS specialties_joined
                 FROM users u
+                LEFT JOIN user_roles ur ON u.id = ur.user_id
                 LEFT JOIN va_specialties s ON u.id = s.va_id
                 GROUP BY u.id
-                ORDER BY u.role ASC, u.name ASC
+                ORDER BY role ASC, u.name ASC
             ");
             $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
             foreach ($rows as &$r) {
@@ -205,7 +285,9 @@ final class UserApiController
         $name = SecurityHelper::sanitizePlainText($input['name'] ?? '', 191);
         $email = strtolower(filter_var($input['email'] ?? '', FILTER_VALIDATE_EMAIL) ?: '');
         $password = (string) ($input['password'] ?? '');
-        $role = in_array($input['role'] ?? '', ['admin', 'team_leader', 'hrm', 'va'], true) ? $input['role'] : 'va';
+        $validSlugs = array_column(self::listRoleCategories($this->db), 'slug');
+        $requestedRole = SecurityHelper::sanitizePlainText((string) ($input['role'] ?? 'va'), 32);
+        $role = in_array($requestedRole, $validSlugs, true) ? $requestedRole : 'va';
 
         if ($name === '' || $email === '' || strlen($password) < 8) {
             http_response_code(422);
@@ -221,7 +303,7 @@ final class UserApiController
             return;
         }
 
-        $id = 'user-' . bin2hex(random_bytes(5));
+        $id = self::nextNumericUserId($this->db);
         $hash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 11]);
         $tlId = SecurityHelper::sanitizePlainText($input['team_leader_id'] ?? '', 64) ?: null;
 
@@ -240,6 +322,14 @@ final class UserApiController
             ':rate'  => max(0.0, (float) ($input['hourly_rate'] ?? 0)),
             ':tl'    => $role === 'va' ? $tlId : null,
         ]);
+
+        // Assign role row linked to numeric user ID (automatic 'va' role when creating a VA)
+        $roleAssign = $this->db->prepare("
+            INSERT INTO user_roles (user_id, role_slug, assigned_at)
+            VALUES (:uid, :slug, NOW())
+            ON CONFLICT (user_id, role_slug) DO UPDATE SET assigned_at = NOW()
+        ");
+        $roleAssign->execute([':uid' => $id, ':slug' => $role]);
 
         // Specialties strictly reserved for VA accounts
         if ($role === 'va' && !empty($input['specialties']) && is_array($input['specialties'])) {
@@ -322,6 +412,15 @@ final class UserApiController
         $effectiveRole = ($actor['role'] === 'admin' && !empty($input['role']))
             ? (string) $input['role']
             : (string) $targetRow['role'];
+
+        if ($actor['role'] === 'admin' && !empty($input['role'])) {
+            $validSlugs = array_column(self::listRoleCategories($this->db), 'slug');
+            if (in_array($effectiveRole, $validSlugs, true)) {
+                $this->db->prepare('DELETE FROM user_roles WHERE user_id = :uid')->execute([':uid' => $targetId]);
+                $this->db->prepare('INSERT INTO user_roles (user_id, role_slug, assigned_at) VALUES (:uid, :slug, NOW()) ON CONFLICT DO NOTHING')
+                    ->execute([':uid' => $targetId, ':slug' => $effectiveRole]);
+            }
+        }
 
         if ($effectiveRole !== 'va') {
             $this->db->prepare('DELETE FROM va_specialties WHERE va_id = :va')->execute([':va' => $targetId]);

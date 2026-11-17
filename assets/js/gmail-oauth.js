@@ -153,7 +153,7 @@
         throw new Error(data.error || 'Email delivery failed');
       }
       showGmailToast(
-        data.gmail_synced ? 'Sent via Gmail & archived in PostgreSQL' : 'Message saved to Workly Email Hub',
+        data.gmail_synced ? 'Sent via Gmail & archived to Workly Hub' : 'Message saved to Workly Email Hub',
         'success'
       );
       const nextUrl = data.thread_id
@@ -241,7 +241,7 @@
           p4.style.marginTop = '6px';
           p4.className = 'muted';
           p4.textContent = gmailAccessToken
-            ? 'Delivery Mode: Live Gmail API (' + (gmailConnectedEmail || 'Authorized Google Account') + ') + PostgreSQL Archive'
+            ? 'Delivery Mode: Live Gmail API (' + (gmailConnectedEmail || 'Authorized Google Account') + ') + Workly Archive'
             : 'Delivery Mode: Internal Workly Email Hub (Connect Google Account above to dispatch external Gmail)';
           sumEl.appendChild(p4);
         }

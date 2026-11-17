@@ -71,9 +71,13 @@ foreach ($docs as $d) {
           </div>
         <?php endif; ?>
 
-        <div class="kb-rich-content" style="margin-bottom:14px;">
-          <?= SecurityHelper::sanitizeRichHtml((string) $doc['content']) ?>
+        <div class="kb-rich-clip" style="margin-bottom:10px;">
+          <div class="kb-rich-content">
+            <?= SecurityHelper::sanitizeRichHtml((string) $doc['content']) ?>
+          </div>
+          <div class="kb-rich-fade"></div>
         </div>
+        <button type="button" class="btn btn-secondary btn-sm is-hidden kb-expand-btn no-print" data-kb-expand style="margin-bottom:12px;">View More</button>
 
         <div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--border);">
           <button type="button" class="btn btn-secondary btn-sm" data-kb-print>

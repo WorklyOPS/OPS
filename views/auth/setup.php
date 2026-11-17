@@ -22,11 +22,11 @@
         </div>
         <h1 style="font-size:26px;line-height:1.25;margin-bottom:12px;">Initialize Primary System Administrator</h1>
         <p class="muted" style="font-size:13.5px;">
-          PostgreSQL currently contains zero user accounts. Provision your root System Administrator account to unlock Workly. Once saved, this installer locks permanently.
+          Your workspace currently contains zero user accounts. Provision your root System Administrator account to unlock Workly. Once saved, this installer locks permanently.
         </p>
       </div>
       <div class="muted" style="font-size:11.5px;">
-        Zero Demo Accounts • Direct PostgreSQL Provisioning
+        Zero Demo Accounts • Direct Admin Provisioning
       </div>
     </section>
 

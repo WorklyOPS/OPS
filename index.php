@@ -28,14 +28,12 @@ if ($uri === '/health' || $uri === '/api/v1/health') {
         $db->query('SELECT 1');
         echo json_encode([
             'status'   => 'healthy',
-            'runtime'  => 'PHP ' . PHP_VERSION,
-            'database' => 'postgresql',
+            'database' => 'connected',
         ]);
     } catch (Throwable) {
         http_response_code(503);
         echo json_encode([
             'status'   => 'unconfigured',
-            'runtime'  => 'PHP ' . PHP_VERSION,
             'database' => 'disconnected',
         ]);
     }
@@ -48,7 +46,7 @@ try {
     if (str_starts_with($uri, '/api/')) {
         SecurityHelper::sendApiHeaders();
         http_response_code(503);
-        echo json_encode(['error' => 'PostgreSQL database connection is not yet configured. Check config/.env.']);
+        echo json_encode(['error' => 'Database connection is not yet configured. Check environment configuration.']);
         exit;
     }
     SecurityHelper::sendHtmlHeaders();
@@ -59,15 +57,15 @@ try {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Workly — Database Configuration Required</title>
+  <title>Workly — Workspace Configuration Required</title>
   <link rel="stylesheet" href="/assets/css/workly.css">
 </head>
 <body class="auth-body">
   <div class="auth-card">
     <div class="brand-mark">W</div>
-    <h1>PostgreSQL Setup Required</h1>
-    <p class="muted">Workly could not connect to PostgreSQL. Copy <code>config/.env.example</code> to <code>config/.env</code>, enter your Hostinger PostgreSQL credentials, and import <code>sql/workly_postgres_schema.sql</code>.</p>
-    <div class="notice notice-warn">Database Driver: <code>pdo_pgsql</code> required on PHP 8.2+.</div>
+    <h1>Workspace Setup Required</h1>
+    <p class="muted">Workly could not establish a database connection. Verify your environment credentials and initialize the workspace schema before continuing.</p>
+    <div class="notice notice-warn">System Status: Database Connection Pending</div>
   </div>
 </body>
 </html>

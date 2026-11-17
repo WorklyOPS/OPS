@@ -1,6 +1,6 @@
 <?php
 /**
- * Workly Tasks REST API Controller (PHP 8 + PostgreSQL)
+ * Workly Tasks REST API Controller
  */
 
 declare(strict_types=1);
@@ -11,6 +11,7 @@ require_once __DIR__ . '/../../services/SecurityHelper.php';
 require_once __DIR__ . '/../../middleware/AuthMiddleware.php';
 require_once __DIR__ . '/../../middleware/CsrfMiddleware.php';
 require_once __DIR__ . '/../../middleware/TaskRoleMiddleware.php';
+require_once __DIR__ . '/NotificationApiController.php';
 
 final class TaskApiController
 {
@@ -29,6 +30,10 @@ final class TaskApiController
 
         if ($method === 'GET' && !$taskId) {
             $this->listTasks($user);
+            return;
+        }
+        if ($method === 'GET' && $taskId && $sub === 'activity') {
+            $this->getActivity($taskId, $user);
             return;
         }
         if ($method === 'POST' && !$taskId) {
@@ -86,11 +91,158 @@ final class TaskApiController
         CacheService::invalidatePrefix($this->db, 'tasks:');
         CacheService::invalidatePrefix($this->db, 'analytics:');
         CacheService::invalidatePrefix($this->db, 'reports:');
+        CacheService::invalidatePrefix($this->db, 'alerts:');
     }
 
     private function assertTaskAccess(string $taskId, array $user, string $action = 'access'): array
     {
         return TaskRoleMiddleware::authorizeTaskAccess($this->db, $taskId, $user, $action);
+    }
+
+    private function fetchUserAvatar(string $userId): string
+    {
+        try {
+            $st = $this->db->prepare('SELECT avatar_url FROM users WHERE id = :id LIMIT 1');
+            $st->execute([':id' => $userId]);
+            return (string) ($st->fetchColumn() ?: '');
+        } catch (Throwable) {
+            return '';
+        }
+    }
+
+    private function notifyTaskParticipants(array $task, array $actor, string $kind, string $text, string $recordId): void
+    {
+        $actorId = (string) $actor['id'];
+        $taskId = (string) $task['id'];
+        $taskTitle = mb_substr((string) ($task['title'] ?? 'Task'), 0, 36, 'UTF-8');
+        $href = '/tasks?open_task=' . rawurlencode($taskId) . '&tab=combined';
+
+        $targets = [];
+        if (!empty($task['assigned_va_id'])) {
+            $targets[(string) $task['assigned_va_id']] = true;
+            try {
+                $tlSt = $this->db->prepare('SELECT team_leader_id FROM users WHERE id = :id LIMIT 1');
+                $tlSt->execute([':id' => $task['assigned_va_id']]);
+                $tlId = (string) ($tlSt->fetchColumn() ?: '');
+                if ($tlId !== '') {
+                    $targets[$tlId] = true;
+                }
+            } catch (Throwable) {
+            }
+        }
+        if (!empty($task['created_by_id'])) {
+            $targets[(string) $task['created_by_id']] = true;
+        }
+
+        // Resolve @mentions in text against active staff names
+        if (str_contains($text, '@')) {
+            try {
+                $uRows = $this->db->query('SELECT id, name FROM users WHERE is_active = TRUE')->fetchAll(PDO::FETCH_ASSOC);
+                $lowerText = mb_strtolower($text, 'UTF-8');
+                foreach ($uRows as $ur) {
+                    $full = mb_strtolower(trim((string) $ur['name']), 'UTF-8');
+                    $first = trim(explode(' ', $full)[0] ?? '');
+                    if (($full !== '' && str_contains($lowerText, '@' . $full))
+                        || (strlen($first) >= 2 && preg_match('/@' . preg_quote($first, '/') . '\b/u', $lowerText))
+                    ) {
+                        $targets[(string) $ur['id']] = true;
+                    }
+                }
+            } catch (Throwable) {
+            }
+        }
+
+        unset($targets[$actorId]);
+
+        $title = $kind === 'note'
+            ? "{$actor['name']} added a note on \"{$taskTitle}\""
+            : "{$actor['name']} commented on \"{$taskTitle}\"";
+        $sub = mb_substr($text, 0, 90, 'UTF-8');
+        $cat = $kind === 'note' ? 'task' : 'comment';
+
+        foreach (array_keys($targets) as $targetId) {
+            NotificationApiController::notifyUser($this->db, (string) $targetId, $cat, $title, $sub, $href, $recordId);
+        }
+    }
+
+    private function getActivity(string $taskId, array $user): void
+    {
+        $this->assertTaskAccess($taskId, $user);
+
+        $nStmt = $this->db->prepare("
+            SELECT n.id, n.task_id, n.author_id, n.author_name, n.author_role, n.is_instruction, n.content, n.created_at,
+                   COALESCE(u.avatar_url, '') AS avatar_url
+            FROM task_notes n
+            LEFT JOIN users u ON n.author_id = u.id
+            WHERE n.task_id = :tid
+            ORDER BY n.created_at ASC
+        ");
+        $nStmt->execute([':tid' => $taskId]);
+        $notes = $nStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $cStmt = $this->db->prepare("
+            SELECT c.id, c.task_id, c.author_id, c.author_name, c.author_role, c.message, c.created_at,
+                   COALESCE(u.avatar_url, '') AS avatar_url
+            FROM task_comments c
+            LEFT JOIN users u ON c.author_id = u.id
+            WHERE c.task_id = :tid
+            ORDER BY c.created_at ASC
+        ");
+        $cStmt->execute([':tid' => $taskId]);
+        $comments = $cStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        $timeline = [];
+        foreach ($notes as $n) {
+            $timeline[] = [
+                'kind'           => 'note',
+                'id'             => $n['id'],
+                'task_id'        => $n['task_id'],
+                'author_id'      => $n['author_id'],
+                'author_name'    => $n['author_name'],
+                'author_role'    => $n['author_role'],
+                'avatar_url'     => $n['avatar_url'],
+                'is_instruction' => (bool) $n['is_instruction'],
+                'text'           => $n['content'],
+                'created_at'     => $n['created_at'],
+            ];
+        }
+
+        $authorSeen = [];
+        $commentAuthors = [];
+        foreach ($comments as $c) {
+            $aid = (string) $c['author_id'];
+            if (!isset($authorSeen[$aid])) {
+                $authorSeen[$aid] = true;
+                $commentAuthors[] = [
+                    'id'         => $aid,
+                    'name'       => (string) $c['author_name'],
+                    'avatar_url' => (string) $c['avatar_url'],
+                ];
+            }
+            $timeline[] = [
+                'kind'           => 'comment',
+                'id'             => $c['id'],
+                'task_id'        => $c['task_id'],
+                'author_id'      => $c['author_id'],
+                'author_name'    => $c['author_name'],
+                'author_role'    => $c['author_role'],
+                'avatar_url'     => $c['avatar_url'],
+                'is_instruction' => false,
+                'text'           => $c['message'],
+                'created_at'     => $c['created_at'],
+            ];
+        }
+
+        usort($timeline, static fn(array $a, array $b): int => strcmp((string) $a['created_at'], (string) $b['created_at']));
+
+        echo json_encode([
+            'success'         => true,
+            'task_id'         => $taskId,
+            'notes'           => $notes,
+            'comments'        => $comments,
+            'timeline'        => $timeline,
+            'comment_authors' => $commentAuthors,
+        ]);
     }
 
     private function listTasks(array $user): void
@@ -175,6 +327,18 @@ final class TaskApiController
                 ':instr'   => $user['role'] !== 'va' ? 'true' : 'false',
                 ':content' => SecurityHelper::sanitizePlainText($input['initial_note'], 2000),
             ]);
+        }
+
+        if ($assignedVaId !== '' && $assignedVaId !== $user['id']) {
+            NotificationApiController::notifyUser(
+                $this->db,
+                $assignedVaId,
+                'task',
+                "New task assigned: {$title}",
+                "Due {$deadline} · Assigned by {$user['name']}",
+                '/tasks?open_task=' . rawurlencode($id) . '&tab=combined',
+                $id
+            );
         }
 
         $this->invalidate();
@@ -265,7 +429,7 @@ final class TaskApiController
 
     private function addNote(string $taskId, array $user): void
     {
-        $this->assertTaskAccess($taskId, $user);
+        $task = $this->assertTaskAccess($taskId, $user);
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
         $content = SecurityHelper::sanitizePlainText($input['content'] ?? '', 2000);
         if ($content === '') {
@@ -275,6 +439,7 @@ final class TaskApiController
         }
 
         $id = 'note-' . bin2hex(random_bytes(5));
+        $isInstruction = $user['role'] !== 'va';
         $stmt = $this->db->prepare("
             INSERT INTO task_notes (id, task_id, author_id, author_name, author_role, is_instruction, content)
             VALUES (:id, :tid, :aid, :aname, :arole, :instr, :content)
@@ -285,17 +450,34 @@ final class TaskApiController
             ':aid'     => $user['id'],
             ':aname'   => $user['name'],
             ':arole'   => $user['role'],
-            ':instr'   => $user['role'] !== 'va' ? 'true' : 'false',
+            ':instr'   => $isInstruction ? 'true' : 'false',
             ':content' => $content,
         ]);
 
+        $this->notifyTaskParticipants($task, $user, 'note', $content, $id);
         $this->invalidate();
-        echo json_encode(['success' => true, 'id' => $id]);
+        $avatar = $this->fetchUserAvatar((string) $user['id']);
+
+        echo json_encode([
+            'success' => true,
+            'id'      => $id,
+            'item'    => [
+                'id'             => $id,
+                'task_id'        => $taskId,
+                'author_id'      => $user['id'],
+                'author_name'    => $user['name'],
+                'author_role'    => $user['role'],
+                'avatar_url'     => $avatar,
+                'is_instruction' => $isInstruction,
+                'content'        => $content,
+                'created_at'     => gmdate('Y-m-d H:i:sP'),
+            ],
+        ]);
     }
 
     private function addComment(string $taskId, array $user): void
     {
-        $this->assertTaskAccess($taskId, $user);
+        $task = $this->assertTaskAccess($taskId, $user);
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
         $message = SecurityHelper::sanitizePlainText($input['message'] ?? '', 2000);
         if ($message === '') {
@@ -318,8 +500,24 @@ final class TaskApiController
             ':msg'   => $message,
         ]);
 
+        $this->notifyTaskParticipants($task, $user, 'comment', $message, $id);
         $this->invalidate();
-        echo json_encode(['success' => true, 'id' => $id]);
+        $avatar = $this->fetchUserAvatar((string) $user['id']);
+
+        echo json_encode([
+            'success' => true,
+            'id'      => $id,
+            'item'    => [
+                'id'          => $id,
+                'task_id'     => $taskId,
+                'author_id'   => $user['id'],
+                'author_name' => $user['name'],
+                'author_role' => $user['role'],
+                'avatar_url'  => $avatar,
+                'message'     => $message,
+                'created_at'  => gmdate('Y-m-d H:i:sP'),
+            ],
+        ]);
     }
 
     private function logExtraHours(string $taskId, array $user): void

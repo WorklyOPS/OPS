@@ -1,6 +1,6 @@
 <?php
 /**
- * Workly Perks, Benefits & Recognition Badges REST API Controller (PHP 8 + PostgreSQL)
+ * Workly Perks, Benefits & Recognition Badges REST API Controller
  */
 
 declare(strict_types=1);
@@ -10,6 +10,7 @@ require_once __DIR__ . '/../../services/AuditLogger.php';
 require_once __DIR__ . '/../../services/SecurityHelper.php';
 require_once __DIR__ . '/../../middleware/AuthMiddleware.php';
 require_once __DIR__ . '/../../middleware/CsrfMiddleware.php';
+require_once __DIR__ . '/NotificationApiController.php';
 
 final class PerksApiController
 {
@@ -79,6 +80,7 @@ final class PerksApiController
     {
         CacheService::invalidatePrefix($this->db, 'perks:');
         CacheService::invalidatePrefix($this->db, 'users:');
+        CacheService::invalidatePrefix($this->db, 'alerts:');
     }
 
     private function extractTargetUserIds(array $input): array
@@ -194,9 +196,22 @@ final class PerksApiController
             return;
         }
 
+        $pStmt = $this->db->prepare('SELECT title FROM perks WHERE id = :id LIMIT 1');
+        $pStmt->execute([':id' => $perkId]);
+        $perkTitle = (string) ($pStmt->fetchColumn() ?: 'Staff Benefit');
+
         $stmt = $this->db->prepare('INSERT INTO user_perks (perk_id, user_id) VALUES (:pid, :uid) ON CONFLICT DO NOTHING');
         foreach ($userIds as $vaId) {
             $stmt->execute([':pid' => $perkId, ':uid' => $vaId]);
+            NotificationApiController::notifyUser(
+                $this->db,
+                $vaId,
+                'perk',
+                "Perk Unlocked: {$perkTitle}",
+                "Granted to your profile by {$user['name']}",
+                '/profile',
+                $perkId
+            );
         }
 
         $this->invalidate();
@@ -271,6 +286,11 @@ final class PerksApiController
             return;
         }
 
+        $bStmt = $this->db->prepare('SELECT title, tier FROM badges WHERE id = :id LIMIT 1');
+        $bStmt->execute([':id' => $badgeId]);
+        $badgeRow = $bStmt->fetch(PDO::FETCH_ASSOC);
+        $badgeTitle = (string) ($badgeRow['title'] ?? 'Recognition Badge');
+
         $stmt = $this->db->prepare("
             INSERT INTO user_badges (id, user_id, badge_id, earned_at)
             VALUES (:id, :uid, :bid, CURRENT_DATE)
@@ -282,6 +302,15 @@ final class PerksApiController
                 ':uid' => $vaId,
                 ':bid' => $badgeId,
             ]);
+            NotificationApiController::notifyUser(
+                $this->db,
+                $vaId,
+                'perk',
+                "Badge Earned: {$badgeTitle}",
+                "Awarded by {$user['name']}",
+                '/profile',
+                $badgeId
+            );
         }
 
         $this->invalidate();

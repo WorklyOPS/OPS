@@ -70,7 +70,7 @@ $tls = $data['team_leaders'] ?? [];
   <div class="card card-hover">
     <div class="kpi-label">Deliverables Completed</div>
     <div class="kpi-value"><?= (int) ($data['task_stats']['completed_tasks'] ?? 0) ?> / <?= (int) ($data['task_stats']['total_tasks'] ?? 0) ?></div>
-    <div class="kpi-sub">PostgreSQL task telemetry</div>
+    <div class="kpi-sub">Active delivery tracking</div>
   </div>
   <div class="card card-hover">
     <div class="kpi-label">Earned Achievements</div>
@@ -89,7 +89,7 @@ $tls = $data['team_leaders'] ?? [];
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
       <div>
         <h3>Daily Tasks Created &amp; Updated (Last 14 Days)</h3>
-        <p class="muted" style="font-size:12px;">PostgreSQL day-by-day activity breakdown for <?= SecurityHelper::e($p['name']) ?>.</p>
+        <p class="muted" style="font-size:12px;">Day-by-day task creation and update activity for <?= SecurityHelper::e($p['name']) ?>.</p>
       </div>
       <div style="display:flex;gap:14px;font-size:12px;font-weight:600;">
         <span style="display:inline-flex;align-items:center;gap:6px;"><span style="width:10px;height:10px;border-radius:3px;background:#8822CE;"></span>Created</span>

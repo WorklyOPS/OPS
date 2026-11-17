@@ -214,23 +214,47 @@ final class PageController
         $stmt->execute($params);
         $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Fetch notes, comments & extra hours indexed by task_id
+        // Fetch notes, comments & extra hours indexed by task_id (with commenter profile photos)
         $taskIds = array_column($tasks, 'id');
         $notesByTask = [];
         $commentsByTask = [];
+        $commentAuthorsByTask = [];
         $extraHoursByTask = [];
         if (!empty($taskIds)) {
             $placeholders = implode(',', array_fill(0, count($taskIds), '?'));
-            $nStmt = $this->db->prepare("SELECT * FROM task_notes WHERE task_id IN ({$placeholders}) ORDER BY created_at ASC");
+            $nStmt = $this->db->prepare("
+                SELECT n.*, COALESCE(u.avatar_url, '') AS avatar_url
+                FROM task_notes n
+                LEFT JOIN users u ON n.author_id = u.id
+                WHERE n.task_id IN ({$placeholders})
+                ORDER BY n.created_at ASC
+            ");
             $nStmt->execute($taskIds);
             foreach ($nStmt->fetchAll(PDO::FETCH_ASSOC) as $n) {
                 $notesByTask[$n['task_id']][] = $n;
             }
 
-            $cStmt = $this->db->prepare("SELECT * FROM task_comments WHERE task_id IN ({$placeholders}) ORDER BY created_at ASC");
+            $cStmt = $this->db->prepare("
+                SELECT c.*, COALESCE(u.avatar_url, '') AS avatar_url
+                FROM task_comments c
+                LEFT JOIN users u ON c.author_id = u.id
+                WHERE c.task_id IN ({$placeholders})
+                ORDER BY c.created_at ASC
+            ");
             $cStmt->execute($taskIds);
+            $seenAuthors = [];
             foreach ($cStmt->fetchAll(PDO::FETCH_ASSOC) as $c) {
                 $commentsByTask[$c['task_id']][] = $c;
+                $tid = (string) $c['task_id'];
+                $aid = (string) $c['author_id'];
+                if (!isset($seenAuthors[$tid][$aid])) {
+                    $seenAuthors[$tid][$aid] = true;
+                    $commentAuthorsByTask[$tid][] = [
+                        'id'         => $aid,
+                        'name'       => (string) $c['author_name'],
+                        'avatar_url' => (string) ($c['avatar_url'] ?? ''),
+                    ];
+                }
             }
 
             $ehStmt = $this->db->prepare("SELECT * FROM extra_hours_logs WHERE task_id IN ({$placeholders}) ORDER BY logged_at DESC");
@@ -290,20 +314,21 @@ final class PageController
         }
 
         return [
-            'tasks'                => $tasks,
-            'notes_by_task'        => $notesByTask,
-            'comments_by_task'     => $commentsByTask,
-            'extra_hours_by_task'  => $extraHoursByTask,
-            'status_counts'        => $statusCounts,
-            'due_today_count'      => $dueTodayCount,
-            'overdue_count'        => $overdueCount,
-            'clients'              => $clients,
-            'vas'                  => $vas,
-            'months'               => $months,
-            'weeks'                => $weeks,
-            'selected_month'       => $selectedMonth,
-            'selected_week'        => $selectedWeek,
-            'selected_va_filter'   => $selectedVaFilter,
+            'tasks'                   => $tasks,
+            'notes_by_task'           => $notesByTask,
+            'comments_by_task'        => $commentsByTask,
+            'comment_authors_by_task' => $commentAuthorsByTask,
+            'extra_hours_by_task'     => $extraHoursByTask,
+            'status_counts'           => $statusCounts,
+            'due_today_count'         => $dueTodayCount,
+            'overdue_count'           => $overdueCount,
+            'clients'                 => $clients,
+            'vas'                     => $vas,
+            'months'                  => $months,
+            'weeks'                   => $weeks,
+            'selected_month'          => $selectedMonth,
+            'selected_week'           => $selectedWeek,
+            'selected_va_filter'      => $selectedVaFilter,
         ];
     }
 
@@ -339,17 +364,21 @@ final class PageController
             ];
 
             if ($role === 'admin') {
+                UserApiController::ensureRolesSchema($this->db);
+                $res['roles'] = UserApiController::listRoleCategories($this->db);
                 $res['specialty_categories'] = UserApiController::listSpecialtyCategories($this->db);
                 $allUsers = $this->db->query("
-                    SELECT u.id, u.name, u.email, u.role, u.avatar_url, u.phone, u.bio, u.hourly_rate, u.team_leader_id,
+                    SELECT u.id, u.name, u.email, COALESCE(MAX(ur.role_slug), u.role) AS role,
+                           u.avatar_url, u.phone, u.bio, u.hourly_rate, u.team_leader_id,
                            u.is_active, u.is_suspended, u.suspended_reason, u.pto_balance_days,
                            mb.email AS connected_gmail, mb.oauth_status AS gmail_status, mb.last_synced_at,
                            COALESCE(STRING_AGG(DISTINCT sp.specialty, '||'), '') AS specialties_joined
                     FROM users u
+                    LEFT JOIN user_roles ur ON u.id = ur.user_id
                     LEFT JOIN staff_connected_mailboxes mb ON u.id = mb.user_id
                     LEFT JOIN va_specialties sp ON u.id = sp.va_id
                     GROUP BY u.id, mb.email, mb.oauth_status, mb.last_synced_at
-                    ORDER BY u.role ASC, u.name ASC
+                    ORDER BY COALESCE(MAX(ur.role_slug), u.role) ASC, u.name ASC
                 ")->fetchAll(PDO::FETCH_ASSOC);
 
                 foreach ($allUsers as &$au) {
@@ -730,25 +759,115 @@ final class PageController
         $clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $actByClient = [];
+        $commLogs = [];
         $clientIds = array_column($clients, 'id');
+        $clientNameMap = [];
+        $clientEmailMap = [];
+        foreach ($clients as $cl) {
+            $clientNameMap[$cl['id']] = $cl['agency_name'];
+            if (!empty($cl['email'])) {
+                $clientEmailMap[strtolower((string) $cl['email'])] = $cl;
+            }
+            if (!empty($cl['additional_email'])) {
+                $clientEmailMap[strtolower((string) $cl['additional_email'])] = $cl;
+            }
+        }
+
         if (!empty($clientIds)) {
             $ph = implode(',', array_fill(0, count($clientIds), '?'));
             $aStmt = $this->db->prepare("SELECT * FROM client_activities WHERE client_id IN ({$ph}) ORDER BY created_at DESC");
             $aStmt->execute($clientIds);
             foreach ($aStmt->fetchAll(PDO::FETCH_ASSOC) as $a) {
                 $actByClient[$a['client_id']][] = $a;
+                $commLogs[] = [
+                    'source'      => 'activity',
+                    'type'        => (string) ($a['type'] ?? 'note'),
+                    'client_id'   => (string) $a['client_id'],
+                    'client_name' => (string) ($clientNameMap[$a['client_id']] ?? 'Account'),
+                    'actor'       => (string) $a['author_name'],
+                    'subject'     => ucfirst((string) ($a['type'] ?? 'note')) . ' Log',
+                    'summary'     => (string) $a['description'],
+                    'created_at'  => (string) $a['created_at'],
+                ];
             }
+
+            try {
+                $emStmt = $this->db->query("
+                    SELECT id, thread_id, sender_name, sender_email, recipient_email, subject, COALESCE(snippet, LEFT(body, 140)) AS excerpt, client_ref_id, created_at
+                    FROM email_messages
+                    ORDER BY created_at DESC
+                    LIMIT 120
+                ");
+                foreach ($emStmt->fetchAll(PDO::FETCH_ASSOC) as $em) {
+                    $matchedCl = null;
+                    if (!empty($em['client_ref_id']) && isset($clientNameMap[$em['client_ref_id']])) {
+                        $matchedCl = ['id' => $em['client_ref_id'], 'agency_name' => $clientNameMap[$em['client_ref_id']]];
+                    } else {
+                        $se = strtolower((string) $em['sender_email']);
+                        $re = strtolower((string) $em['recipient_email']);
+                        if (isset($clientEmailMap[$se])) {
+                            $matchedCl = $clientEmailMap[$se];
+                        } elseif (isset($clientEmailMap[$re])) {
+                            $matchedCl = $clientEmailMap[$re];
+                        }
+                    }
+                    if ($matchedCl) {
+                        $commLogs[] = [
+                            'source'      => 'email',
+                            'type'        => 'email',
+                            'client_id'   => (string) $matchedCl['id'],
+                            'client_name' => (string) $matchedCl['agency_name'],
+                            'actor'       => (string) $em['sender_name'] . ' → ' . (string) $em['recipient_email'],
+                            'subject'     => (string) $em['subject'],
+                            'summary'     => (string) $em['excerpt'],
+                            'thread_id'   => (string) $em['thread_id'],
+                            'created_at'  => (string) $em['created_at'],
+                        ];
+                    }
+                }
+            } catch (Throwable) {
+            }
+        }
+
+        usort($commLogs, static fn(array $a, array $b): int => strcmp((string) $b['created_at'], (string) $a['created_at']));
+        $commLogs = array_slice($commLogs, 0, 120);
+
+        // Associated Virtual Assistants mapped to scoped clients
+        $associatedVas = [];
+        $vaIds = array_values(array_unique(array_filter(array_column($clients, 'focus_va_id'))));
+        if (!empty($vaIds)) {
+            $vPh = implode(',', array_fill(0, count($vaIds), '?'));
+            $avStmt = $this->db->prepare("
+                SELECT u.id, u.name, u.email, u.avatar_url, u.hourly_rate, u.phone,
+                       COALESCE(STRING_AGG(DISTINCT sp.specialty, ', '), '') AS specialties_csv
+                FROM users u
+                LEFT JOIN va_specialties sp ON u.id = sp.va_id
+                WHERE u.id IN ({$vPh})
+                GROUP BY u.id
+                ORDER BY u.name ASC
+            ");
+            $avStmt->execute($vaIds);
+            $associatedVas = $avStmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($associatedVas as &$av) {
+                $mappedClients = array_values(array_filter($clients, static fn(array $c): bool => (string) ($c['focus_va_id'] ?? '') === (string) $av['id']));
+                $av['client_count'] = count($mappedClients);
+                $av['clients'] = $mappedClients;
+                $av['total_retainer_hours'] = array_sum(array_map(static fn(array $c): float => (float) ($c['contracted_hours_per_month'] ?? 0), $mappedClients));
+            }
+            unset($av);
         }
 
         $vas = $this->db->query("SELECT id, name FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
         $tls = $this->db->query("SELECT id, name FROM users WHERE role = 'team_leader' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
         return [
-            'clients'       => $clients,
-            'activities'    => $actByClient,
-            'vas'           => $vas,
-            'team_leaders'  => $tls,
-            'search'        => $search,
+            'clients'        => $clients,
+            'activities'     => $actByClient,
+            'comm_logs'      => $commLogs,
+            'associated_vas' => $associatedVas,
+            'vas'            => $vas,
+            'team_leaders'   => $tls,
+            'search'         => $search,
         ];
     }
 
@@ -966,12 +1085,27 @@ final class PageController
         $role = $user['role'];
         $uid = $user['id'];
 
+        $selectedMonth = SecurityHelper::sanitizePlainText($_GET['month'] ?? date('Y-m'), 7);
+        if (!preg_match('/^\d{4}-\d{2}$/', $selectedMonth)) {
+            $selectedMonth = date('Y-m');
+        }
+        $mStartDt = new DateTimeImmutable($selectedMonth . '-01');
+        $mEndDt = $mStartDt->modify('last day of this month');
+        $mStartStr = $mStartDt->format('Y-m-d');
+        $mEndStr = $mEndDt->format('Y-m-d');
+
         if ($role === 'va') {
-            $stmt = $this->db->prepare('SELECT * FROM pto_requests WHERE va_id = :va ORDER BY requested_at DESC');
+            $stmt = $this->db->prepare("
+                SELECT p.*, u.avatar_url
+                FROM pto_requests p
+                JOIN users u ON p.va_id = u.id
+                WHERE p.va_id = :va
+                ORDER BY p.requested_at DESC
+            ");
             $stmt->execute([':va' => $uid]);
         } elseif ($role === 'team_leader') {
             $stmt = $this->db->prepare("
-                SELECT p.*, u.pto_balance_days
+                SELECT p.*, u.pto_balance_days, u.pto_taken_days, u.avatar_url
                 FROM pto_requests p
                 JOIN users u ON p.va_id = u.id
                 WHERE u.team_leader_id = :tl
@@ -980,7 +1114,7 @@ final class PageController
             $stmt->execute([':tl' => $uid]);
         } else {
             $stmt = $this->db->query("
-                SELECT p.*, u.pto_balance_days, u.email AS va_email
+                SELECT p.*, u.pto_balance_days, u.pto_taken_days, u.email AS va_email, u.avatar_url
                 FROM pto_requests p
                 JOIN users u ON p.va_id = u.id
                 ORDER BY CASE WHEN p.status = 'pending' THEN 0 ELSE 1 END, p.requested_at DESC
@@ -1036,10 +1170,61 @@ final class PageController
             }
         }
 
+        // VA Monthly PTO Usage Category + Governance Register (Admin & HRM)
+        $vaRegister = [];
+        if (in_array($role, ['admin', 'hrm'], true)) {
+            $vaRegister = $this->db->query("
+                SELECT u.id, u.name, u.email, u.avatar_url, u.pto_balance_days, u.pto_taken_days,
+                       tl.name AS tl_name
+                FROM users u
+                LEFT JOIN users tl ON u.team_leader_id = tl.id
+                WHERE u.role = 'va' AND u.is_active = TRUE
+                ORDER BY u.name ASC
+            ")->fetchAll(PDO::FETCH_ASSOC);
+
+            $mStmt = $this->db->prepare("
+                SELECT va_id, start_date, end_date
+                FROM pto_requests
+                WHERE status = 'approved'
+                  AND start_date <= :m_end
+                  AND end_date >= :m_start
+            ");
+            $mStmt->execute([':m_start' => $mStartStr, ':m_end' => $mEndStr]);
+
+            $monthlyByVa = [];
+            foreach ($mStmt->fetchAll(PDO::FETCH_ASSOC) as $mr) {
+                $s = new DateTimeImmutable(max((string) $mr['start_date'], $mStartStr));
+                $e = new DateTimeImmutable(min((string) $mr['end_date'], $mEndStr));
+                $days = 0;
+                $period = new DatePeriod($s, new DateInterval('P1D'), $e->modify('+1 day'));
+                foreach ($period as $dt) {
+                    if ((int) $dt->format('N') <= 5) {
+                        $days++;
+                    }
+                }
+                $monthlyByVa[$mr['va_id']] = ($monthlyByVa[$mr['va_id']] ?? 0) + $days;
+            }
+
+            foreach ($vaRegister as &$vr) {
+                $vr['monthly_days'] = (int) ($monthlyByVa[$vr['id']] ?? 0);
+            }
+            unset($vr);
+        }
+
+        $months = [];
+        for ($i = 0; $i < 12; $i++) {
+            $m = (new DateTimeImmutable('first day of this month'))->modify("-{$i} months");
+            $months[] = ['value' => $m->format('Y-m'), 'label' => $m->format('F Y')];
+        }
+
         return [
-            'requests'      => $requests,
-            'notifications' => $notifications,
-            'tracking'      => $trackingByReq,
+            'requests'       => $requests,
+            'notifications'  => $notifications,
+            'tracking'       => $trackingByReq,
+            'va_register'    => $vaRegister,
+            'selected_month' => $selectedMonth,
+            'month_label'    => $mStartDt->format('F Y'),
+            'months'         => $months,
         ];
     }
 
@@ -1204,22 +1389,23 @@ final class PageController
 
         $perks = $this->db->query("SELECT id, title, category, COALESCE(icon_name, 'Award') AS icon_name, value, description, active, created_at FROM perks ORDER BY created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
         $grants = $this->db->query("
-            SELECT up.perk_id, up.user_id, u.name AS va_name, up.granted_at
+            SELECT up.perk_id, up.user_id, u.name AS va_name, COALESCE(u.avatar_url, '') AS va_avatar, p.title AS perk_title, up.granted_at
             FROM user_perks up
             JOIN users u ON up.user_id = u.id
+            JOIN perks p ON up.perk_id = p.id
             ORDER BY up.granted_at DESC
         ")->fetchAll(PDO::FETCH_ASSOC);
 
         $badges = $this->db->query("SELECT id, title, description, COALESCE(icon_name, 'Medal') AS icon_name, tier, trigger_type, required_threshold, created_at FROM badges ORDER BY created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
         $awards = $this->db->query("
-            SELECT ub.badge_id, ub.user_id, u.name AS va_name, b.title AS badge_title, b.tier, COALESCE(b.icon_name, 'Medal') AS icon_name, ub.earned_at
+            SELECT ub.badge_id, ub.user_id, u.name AS va_name, COALESCE(u.avatar_url, '') AS va_avatar, b.title AS badge_title, b.tier, COALESCE(b.icon_name, 'Medal') AS icon_name, ub.earned_at
             FROM user_badges ub
             JOIN users u ON ub.user_id = u.id
             JOIN badges b ON ub.badge_id = b.id
             ORDER BY ub.earned_at DESC
         ")->fetchAll(PDO::FETCH_ASSOC);
 
-        $vas = $this->db->query("SELECT id, name, email FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
+        $vas = $this->db->query("SELECT id, name, email, COALESCE(avatar_url, '') AS avatar_url FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
         return [
             'perks'           => $perks,

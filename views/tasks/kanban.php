@@ -52,12 +52,17 @@ foreach ($data['tasks'] as $t) {
 $totalCount = max(1, count($data['tasks']));
 $notesMap = $data['notes_by_task'] ?? [];
 $commentsMap = $data['comments_by_task'] ?? [];
+$commentAuthorsMap = $data['comment_authors_by_task'] ?? [];
 $extraHoursMap = $data['extra_hours_by_task'] ?? [];
 $dueToday = (int) ($data['due_today_count'] ?? 0);
 $overdue = (int) ($data['overdue_count'] ?? 0);
 $todayYmd = date('Y-m-d');
 
-$renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $todayYmd): string {
+// Hide Client Swimlanes option for a VA assigned to only 1 client (or fewer)
+$vaDistinctClientCount = max(count($data['clients'] ?? []), count($swimlanes));
+$showSwimlanes = !($role === 'va' && $vaDistinctClientCount <= 1);
+
+$renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $commentAuthorsMap, $todayYmd): string {
     $pBadge = match ($task['priority']) {
         'high'  => 'badge-danger',
         'low'   => 'badge-neutral',
@@ -65,6 +70,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
     };
     $noteCount = count($notesMap[$task['id']] ?? []);
     $commentCount = count($commentsMap[$task['id']] ?? []);
+    $commentAuthors = $commentAuthorsMap[$task['id']] ?? [];
     $extraHrs = (float) ($task['extra_hours_logged'] ?? 0);
     $vaInitials = strtoupper(substr((string) ($task['va_name'] ?? 'VA'), 0, 2));
     $isOverdueCard = ($task['status'] !== 'completed' && (string) $task['deadline'] < $todayYmd);
@@ -99,13 +105,13 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
 
       <div class="task-card-actions">
         <div style="display:flex;align-items:center;gap:4px;">
-          <button type="button" class="icon-chip-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="notes" title="VA Notes">
+          <button type="button" class="icon-chip-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="combined" title="Notes &amp; Comments Timeline">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
-            <span><?= $noteCount ?></span>
+            <span data-task-note-count="<?= SecurityHelper::e($task['id']) ?>"><?= $noteCount ?></span>
           </button>
           <button type="button" class="icon-chip-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="comments" title="Comments">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-            <span><?= $commentCount ?></span>
+            <span data-task-comment-count="<?= SecurityHelper::e($task['id']) ?>"><?= $commentCount ?></span>
           </button>
           <button type="button" class="icon-chip-btn" data-open-task-overtime="<?= SecurityHelper::e($task['id']) ?>" title="Overtime Hours">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
@@ -113,13 +119,29 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
           </button>
         </div>
 
-        <span style="display:inline-flex;align-items:center;" title="<?= SecurityHelper::e($task['va_name']) ?>">
-          <?php if (!empty($task['va_avatar'])): ?>
-            <img src="<?= SecurityHelper::e($task['va_avatar']) ?>" alt="<?= SecurityHelper::e($task['va_name']) ?>" class="avatar avatar-sm">
-          <?php else: ?>
-            <span class="avatar avatar-sm"><?= SecurityHelper::e($vaInitials) ?></span>
-          <?php endif; ?>
-        </span>
+        <div style="display:flex;align-items:center;gap:6px;">
+          <div class="commenter-avatars" data-task-commenter-avatars="<?= SecurityHelper::e($task['id']) ?>" title="Commenters on this task">
+            <?php foreach (array_slice($commentAuthors, 0, 3) as $ca): ?>
+              <?php $caInit = strtoupper(substr((string) ($ca['name'] ?? 'U'), 0, 2)); ?>
+              <?php if (!empty($ca['avatar_url'])): ?>
+                <img src="<?= SecurityHelper::e($ca['avatar_url']) ?>" alt="<?= SecurityHelper::e($ca['name']) ?>" title="Commented by <?= SecurityHelper::e($ca['name']) ?>" class="avatar avatar-xs commenter-avatar-item">
+              <?php else: ?>
+                <span class="avatar avatar-xs commenter-avatar-item" title="Commented by <?= SecurityHelper::e($ca['name']) ?>"><?= SecurityHelper::e($caInit) ?></span>
+              <?php endif; ?>
+            <?php endforeach; ?>
+            <?php if (count($commentAuthors) > 3): ?>
+              <span class="commenter-more">+<?= count($commentAuthors) - 3 ?></span>
+            <?php endif; ?>
+          </div>
+
+          <span style="display:inline-flex;align-items:center;" title="Assigned VA: <?= SecurityHelper::e($task['va_name']) ?>">
+            <?php if (!empty($task['va_avatar'])): ?>
+              <img src="<?= SecurityHelper::e($task['va_avatar']) ?>" alt="<?= SecurityHelper::e($task['va_name']) ?>" class="avatar avatar-sm">
+            <?php else: ?>
+              <span class="avatar avatar-sm"><?= SecurityHelper::e($vaInitials) ?></span>
+            <?php endif; ?>
+          </span>
+        </div>
       </div>
     </article>
     <?php
@@ -130,7 +152,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
 <div class="page-header">
   <div>
     <h1>Weekly Task Organizer</h1>
-    <p class="muted">Drag cards across stages, right-click for instant quick actions, click a card title to edit details, or open Notes / Comments / Overtime separately.</p>
+    <p class="muted">Drag cards across stages, right-click for instant quick actions, click a card title to edit details, or collaborate live in Combined Timeline.</p>
   </div>
   <?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
     <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-task">+ New Deliverable</button>
@@ -147,8 +169,10 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
         <span style="color:<?= $dueToday > 0 ? 'var(--brand-secondary)' : 'var(--muted)' ?>;">Due Today: <strong class="tabular-nums"><?= $dueToday ?></strong></span>
         <span>·</span>
         <span style="color:<?= $overdue > 0 ? 'var(--danger)' : 'var(--success)' ?>;">Overdue Alerts: <strong class="tabular-nums"><?= $overdue ?></strong></span>
-        <span>·</span>
-        <span>Client Swimlanes: <strong class="tabular-nums" style="color:var(--ink);"><?= count($swimlanes) ?></strong></span>
+        <?php if ($showSwimlanes): ?>
+          <span>·</span>
+          <span>Client Swimlanes: <strong class="tabular-nums" style="color:var(--ink);"><?= count($swimlanes) ?></strong></span>
+        <?php endif; ?>
       </div>
     </div>
 
@@ -207,10 +231,12 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
         </div>
       <?php endif; ?>
 
-      <div class="tab-strip" style="margin-bottom:0;">
-        <button type="button" class="tab-btn active" data-tab-group="kanban-layout" data-tab-btn="swimlanes">Client Swimlanes</button>
-        <button type="button" class="tab-btn" data-tab-group="kanban-layout" data-tab-btn="board">5-Column Board</button>
-      </div>
+      <?php if ($showSwimlanes): ?>
+        <div class="tab-strip" style="margin-bottom:0;">
+          <button type="button" class="tab-btn active" data-tab-group="kanban-layout" data-tab-btn="swimlanes">Client Swimlanes</button>
+          <button type="button" class="tab-btn" data-tab-group="kanban-layout" data-tab-btn="board">5-Column Board</button>
+        </div>
+      <?php endif; ?>
     </div>
 
     <div style="min-width:240px;flex:0 1 300px;">
@@ -219,74 +245,76 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
   </form>
 </div>
 
-<!-- View 1: Horizontal Client / Project Swimlanes -->
-<div data-tab-group="kanban-layout" data-tab-panel="swimlanes">
-  <?php if (empty($swimlanes)): ?>
-    <div class="card">
-      <p class="muted">No client projects or tasks found in this date range.</p>
-    </div>
-  <?php else: ?>
-    <section id="workly-kanban-swimlanes" class="swimlane-stack kanban-surface">
-      <?php foreach ($swimlanes as $lane): ?>
-        <?php
-          $statusBadge = $lane['contract_status'] === 'active'
-              ? 'badge-success'
-              : ($lane['contract_status'] === 'pending' ? 'badge-warn' : 'badge-neutral');
-        ?>
-        <section class="swimlane-section" data-client-id="<?= SecurityHelper::e($lane['id']) ?>">
-          <header class="swimlane-header">
-            <button type="button" class="swimlane-toggle" data-toggle-swimlane aria-expanded="true">
-              <svg class="swimlane-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4">
-                <path d="m6 9 6 6 6-6"/>
-              </svg>
-              <div>
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                  <strong style="font-size:14.5px;"><?= SecurityHelper::e($lane['agency_name']) ?></strong>
-                  <span class="badge <?= $statusBadge ?>"><?= SecurityHelper::e(ucfirst($lane['contract_status'])) ?></span>
-                  <span class="badge badge-brand swimlane-count tabular-nums"><?= (int) $lane['total_tasks'] ?> tasks</span>
+<?php if ($showSwimlanes): ?>
+  <!-- View 1: Horizontal Client / Project Swimlanes -->
+  <div data-tab-group="kanban-layout" data-tab-panel="swimlanes">
+    <?php if (empty($swimlanes)): ?>
+      <div class="card">
+        <p class="muted">No client projects or tasks found in this date range.</p>
+      </div>
+    <?php else: ?>
+      <section id="workly-kanban-swimlanes" class="swimlane-stack kanban-surface">
+        <?php foreach ($swimlanes as $lane): ?>
+          <?php
+            $statusBadge = $lane['contract_status'] === 'active'
+                ? 'badge-success'
+                : ($lane['contract_status'] === 'pending' ? 'badge-warn' : 'badge-neutral');
+          ?>
+          <section class="swimlane-section" data-client-id="<?= SecurityHelper::e($lane['id']) ?>">
+            <header class="swimlane-header">
+              <button type="button" class="swimlane-toggle" data-toggle-swimlane aria-expanded="true">
+                <svg class="swimlane-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4">
+                  <path d="m6 9 6 6 6-6"/>
+                </svg>
+                <div>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <strong style="font-size:14.5px;"><?= SecurityHelper::e($lane['agency_name']) ?></strong>
+                    <span class="badge <?= $statusBadge ?>"><?= SecurityHelper::e(ucfirst($lane['contract_status'])) ?></span>
+                    <span class="badge badge-brand swimlane-count tabular-nums"><?= (int) $lane['total_tasks'] ?> tasks</span>
+                  </div>
+                  <div class="meta-inline" style="margin-top:2px;">
+                    <?php if ($lane['contact_name'] !== ''): ?>
+                      <span>Contact: <?= SecurityHelper::e($lane['contact_name']) ?></span>
+                    <?php endif; ?>
+                    <?php if ($lane['contracted_hours'] > 0): ?>
+                      <span>·</span>
+                      <span>Capacity: <strong class="tabular-nums"><?= number_format($lane['consumed_hours'], 1) ?>h</strong> / <?= number_format($lane['contracted_hours'], 0) ?>h</span>
+                    <?php endif; ?>
+                  </div>
                 </div>
-                <div class="meta-inline" style="margin-top:2px;">
-                  <?php if ($lane['contact_name'] !== ''): ?>
-                    <span>Contact: <?= SecurityHelper::e($lane['contact_name']) ?></span>
-                  <?php endif; ?>
-                  <?php if ($lane['contracted_hours'] > 0): ?>
-                    <span>·</span>
-                    <span>Capacity: <strong class="tabular-nums"><?= number_format($lane['consumed_hours'], 1) ?>h</strong> / <?= number_format($lane['contracted_hours'], 0) ?>h</span>
-                  <?php endif; ?>
-                </div>
+              </button>
+
+              <?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
+                <button type="button" class="btn btn-secondary btn-sm" data-create-for-client="<?= SecurityHelper::e($lane['id']) ?>">+ Deliverable</button>
+              <?php endif; ?>
+            </header>
+
+            <div class="swimlane-body">
+              <div class="swimlane-grid">
+                <?php foreach ($columns as $colKey => $colTitle): ?>
+                  <div class="swimlane-col" data-status="<?= SecurityHelper::e($colKey) ?>" data-client-id="<?= SecurityHelper::e($lane['id']) ?>">
+                    <div class="swimlane-col-head">
+                      <span><?= SecurityHelper::e($colTitle) ?></span>
+                      <span class="badge badge-neutral col-count tabular-nums"><?= count($lane['cols'][$colKey]) ?></span>
+                    </div>
+                    <div class="swimlane-col-cards">
+                      <?php foreach ($lane['cols'][$colKey] as $task): ?>
+                        <?= $renderTaskCard($task) ?>
+                      <?php endforeach; ?>
+                    </div>
+                  </div>
+                <?php endforeach; ?>
               </div>
-            </button>
-
-            <?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
-              <button type="button" class="btn btn-secondary btn-sm" data-create-for-client="<?= SecurityHelper::e($lane['id']) ?>">+ Deliverable</button>
-            <?php endif; ?>
-          </header>
-
-          <div class="swimlane-body">
-            <div class="swimlane-grid">
-              <?php foreach ($columns as $colKey => $colTitle): ?>
-                <div class="swimlane-col" data-status="<?= SecurityHelper::e($colKey) ?>" data-client-id="<?= SecurityHelper::e($lane['id']) ?>">
-                  <div class="swimlane-col-head">
-                    <span><?= SecurityHelper::e($colTitle) ?></span>
-                    <span class="badge badge-neutral col-count tabular-nums"><?= count($lane['cols'][$colKey]) ?></span>
-                  </div>
-                  <div class="swimlane-col-cards">
-                    <?php foreach ($lane['cols'][$colKey] as $task): ?>
-                      <?= $renderTaskCard($task) ?>
-                    <?php endforeach; ?>
-                  </div>
-                </div>
-              <?php endforeach; ?>
             </div>
-          </div>
-        </section>
-      <?php endforeach; ?>
-    </section>
-  <?php endif; ?>
-</div>
+          </section>
+        <?php endforeach; ?>
+      </section>
+    <?php endif; ?>
+  </div>
+<?php endif; ?>
 
-<!-- View 2: Unified 5-Column Board -->
-<div class="is-hidden" data-tab-group="kanban-layout" data-tab-panel="board">
+<!-- View 2: Unified 5-Column Board (Active immediately when VA has <= 1 client) -->
+<div class="<?= $showSwimlanes ? 'is-hidden' : '' ?>" data-tab-group="kanban-layout" data-tab-panel="board">
   <section id="workly-kanban" class="kanban-board kanban-surface">
     <?php foreach ($columns as $colKey => $colTitle): ?>
       <div class="kanban-col" data-status="<?= SecurityHelper::e($colKey) ?>">
@@ -333,10 +361,11 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
 
 <!-- Embedded Non-Executable JSON Payload for Drawer/Modal Inspection -->
 <script type="application/json" id="task-details-json"><?= json_encode([
-    'tasks'       => $tasksMap,
-    'notes'       => $notesMap,
-    'comments'    => $commentsMap,
-    'extra_hours' => $extraHoursMap,
+    'tasks'           => $tasksMap,
+    'notes'           => $notesMap,
+    'comments'        => $commentsMap,
+    'comment_authors' => $commentAuthorsMap,
+    'extra_hours'     => $extraHoursMap,
 ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
 
 <!-- Right-Side Drawer: Create Deliverable -->
@@ -496,7 +525,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
   </div>
 </div>
 
-<!-- Window 2: Right-Side Drawer for VA Notes & Comments -->
+<!-- Window 2: Right-Side Drawer for Combined Timeline, VA Notes & Comments (Live No-Reload) -->
 <div id="drawer-task-collab" class="drawer-backdrop is-hidden">
   <aside class="drawer-panel" role="dialog" aria-label="Task Notes and Comments">
     <div class="drawer-head">
@@ -504,19 +533,50 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
         <h3 id="collab-task-title">Deliverable Conversation</h3>
         <div id="collab-task-meta" class="muted" style="font-size:12px;margin-top:3px;"></div>
       </div>
-      <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span class="badge badge-success live-sync-pill">Live Sync</span>
+        <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
+      </div>
     </div>
 
     <div class="drawer-body">
       <div class="tab-strip">
-        <button type="button" class="tab-btn active" data-tab-group="task-collab" data-tab-btn="notes">VA Notes</button>
+        <button type="button" class="tab-btn active" data-tab-group="task-collab" data-tab-btn="combined">Combined Timeline</button>
+        <button type="button" class="tab-btn" data-tab-group="task-collab" data-tab-btn="notes">VA Notes</button>
         <button type="button" class="tab-btn" data-tab-group="task-collab" data-tab-btn="comments">Comments</button>
       </div>
 
-      <!-- Tab: Execution Notes -->
-      <div data-tab-group="task-collab" data-tab-panel="notes">
+      <!-- Tab 1: Combined Notes + Comments Timeline -->
+      <div data-tab-group="task-collab" data-tab-panel="combined">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;margin-bottom:10px;">
+          <span class="badge badge-brand">Comment (Profile Photo)</span>
+          <span class="badge badge-warn">VA / Execution Note (Highlighted)</span>
+        </div>
+        <div id="detail-combined-list" class="collab-timeline" style="margin-bottom:14px;"></div>
+
+        <form id="form-task-combined" data-no-reload="1" data-task-collab-form>
+          <input type="hidden" name="task_id" value="">
+          <div style="display:flex;gap:8px;margin-bottom:8px;">
+            <label class="choice-pill is-checked" style="font-size:12px;">
+              <input type="radio" name="entry_kind" value="comment" checked>
+              <span>Comment</span>
+            </label>
+            <label class="choice-pill" style="font-size:12px;">
+              <input type="radio" name="entry_kind" value="note">
+              <span>VA / Instruction Note</span>
+            </label>
+          </div>
+          <div class="form-group">
+            <textarea class="textarea" name="body" rows="3" required placeholder="Write a comment or @mention a teammate, or switch to VA Note..."></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary">Send Update</button>
+        </form>
+      </div>
+
+      <!-- Tab 2: Execution Notes -->
+      <div class="is-hidden" data-tab-group="task-collab" data-tab-panel="notes">
         <div id="detail-notes-list" style="margin-bottom:14px;"></div>
-        <form data-api-form="/api/v1/tasks/{task_id}/notes" data-api-method="POST">
+        <form id="form-task-note" data-no-reload="1" data-api-form="/api/v1/tasks/{task_id}/notes" data-api-method="POST">
           <input type="hidden" name="task_id" value="">
           <div class="form-group">
             <label class="form-label">Add SLA Execution Note / Instruction</label>
@@ -526,14 +586,14 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
         </form>
       </div>
 
-      <!-- Tab: Comments -->
+      <!-- Tab 3: Comments -->
       <div class="is-hidden" data-tab-group="task-collab" data-tab-panel="comments">
         <div id="detail-comments-list" style="margin-bottom:14px;"></div>
-        <form data-api-form="/api/v1/tasks/{task_id}/comments" data-api-method="POST">
+        <form id="form-task-comment" data-no-reload="1" data-api-form="/api/v1/tasks/{task_id}/comments" data-api-method="POST">
           <input type="hidden" name="task_id" value="">
           <div class="form-group">
             <label class="form-label">Post Threaded Comment</label>
-            <textarea class="textarea" name="message" rows="3" required placeholder="Collaborate with Team Leader or VA..."></textarea>
+            <textarea class="textarea" name="message" rows="3" required placeholder="Collaborate with Team Leader or VA (use @Name to notify)..."></textarea>
           </div>
           <button type="submit" class="btn btn-primary">Post Comment</button>
         </form>

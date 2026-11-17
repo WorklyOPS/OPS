@@ -308,7 +308,7 @@ $stageMeta = [
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
       <div>
         <h3>30-Day Deliverable Velocity</h3>
-        <p class="muted" style="font-size:12px;">PostgreSQL aggregated deliverables due vs. completed.</p>
+        <p class="muted" style="font-size:12px;">Aggregated deliverables due vs. completed.</p>
       </div>
       <div style="display:flex;gap:12px;font-size:12px;">
         <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#E9D5FF;margin-right:4px;"></span>Total Due</span>

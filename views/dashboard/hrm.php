@@ -35,7 +35,7 @@ $rosterHealth = $data['va_roster_health'] ?? [];
   <div class="card card-hover">
     <div class="kpi-label">Extra Hours Entries</div>
     <div class="kpi-value"><?= count($data['extra_hours'] ?? []) ?></div>
-    <div class="kpi-sub">Logged in PostgreSQL</div>
+    <div class="kpi-sub">Verified overtime records</div>
   </div>
 </div>
 

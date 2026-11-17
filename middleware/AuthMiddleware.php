@@ -51,16 +51,33 @@ final class AuthMiddleware
             return null;
         }
 
-        $stmt = $db->prepare("
-            SELECT id, name, email, role, avatar_url, phone, bio, hire_date,
-                   hourly_rate, total_earnings, pto_balance_days, pto_taken_days,
-                   team_leader_id, is_active, is_suspended, suspended_reason
-            FROM users
-            WHERE id = :id
-            LIMIT 1
-        ");
-        $stmt->execute([':id' => $userId]);
-        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        $user = null;
+        try {
+            $stmt = $db->prepare("
+                SELECT u.id, u.name, u.email, COALESCE(ur.role_slug, u.role) AS role,
+                       u.avatar_url, u.phone, u.bio, u.hire_date,
+                       u.hourly_rate, u.total_earnings, u.pto_balance_days, u.pto_taken_days,
+                       u.team_leader_id, u.is_active, u.is_suspended, u.suspended_reason
+                FROM users u
+                LEFT JOIN user_roles ur ON u.id = ur.user_id
+                WHERE u.id = :id
+                ORDER BY ur.assigned_at DESC NULLS LAST
+                LIMIT 1
+            ");
+            $stmt->execute([':id' => $userId]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        } catch (Throwable) {
+            $stmt = $db->prepare("
+                SELECT id, name, email, role, avatar_url, phone, bio, hire_date,
+                       hourly_rate, total_earnings, pto_balance_days, pto_taken_days,
+                       team_leader_id, is_active, is_suspended, suspended_reason
+                FROM users
+                WHERE id = :id
+                LIMIT 1
+            ");
+            $stmt->execute([':id' => $userId]);
+            $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
 
         if (!$user || !$user['is_active'] || $user['is_suspended']) {
             session_unset();

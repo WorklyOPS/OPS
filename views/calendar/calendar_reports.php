@@ -572,10 +572,10 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
             </div>
           </div>
 
-          <!-- Client-Synced Live PostgreSQL Open Slot Scanner -->
+          <!-- Client-Synced Live Open Slot Scanner -->
           <div style="padding:12px;border-radius:10px;background:var(--bg);border:1px solid var(--border);margin-bottom:14px;">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">
-              <strong style="font-size:12.5px;">Live PostgreSQL Open Slot Scanner</strong>
+              <strong style="font-size:12.5px;">Live Open Slot Scanner</strong>
               <button type="button" id="btn-check-slots" class="btn btn-secondary btn-sm">Scan Open Slots</button>
             </div>
             <div id="focus-slots-preview" class="muted" style="font-size:12px;">

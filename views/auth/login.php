@@ -27,7 +27,7 @@
 
         <h1 style="font-size:28px;line-height:1.2;margin-bottom:12px;">Precision pod orchestration, SLA tracking &amp; client CRM.</h1>
         <p class="muted" style="font-size:13.5px;margin-bottom:22px;">
-          Unified operational workspace powered by PostgreSQL 16 and Native PHP 8 with strict role-scoped access control.
+          Unified operational workspace for agencies and Virtual Assistants with strict role-scoped access control.
         </p>
 
         <div class="auth-pillar">
@@ -56,13 +56,13 @@
           </span>
           <div>
             <strong style="font-size:13px;">Automated PTO &amp; SLA Triggers</strong>
-            <div class="muted" style="font-size:12px;">Instant Team Leader PostgreSQL notifications, status audit trails &amp; PDF executive reporting.</div>
+            <div class="muted" style="font-size:12px;">Instant Team Leader alerts, status audit trails &amp; PDF executive reporting.</div>
           </div>
         </div>
       </div>
 
       <div class="muted" style="font-size:11.5px;margin-top:24px;">
-        Production Workspace • Encrypted TLS Session &amp; PostgreSQL Audit Trail
+        Production Workspace • Encrypted TLS Session &amp; Audit Trail
       </div>
     </section>
 
@@ -112,7 +112,7 @@
       </form>
 
       <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);font-size:12px;" class="muted">
-        Staff accounts are provisioned exclusively by your System Administrator in PostgreSQL.
+        Staff accounts are provisioned exclusively by your System Administrator.
       </div>
     </section>
   </main>
