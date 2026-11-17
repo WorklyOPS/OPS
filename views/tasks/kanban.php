@@ -9,32 +9,159 @@ $columns = [
 
 $tasksByCol = array_fill_keys(array_keys($columns), []);
 $tasksMap = [];
+$swimlanes = [];
+
+foreach (($data['clients'] ?? []) as $c) {
+    $cid = (string) $c['id'];
+    $swimlanes[$cid] = [
+        'id'               => $cid,
+        'agency_name'      => (string) $c['agency_name'],
+        'contact_name'     => (string) ($c['name'] ?? ''),
+        'contract_status'  => (string) ($c['contract_status'] ?? 'active'),
+        'contracted_hours' => (float) ($c['contracted_hours_per_month'] ?? 0),
+        'consumed_hours'   => (float) ($c['consumed_hours_month'] ?? 0),
+        'total_tasks'      => 0,
+        'cols'             => array_fill_keys(array_keys($columns), []),
+    ];
+}
+
 foreach ($data['tasks'] as $t) {
     $st = isset($tasksByCol[$t['status']]) ? $t['status'] : 'todo';
     $tasksByCol[$st][] = $t;
     $tasksMap[$t['id']] = $t;
+
+    $cid = (string) ($t['client_id'] ?? 'unassigned');
+    if (!isset($swimlanes[$cid])) {
+        $swimlanes[$cid] = [
+            'id'               => $cid,
+            'agency_name'      => (string) ($t['client_name'] ?? 'Client Scope'),
+            'contact_name'     => (string) ($t['client_contact'] ?? ''),
+            'contract_status'  => (string) ($t['client_status'] ?? 'active'),
+            'contracted_hours' => (float) ($t['contracted_hours_per_month'] ?? 0),
+            'consumed_hours'   => (float) ($t['consumed_hours_month'] ?? 0),
+            'total_tasks'      => 0,
+            'cols'             => array_fill_keys(array_keys($columns), []),
+        ];
+    }
+    $swimlanes[$cid]['cols'][$st][] = $t;
+    $swimlanes[$cid]['total_tasks']++;
 }
+
 $totalCount = max(1, count($data['tasks']));
 $notesMap = $data['notes_by_task'] ?? [];
 $commentsMap = $data['comments_by_task'] ?? [];
 $extraHoursMap = $data['extra_hours_by_task'] ?? [];
+$dueToday = (int) ($data['due_today_count'] ?? 0);
+$overdue = (int) ($data['overdue_count'] ?? 0);
+$todayYmd = date('Y-m-d');
+
+$renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $todayYmd, $role): string {
+    $pBadge = match ($task['priority']) {
+        'high'  => 'badge-danger',
+        'low'   => 'badge-neutral',
+        default => 'badge-warn',
+    };
+    $noteCount = count($notesMap[$task['id']] ?? []);
+    $commentCount = count($commentsMap[$task['id']] ?? []);
+    $extraHrs = (float) ($task['extra_hours_logged'] ?? 0);
+    $vaInitials = strtoupper(substr((string) ($task['va_name'] ?? 'VA'), 0, 2));
+    $isOverdueCard = ($task['status'] !== 'completed' && (string) $task['deadline'] < $todayYmd);
+
+    $nextStage = null;
+    $nextLabel = null;
+    if ($task['status'] === 'backlog') {
+        $nextStage = 'todo';
+        $nextLabel = 'Queue';
+    } elseif ($task['status'] === 'todo') {
+        $nextStage = 'in_progress';
+        $nextLabel = 'Start';
+    } elseif ($task['status'] === 'in_progress') {
+        $nextStage = 'in_review';
+        $nextLabel = 'Submit';
+    } elseif ($task['status'] === 'in_review' && in_array($role, ['team_leader', 'admin'], true)) {
+        $nextStage = 'completed';
+        $nextLabel = 'Approve';
+    }
+
+    ob_start();
+    ?>
+    <article class="task-card"
+             draggable="true"
+             data-task-id="<?= SecurityHelper::e($task['id']) ?>"
+             data-client-id="<?= SecurityHelper::e($task['client_id']) ?>"
+             data-search="<?= SecurityHelper::e($task['title'] . ' ' . $task['client_name'] . ' ' . $task['va_name']) ?>">
+      <div class="task-card-top">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <span class="badge <?= $pBadge ?>"><?= SecurityHelper::e(ucfirst($task['priority'])) ?></span>
+          <?php if ($isOverdueCard): ?>
+            <span class="badge badge-danger">Overdue</span>
+          <?php endif; ?>
+        </div>
+        <button type="button" class="icon-chip-btn task-menu-btn" data-task-id="<?= SecurityHelper::e($task['id']) ?>" aria-label="Task context menu" title="Quick Actions">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        </button>
+      </div>
+
+      <div class="task-title" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="details">
+        <?= SecurityHelper::e($task['title']) ?>
+      </div>
+
+      <div class="meta-inline" style="justify-content:space-between;margin-top:8px;">
+        <strong style="color:var(--brand-secondary);font-size:12px;"><?= SecurityHelper::e($task['client_name']) ?></strong>
+        <span class="mono" style="font-size:11px;color:<?= $isOverdueCard ? 'var(--danger)' : 'var(--muted)' ?>;"><?= SecurityHelper::e($task['deadline']) ?></span>
+      </div>
+
+      <div class="task-card-actions">
+        <div style="display:flex;align-items:center;gap:2px;">
+          <button type="button" class="icon-chip-btn" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="notes" title="VA Notes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
+            <span><?= $noteCount ?></span>
+          </button>
+          <button type="button" class="icon-chip-btn" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="comments" title="Comments">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span><?= $commentCount ?></span>
+          </button>
+          <button type="button" class="icon-chip-btn" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="extrahours" title="Overtime Hours">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+            <span><?= $extraHrs > 0 ? '+' . number_format($extraHrs, 1) . 'h' : '0h' ?></span>
+          </button>
+        </div>
+
+        <div style="display:inline-flex;align-items:center;gap:6px;">
+          <?php if ($nextStage !== null): ?>
+            <button type="button"
+                    class="icon-chip-btn"
+                    style="background:var(--brand-tint);color:var(--brand-secondary);padding:3px 8px;"
+                    data-action-url="/api/v1/tasks/<?= SecurityHelper::e($task['id']) ?>/status"
+                    data-action-method="PATCH"
+                    data-action-body='<?= SecurityHelper::e(json_encode(['status' => $nextStage])) ?>'>
+              <?= SecurityHelper::e($nextLabel) ?> →
+            </button>
+          <?php endif; ?>
+          <span style="display:inline-flex;align-items:center;" title="<?= SecurityHelper::e($task['va_name']) ?>">
+            <?php if (!empty($task['va_avatar'])): ?>
+              <img src="<?= SecurityHelper::e($task['va_avatar']) ?>" alt="<?= SecurityHelper::e($task['va_name']) ?>" class="avatar avatar-sm">
+            <?php else: ?>
+              <span class="avatar avatar-sm"><?= SecurityHelper::e($vaInitials) ?></span>
+            <?php endif; ?>
+          </span>
+        </div>
+      </div>
+    </article>
+    <?php
+    return (string) ob_get_clean();
+};
 ?>
 
 <div class="page-header">
   <div>
     <h1>Weekly Task Organizer</h1>
-    <p class="muted">Drag cards across stages, right-click any card for instant actions, or click a card to open the right-side detail drawer.</p>
+    <p class="muted">Organize deliverables by Client Swimlanes or 5-Stage Kanban Board, right-click any card for instant actions, or click a card to open its dossier.</p>
   </div>
   <?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
     <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-task">+ New Deliverable</button>
   <?php endif; ?>
 </div>
-
-<?php
-  $dueToday = (int) ($data['due_today_count'] ?? 0);
-  $overdue = (int) ($data['overdue_count'] ?? 0);
-  $todayYmd = date('Y-m-d');
-?>
 
 <div class="card" style="margin-bottom:18px;padding:14px 18px;">
   <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;<?= $role === 'team_leader' ? 'margin-bottom:12px;' : '' ?>">
@@ -46,6 +173,8 @@ $extraHoursMap = $data['extra_hours_by_task'] ?? [];
         <span style="color:<?= $dueToday > 0 ? 'var(--brand-secondary)' : 'var(--muted)' ?>;">Due Today: <strong class="tabular-nums"><?= $dueToday ?></strong></span>
         <span>·</span>
         <span style="color:<?= $overdue > 0 ? 'var(--danger)' : 'var(--success)' ?>;">Overdue Alerts: <strong class="tabular-nums"><?= $overdue ?></strong></span>
+        <span>·</span>
+        <span>Client Swimlanes: <strong class="tabular-nums" style="color:var(--ink);"><?= count($swimlanes) ?></strong></span>
       </div>
     </div>
 
@@ -103,119 +232,104 @@ $extraHoursMap = $data['extra_hours_by_task'] ?? [];
           </select>
         </div>
       <?php endif; ?>
+
+      <div class="tab-strip" style="margin-bottom:0;">
+        <button type="button" class="tab-btn active" data-tab-group="kanban-layout" data-tab-btn="swimlanes">Client Swimlanes</button>
+        <button type="button" class="tab-btn" data-tab-group="kanban-layout" data-tab-btn="board">5-Column Board</button>
+      </div>
     </div>
 
-    <div style="min-width:250px;flex:0 1 320px;">
+    <div style="min-width:240px;flex:0 1 300px;">
       <input id="kanban-search" type="search" class="input" placeholder="Search tasks by title, client, or VA...">
     </div>
   </form>
 </div>
 
-<section id="workly-kanban" class="kanban-board">
-  <?php foreach ($columns as $colKey => $colTitle): ?>
-    <div class="kanban-col" data-status="<?= SecurityHelper::e($colKey) ?>">
-      <div class="kanban-col-head">
-        <span class="kanban-col-title"><?= SecurityHelper::e($colTitle) ?></span>
-        <span class="badge badge-neutral col-count tabular-nums"><?= count($tasksByCol[$colKey]) ?></span>
-      </div>
-
-      <div class="kanban-col-cards">
-        <?php foreach ($tasksByCol[$colKey] as $task): ?>
-          <?php
-            $pBadge = match ($task['priority']) {
-                'high'  => 'badge-danger',
-                'low'   => 'badge-neutral',
-                default => 'badge-warn',
-            };
-            $noteCount = count($notesMap[$task['id']] ?? []);
-            $commentCount = count($commentsMap[$task['id']] ?? []);
-            $extraHrs = (float) ($task['extra_hours_logged'] ?? 0);
-            $vaInitials = strtoupper(substr((string) ($task['va_name'] ?? 'VA'), 0, 2));
-            $isOverdueCard = ($task['status'] !== 'completed' && (string) $task['deadline'] < $todayYmd);
-
-            $nextStage = null;
-            $nextLabel = null;
-            if ($task['status'] === 'backlog') {
-                $nextStage = 'todo';
-                $nextLabel = 'Queue';
-            } elseif ($task['status'] === 'todo') {
-                $nextStage = 'in_progress';
-                $nextLabel = 'Start';
-            } elseif ($task['status'] === 'in_progress') {
-                $nextStage = 'in_review';
-                $nextLabel = 'Submit';
-            } elseif ($task['status'] === 'in_review' && in_array($role, ['team_leader', 'admin'], true)) {
-                $nextStage = 'completed';
-                $nextLabel = 'Approve';
-            }
-          ?>
-          <article class="task-card"
-                   draggable="true"
-                   data-task-id="<?= SecurityHelper::e($task['id']) ?>"
-                   data-search="<?= SecurityHelper::e($task['title'] . ' ' . $task['client_name'] . ' ' . $task['va_name']) ?>">
-            <div class="task-card-top">
-              <div style="display:flex;align-items:center;gap:6px;">
-                <span class="badge <?= $pBadge ?>"><?= SecurityHelper::e(ucfirst($task['priority'])) ?></span>
-                <?php if ($isOverdueCard): ?>
-                  <span class="badge badge-danger">Overdue</span>
-                <?php endif; ?>
-              </div>
-              <button type="button" class="icon-chip-btn task-menu-btn" data-task-id="<?= SecurityHelper::e($task['id']) ?>" aria-label="Task context menu" title="Quick Actions">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-              </button>
-            </div>
-
-            <div class="task-title" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="details">
-              <?= SecurityHelper::e($task['title']) ?>
-            </div>
-
-            <div class="meta-inline" style="justify-content:space-between;margin-top:8px;">
-              <strong style="color:var(--brand-secondary);font-size:12px;"><?= SecurityHelper::e($task['client_name']) ?></strong>
-              <span class="mono" style="font-size:11px;color:<?= $isOverdueCard ? 'var(--danger)' : 'var(--muted)' ?>;"><?= SecurityHelper::e($task['deadline']) ?></span>
-            </div>
-
-            <div class="task-card-actions">
-              <div style="display:flex;align-items:center;gap:2px;">
-                <button type="button" class="icon-chip-btn" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="notes" title="VA Notes">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
-                  <span><?= $noteCount ?></span>
-                </button>
-                <button type="button" class="icon-chip-btn" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="comments" title="Comments">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  <span><?= $commentCount ?></span>
-                </button>
-                <button type="button" class="icon-chip-btn" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="extrahours" title="Overtime Hours">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
-                  <span><?= $extraHrs > 0 ? '+' . number_format($extraHrs, 1) . 'h' : '0h' ?></span>
-                </button>
-              </div>
-
-              <div style="display:inline-flex;align-items:center;gap:6px;">
-                <?php if ($nextStage !== null): ?>
-                  <button type="button"
-                          class="icon-chip-btn"
-                          style="background:var(--brand-tint);color:var(--brand-secondary);padding:3px 8px;"
-                          data-action-url="/api/v1/tasks/<?= SecurityHelper::e($task['id']) ?>/status"
-                          data-action-method="PATCH"
-                          data-action-body='<?= SecurityHelper::e(json_encode(['status' => $nextStage])) ?>'>
-                    <?= SecurityHelper::e($nextLabel) ?> →
-                  </button>
-                <?php endif; ?>
-                <span style="display:inline-flex;align-items:center;" title="<?= SecurityHelper::e($task['va_name']) ?>">
-                  <?php if (!empty($task['va_avatar'])): ?>
-                    <img src="<?= SecurityHelper::e($task['va_avatar']) ?>" alt="<?= SecurityHelper::e($task['va_name']) ?>" class="avatar avatar-sm">
-                  <?php else: ?>
-                    <span class="avatar avatar-sm"><?= SecurityHelper::e($vaInitials) ?></span>
-                  <?php endif; ?>
-                </span>
-              </div>
-            </div>
-          </article>
-        <?php endforeach; ?>
-      </div>
+<!-- View 1: Horizontal Client / Project Swimlanes -->
+<div data-tab-group="kanban-layout" data-tab-panel="swimlanes">
+  <?php if (empty($swimlanes)): ?>
+    <div class="card">
+      <p class="muted">No client projects or tasks found in this date range.</p>
     </div>
-  <?php endforeach; ?>
-</section>
+  <?php else: ?>
+    <section id="workly-kanban-swimlanes" class="swimlane-stack kanban-surface">
+      <?php foreach ($swimlanes as $lane): ?>
+        <?php
+          $statusBadge = $lane['contract_status'] === 'active'
+              ? 'badge-success'
+              : ($lane['contract_status'] === 'pending' ? 'badge-warn' : 'badge-neutral');
+        ?>
+        <section class="swimlane-section" data-client-id="<?= SecurityHelper::e($lane['id']) ?>">
+          <header class="swimlane-header">
+            <button type="button" class="swimlane-toggle" data-toggle-swimlane aria-expanded="true">
+              <svg class="swimlane-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+              <div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                  <strong style="font-size:14.5px;"><?= SecurityHelper::e($lane['agency_name']) ?></strong>
+                  <span class="badge <?= $statusBadge ?>"><?= SecurityHelper::e(ucfirst($lane['contract_status'])) ?></span>
+                  <span class="badge badge-brand swimlane-count tabular-nums"><?= (int) $lane['total_tasks'] ?> tasks</span>
+                </div>
+                <div class="meta-inline" style="margin-top:2px;">
+                  <?php if ($lane['contact_name'] !== ''): ?>
+                    <span>Contact: <?= SecurityHelper::e($lane['contact_name']) ?></span>
+                  <?php endif; ?>
+                  <?php if ($lane['contracted_hours'] > 0): ?>
+                    <span>·</span>
+                    <span>Capacity: <strong class="tabular-nums"><?= number_format($lane['consumed_hours'], 1) ?>h</strong> / <?= number_format($lane['contracted_hours'], 0) ?>h</span>
+                  <?php endif; ?>
+                </div>
+              </div>
+            </button>
+
+            <?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
+              <button type="button" class="btn btn-secondary btn-sm" data-create-for-client="<?= SecurityHelper::e($lane['id']) ?>">+ Deliverable</button>
+            <?php endif; ?>
+          </header>
+
+          <div class="swimlane-body">
+            <div class="swimlane-grid">
+              <?php foreach ($columns as $colKey => $colTitle): ?>
+                <div class="swimlane-col" data-status="<?= SecurityHelper::e($colKey) ?>" data-client-id="<?= SecurityHelper::e($lane['id']) ?>">
+                  <div class="swimlane-col-head">
+                    <span><?= SecurityHelper::e($colTitle) ?></span>
+                    <span class="badge badge-neutral col-count tabular-nums"><?= count($lane['cols'][$colKey]) ?></span>
+                  </div>
+                  <div class="swimlane-col-cards">
+                    <?php foreach ($lane['cols'][$colKey] as $task): ?>
+                      <?= $renderTaskCard($task) ?>
+                    <?php endforeach; ?>
+                  </div>
+                </div>
+              <?php endforeach; ?>
+            </div>
+          </div>
+        </section>
+      <?php endforeach; ?>
+    </section>
+  <?php endif; ?>
+</div>
+
+<!-- View 2: Unified 5-Column Board -->
+<div class="is-hidden" data-tab-group="kanban-layout" data-tab-panel="board">
+  <section id="workly-kanban" class="kanban-board kanban-surface">
+    <?php foreach ($columns as $colKey => $colTitle): ?>
+      <div class="kanban-col" data-status="<?= SecurityHelper::e($colKey) ?>">
+        <div class="kanban-col-head">
+          <span class="kanban-col-title"><?= SecurityHelper::e($colTitle) ?></span>
+          <span class="badge badge-neutral col-count tabular-nums"><?= count($tasksByCol[$colKey]) ?></span>
+        </div>
+
+        <div class="kanban-col-cards">
+          <?php foreach ($tasksByCol[$colKey] as $task): ?>
+            <?= $renderTaskCard($task) ?>
+          <?php endforeach; ?>
+        </div>
+      </div>
+    <?php endforeach; ?>
+  </section>
+</div>
 
 <!-- Floating Right-Click Context Menu -->
 <div id="kanban-context-menu" class="context-menu is-hidden" role="menu">

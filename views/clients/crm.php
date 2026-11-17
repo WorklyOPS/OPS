@@ -78,10 +78,17 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
       ?>
       <article class="card card-hover">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px;">
-          <div>
-            <h3 style="font-size:17px;"><?= SecurityHelper::e($cl['agency_name']) ?></h3>
-            <div class="muted" style="font-size:12.5px;">
-              <?= SecurityHelper::e($cl['name']) ?> • <?= SecurityHelper::e($cl['email']) ?>
+          <div style="display:flex;align-items:center;gap:11px;min-width:0;">
+            <?php if (!empty($cl['avatar_url'])): ?>
+              <img src="<?= SecurityHelper::e($cl['avatar_url']) ?>" alt="<?= SecurityHelper::e($cl['agency_name']) ?>" class="avatar">
+            <?php else: ?>
+              <span class="avatar"><?= SecurityHelper::e(strtoupper(substr((string) $cl['agency_name'], 0, 2))) ?></span>
+            <?php endif; ?>
+            <div style="min-width:0;">
+              <h3 style="font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= SecurityHelper::e($cl['agency_name']) ?></h3>
+              <div class="muted" style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                <?= SecurityHelper::e($cl['name']) ?> • <?= SecurityHelper::e($cl['email']) ?>
+              </div>
             </div>
           </div>
           <span class="badge <?= $cl['contract_status'] === 'active' ? 'badge-success' : ($cl['contract_status'] === 'pending' ? 'badge-warn' : 'badge-danger') ?>">
@@ -216,15 +223,24 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
           <button type="submit" class="btn btn-primary">Save Client Profile</button>
         </form>
 
-        <form id="form-upload-contract" data-api-form="/api/v1/uploads/contract" data-api-method="POST" enctype="multipart/form-data" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;margin-bottom:20px;">
+        <form id="form-upload-contract" data-api-form="/api/v1/uploads/contract" data-api-method="POST" enctype="multipart/form-data" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;margin-bottom:14px;">
           <input type="hidden" name="client_id" value="">
           <label class="form-label" style="display:block;margin-bottom:6px;">Upload / Replace Signed Contract (.PDF max 15MB)</label>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
             <input class="input" type="file" name="contract_pdf" accept="application/pdf" required style="flex:1;padding:6px;">
-            <button type="submit" class="btn btn-secondary btn-sm">Upload PDF</button>
+          <button type="submit" class="btn btn-secondary btn-sm">Upload PDF</button>
           </div>
         </form>
       <?php endif; ?>
+
+      <form id="form-upload-client-avatar" data-api-form="/api/v1/uploads/client-avatar" data-api-method="POST" enctype="multipart/form-data" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;margin-bottom:20px;">
+        <input type="hidden" name="client_id" value="">
+        <label class="form-label" style="display:block;margin-bottom:6px;">Upload Client Logo / Avatar (JPG, PNG, WEBP max 5MB)</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="flex:1;padding:6px;">
+          <button type="submit" class="btn btn-secondary btn-sm">Upload Avatar</button>
+        </div>
+      </form>
 
       <div style="border-top:1px solid var(--border);padding-top:16px;">
         <h4 style="margin-bottom:10px;">Activity Stream</h4>

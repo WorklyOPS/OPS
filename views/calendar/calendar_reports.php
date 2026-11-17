@@ -4,20 +4,34 @@ $firstDay = new DateTimeImmutable($calMonth . '-01');
 $monthEndDay = $firstDay->modify('last day of this month');
 $daysInMonth = (int) $firstDay->format('t');
 $startDow = (int) $firstDay->format('N'); // 1 (Mon) to 7 (Sun)
+$todayYmd = date('Y-m-d');
 
 $eventsByDate = [];
 foreach ($data['meetings'] as $m) {
     $dKey = substr((string) $m['start_time'], 0, 10);
+    $mType = (string) ($m['meeting_type'] ?? 'team_sync');
+    $clientSuffix = !empty($m['client_name']) ? ' · ' . $m['client_name'] : '';
+    $canModify = in_array($role, ['admin', 'team_leader'], true)
+        || (string) $m['va_id'] === (string) $user['id']
+        || (string) ($m['created_by_tl_id'] ?? '') === (string) $user['id'];
+
     $eventsByDate[$dKey][] = [
-        'type'  => 'meeting',
-        'label' => substr((string) $m['start_time'], 11, 5) . ' ' . $m['title'],
+        'id'        => (string) $m['id'],
+        'type'      => $mType,
+        'title'     => (string) $m['title'],
+        'label'     => substr((string) $m['start_time'], 11, 5) . ' ' . $m['title'],
+        'tooltip'   => substr((string) $m['start_time'], 11, 5) . '–' . substr((string) $m['end_time'], 11, 5) . ' ' . $m['title'] . $clientSuffix,
+        'draggable' => $canModify,
     ];
 }
 foreach ($data['calendar_tasks'] as $ct) {
     $dKey = (string) $ct['deadline'];
     $eventsByDate[$dKey][] = [
-        'type'  => 'task',
-        'label' => 'Due: ' . $ct['title'],
+        'id'        => '',
+        'type'      => 'task',
+        'label'     => 'Due: ' . $ct['title'],
+        'tooltip'   => 'Deliverable Deadline: ' . $ct['title'],
+        'draggable' => false,
     ];
 }
 foreach (($data['calendar_pto'] ?? []) as $pto) {
@@ -28,8 +42,11 @@ foreach (($data['calendar_pto'] ?? []) as $pto) {
         $limit = $pEnd > $monthEndDay ? $monthEndDay : $pEnd;
         while ($cur <= $limit) {
             $eventsByDate[$cur->format('Y-m-d')][] = [
-                'type'  => 'pto',
-                'label' => 'PTO: ' . $pto['va_name'],
+                'id'        => '',
+                'type'      => 'pto',
+                'label'     => 'PTO: ' . $pto['va_name'],
+                'tooltip'   => 'Approved PTO Leave: ' . $pto['va_name'],
+                'draggable' => false,
             ];
             $cur = $cur->modify('+1 day');
         }
@@ -97,9 +114,12 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
 <div class="page-header no-print">
   <div>
     <h1>Calendar &amp; Executive SLA Reports</h1>
-    <p class="muted">Role-scoped calendar milestones, approved PTO blocks, and analytical date-range PDF / CSV SLA reports.</p>
+    <p class="muted">Drag focus templates onto dates, sync availability across CRM clients, reschedule blocks in place, and export executive SLA reports.</p>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
+      <button type="button" class="btn btn-secondary" data-open-drawer="drawer-focus-block">+ Focus / Availability</button>
+    <?php endif; ?>
     <?php if (in_array($role, ['team_leader', 'admin'], true)): ?>
       <button type="button" class="btn btn-secondary" data-open-drawer="drawer-schedule-meeting">+ Schedule Meeting</button>
     <?php endif; ?>
@@ -112,11 +132,11 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
 </div>
 
 <div class="tab-strip no-print">
-  <button type="button" class="tab-btn <?= $defaultTab === 'calendar' ? 'active' : '' ?>" data-tab-group="cal-rep" data-tab-btn="calendar">Monthly Schedule &amp; PTO</button>
+  <button type="button" class="tab-btn <?= $defaultTab === 'calendar' ? 'active' : '' ?>" data-tab-group="cal-rep" data-tab-btn="calendar">Focus Scheduler &amp; Calendar</button>
   <button type="button" class="tab-btn <?= $defaultTab === 'reports' ? 'active' : '' ?>" data-tab-group="cal-rep" data-tab-btn="reports">Executive SLA Analytics</button>
 </div>
 
-<!-- Tab 1: Private Role-Scoped Calendar -->
+<!-- Tab 1: Intelligent Drag-and-Drop Scheduler & Monthly Calendar -->
 <div class="card no-print <?= $defaultTab === 'calendar' ? '' : 'is-hidden' ?>" data-tab-group="cal-rep" data-tab-panel="calendar" style="margin-bottom:24px;">
   <form method="GET" action="/calendar-reports" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
     <input type="hidden" name="start_date" value="<?= SecurityHelper::e($data['start_date']) ?>">
@@ -124,8 +144,8 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
     <input type="hidden" name="rep_va" value="<?= SecurityHelper::e($selectedRepVa) ?>">
     <input type="hidden" name="tab" value="calendar">
     <div>
-      <h3><?= SecurityHelper::e($firstDay->format('F Y')) ?> Schedule</h3>
-      <span class="muted" style="font-size:12px;">Showing meetings, deliverable milestones &amp; approved PTO leave blocks.</span>
+      <h3><?= SecurityHelper::e($firstDay->format('F Y')) ?> Intelligent Scheduler</h3>
+      <span class="muted" style="font-size:12px;">Drag templates or existing blocks across dates for conflict-checked smart slot placement. Click any day to inspect open hours.</span>
     </div>
 
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
@@ -143,6 +163,85 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
     </div>
   </form>
 
+  <?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
+    <!-- Draggable Focus & Client Availability Dock -->
+    <div class="scheduler-dock">
+      <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
+        <span style="font-size:12px;font-weight:700;color:var(--brand-secondary);margin-right:4px;">Drag to Schedule:</span>
+        <div class="focus-template-chip"
+             draggable="true"
+             data-focus-template
+             data-title="Deep Work Focus Block"
+             data-type="focus_block"
+             data-duration="120">
+          Deep Focus (2h)
+        </div>
+        <div class="focus-template-chip"
+             draggable="true"
+             data-focus-template
+             data-title="Focus Execution Sprint"
+             data-type="focus_block"
+             data-duration="60">
+          Focus Sprint (1h)
+        </div>
+        <div class="focus-template-chip"
+             draggable="true"
+             data-focus-template
+             data-title="CRM Client Sync Window"
+             data-type="availability_window"
+             data-duration="60">
+          Client Availability (1h)
+        </div>
+        <div class="focus-template-chip"
+             draggable="true"
+             data-focus-template
+             data-title="Client Progress Check-In"
+             data-type="client_meeting"
+             data-duration="30">
+          Client Check-In (30m)
+        </div>
+      </div>
+
+      <button type="button" class="btn btn-primary btn-sm" data-open-drawer="drawer-focus-block">+ Custom Time Block</button>
+    </div>
+
+    <?php if (!empty($data['clients'])): ?>
+      <div style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <strong style="font-size:13px;color:var(--ink);">CRM-Linked Clients — Availability Sync</strong>
+          <span class="muted" style="font-size:11.5px;">Publish open meeting windows linked directly to each client retainer</span>
+        </div>
+        <div class="crm-sync-grid">
+          <?php foreach ($data['clients'] as $cl): ?>
+            <?php
+              $cConsumed = (float) ($cl['consumed_hours_month'] ?? 0);
+              $cContracted = (float) ($cl['contracted_hours_per_month'] ?? 40);
+            ?>
+            <div class="crm-sync-card">
+              <div>
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+                  <strong style="font-size:13px;color:var(--ink);"><?= SecurityHelper::e($cl['agency_name']) ?></strong>
+                  <span class="badge <?= ($cl['contract_status'] ?? 'active') === 'active' ? 'badge-success' : 'badge-neutral' ?>">
+                    <?= SecurityHelper::e(ucfirst((string) ($cl['contract_status'] ?? 'active'))) ?>
+                  </span>
+                </div>
+                <div class="muted" style="font-size:11.5px;margin-top:3px;">
+                  <?= SecurityHelper::e($cl['name'] ?? '') ?> · <span class="tabular-nums"><?= number_format($cConsumed, 1) ?>h / <?= number_format($cContracted, 0) ?>h</span>
+                </div>
+              </div>
+              <button type="button"
+                      class="btn btn-secondary btn-sm"
+                      data-sync-client="<?= SecurityHelper::e($cl['id']) ?>"
+                      data-sync-client-name="<?= SecurityHelper::e($cl['agency_name']) ?>">
+                Sync Client Window
+              </button>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      </div>
+    <?php endif; ?>
+  <?php endif; ?>
+
   <div class="calendar-grid">
     <?php foreach (['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as $dow): ?>
       <div class="cal-dow"><?= $dow ?></div>
@@ -153,17 +252,36 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
     <?php endfor; ?>
 
     <?php for ($day = 1; $day <= $daysInMonth; $day++): ?>
-      <?php $dateStr = $calMonth . '-' . str_pad((string) $day, 2, '0', STR_PAD_LEFT); ?>
-      <div class="cal-cell">
+      <?php
+        $dateStr = $calMonth . '-' . str_pad((string) $day, 2, '0', STR_PAD_LEFT);
+        $isToday = $dateStr === $todayYmd;
+      ?>
+      <div class="cal-cell<?= $isToday ? ' is-today' : '' ?>" data-cal-date="<?= SecurityHelper::e($dateStr) ?>">
         <div class="cal-day-num"><?= $day ?></div>
         <?php foreach (($eventsByDate[$dateStr] ?? []) as $ev): ?>
           <?php
-            $chipClass = $ev['type'] === 'task'
-                ? 'task-chip'
-                : ($ev['type'] === 'pto' ? 'pto-chip' : '');
+            $evType = (string) ($ev['type'] ?? 'team_sync');
+            $chipClass = match ($evType) {
+                'task'                => 'task-chip',
+                'pto'                 => 'pto-chip',
+                'focus_block'         => 'focus-chip',
+                'availability_window' => 'avail-chip',
+                default               => '',
+            };
           ?>
-          <div class="cal-event-chip <?= $chipClass ?>" title="<?= SecurityHelper::e($ev['label']) ?>">
-            <?= SecurityHelper::e($ev['label']) ?>
+          <div class="cal-event-chip <?= $chipClass ?>"
+               <?= !empty($ev['draggable']) ? 'draggable="true"' : '' ?>
+               <?= !empty($ev['id']) ? 'data-meeting-id="' . SecurityHelper::e($ev['id']) . '"' : '' ?>
+               data-meeting-type="<?= SecurityHelper::e($evType) ?>"
+               title="<?= SecurityHelper::e($ev['tooltip'] ?? $ev['label']) ?>">
+            <span class="cal-chip-label"><?= SecurityHelper::e($ev['label']) ?></span>
+            <?php if (!empty($ev['draggable']) && !empty($ev['id'])): ?>
+              <button type="button"
+                      class="cal-chip-del"
+                      data-delete-meeting="<?= SecurityHelper::e($ev['id']) ?>"
+                      title="Remove scheduled block"
+                      aria-label="Remove scheduled block">&times;</button>
+            <?php endif; ?>
           </div>
         <?php endforeach; ?>
       </div>
@@ -461,6 +579,94 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
     </div>
   <?php endif; ?>
 </div>
+
+<?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
+  <!-- Right-Side Drawer: Focus Time Block & CRM Client Availability Sync -->
+  <div id="drawer-focus-block" class="drawer-backdrop is-hidden">
+    <aside class="drawer-panel" role="dialog" aria-label="Schedule Focus Time or Client Availability">
+      <div class="drawer-head">
+        <div>
+          <h3>Focus Time &amp; Client Availability</h3>
+          <div class="muted" style="font-size:12px;">Reserve distraction-free deep work blocks or publish open slots to CRM-linked clients.</div>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
+      </div>
+      <div class="drawer-body">
+        <form id="form-focus-block" data-api-form="/api/v1/meetings" data-api-method="POST">
+          <div class="form-group">
+            <label class="form-label">Block / Availability Title</label>
+            <input class="input" id="focus-title" name="title" required placeholder="e.g. Deep Work: Client Funnel Audit">
+          </div>
+
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Schedule Type</label>
+              <select class="select" id="focus-meeting-type" name="meeting_type" required>
+                <option value="focus_block">Deep Focus Time Block</option>
+                <option value="availability_window">CRM Client Availability Window</option>
+                <option value="client_meeting">Client Sync Call</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">CRM Client Link (Optional)</label>
+              <select class="select" id="focus-client-id" name="client_id">
+                <option value="">Personal / Internal Focus</option>
+                <?php foreach (($data['clients'] ?? []) as $c): ?>
+                  <option value="<?= SecurityHelper::e($c['id']) ?>"><?= SecurityHelper::e($c['agency_name']) ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+          </div>
+
+          <?php if ($role !== 'va' && !empty($data['vas'])): ?>
+            <div class="form-group">
+              <label class="form-label">Staff Member</label>
+              <select class="select" id="focus-va-id" name="va_id">
+                <option value="<?= SecurityHelper::e($user['id']) ?>">Myself (<?= SecurityHelper::e($user['name']) ?>)</option>
+                <?php foreach ($data['vas'] as $v): ?>
+                  <option value="<?= SecurityHelper::e($v['id']) ?>"><?= SecurityHelper::e($v['name']) ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+          <?php else: ?>
+            <input type="hidden" id="focus-va-id" name="va_id" value="<?= SecurityHelper::e($user['id']) ?>">
+          <?php endif; ?>
+
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Start Time</label>
+              <input class="input" id="focus-start-time" type="datetime-local" name="start_time" value="<?= date('Y-m-d') ?>T09:00" required>
+            </div>
+            <div class="form-group">
+              <label class="form-label">End Time</label>
+              <input class="input" id="focus-end-time" type="datetime-local" name="end_time" value="<?= date('Y-m-d') ?>T11:00" required>
+            </div>
+          </div>
+
+          <div style="padding:12px;border-radius:10px;background:var(--bg);border:1px solid var(--border);margin-bottom:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">
+              <strong style="font-size:12.5px;">Live PostgreSQL Open Slot Scanner</strong>
+              <button type="button" id="btn-check-slots" class="btn btn-secondary btn-sm">Scan Open Slots</button>
+            </div>
+            <div id="focus-slots-preview" class="muted" style="font-size:12px;">
+              Click Scan Open Slots to inspect conflict-free 1h windows for the selected date.
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Focus Objective / Client Agenda (Optional)</label>
+            <textarea class="textarea" name="notes" rows="2" placeholder="Deliverable milestone or client sync agenda..."></textarea>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
+            <button type="submit" class="btn btn-primary">Save to Calendar</button>
+          </div>
+        </form>
+      </div>
+    </aside>
+  </div>
+<?php endif; ?>
 
 <?php if (in_array($role, ['team_leader', 'admin'], true)): ?>
   <div id="drawer-schedule-meeting" class="drawer-backdrop is-hidden">

@@ -172,7 +172,9 @@ final class PageController
         $uid = $user['id'];
 
         $sql = "
-            SELECT t.*, u.name AS va_name, u.avatar_url AS va_avatar, c.agency_name AS client_name
+            SELECT t.*, u.name AS va_name, u.avatar_url AS va_avatar,
+                   c.agency_name AS client_name, c.name AS client_contact,
+                   c.contract_status AS client_status, c.contracted_hours_per_month, c.consumed_hours_month
             FROM tasks t
             JOIN users u ON t.assigned_va_id = u.id
             JOIN clients c ON t.client_id = c.id
@@ -197,7 +199,7 @@ final class PageController
             $params[':va_filter'] = $selectedVaFilter;
         }
 
-        $sql .= ' ORDER BY t.deadline ASC, t.created_at DESC';
+        $sql .= ' ORDER BY c.agency_name ASC, t.deadline ASC, t.created_at DESC';
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
         $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -235,15 +237,15 @@ final class PageController
             }
         }
 
-        // Clients for task creation dropdown
+        // Clients for task creation dropdown & horizontal swimlanes
         if ($role === 'va') {
-            $clStmt = $this->db->prepare('SELECT id, agency_name FROM clients WHERE focus_va_id = :va ORDER BY agency_name ASC');
+            $clStmt = $this->db->prepare('SELECT id, agency_name, name, contract_status, contracted_hours_per_month, consumed_hours_month FROM clients WHERE focus_va_id = :va ORDER BY agency_name ASC');
             $clStmt->execute([':va' => $uid]);
         } elseif ($role === 'team_leader') {
-            $clStmt = $this->db->prepare('SELECT id, agency_name FROM clients WHERE team_leader_id = :tl ORDER BY agency_name ASC');
+            $clStmt = $this->db->prepare('SELECT id, agency_name, name, contract_status, contracted_hours_per_month, consumed_hours_month FROM clients WHERE team_leader_id = :tl ORDER BY agency_name ASC');
             $clStmt->execute([':tl' => $uid]);
         } else {
-            $clStmt = $this->db->query('SELECT id, agency_name FROM clients ORDER BY agency_name ASC');
+            $clStmt = $this->db->query('SELECT id, agency_name, name, contract_status, contracted_hours_per_month, consumed_hours_month FROM clients ORDER BY agency_name ASC');
         }
         $clients = $clStmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -806,16 +808,20 @@ final class PageController
         $vas = [];
         $clients = [];
         $staffDirectory = [];
-        if ($role === 'team_leader') {
+        if ($role === 'va') {
+            $cs = $this->db->prepare('SELECT id, agency_name, name, contracted_hours_per_month, consumed_hours_month, contract_status FROM clients WHERE focus_va_id = :va ORDER BY agency_name ASC');
+            $cs->execute([':va' => $uid]);
+            $clients = $cs->fetchAll(PDO::FETCH_ASSOC);
+        } elseif ($role === 'team_leader') {
             $vs = $this->db->prepare("SELECT id, name, email FROM users WHERE role = 'va' AND is_active = TRUE AND team_leader_id = :tl ORDER BY name ASC");
             $vs->execute([':tl' => $uid]);
             $vas = $vs->fetchAll(PDO::FETCH_ASSOC);
-            $cs = $this->db->prepare('SELECT id, agency_name FROM clients WHERE team_leader_id = :tl ORDER BY agency_name ASC');
+            $cs = $this->db->prepare('SELECT id, agency_name, name, contracted_hours_per_month, consumed_hours_month, contract_status FROM clients WHERE team_leader_id = :tl ORDER BY agency_name ASC');
             $cs->execute([':tl' => $uid]);
             $clients = $cs->fetchAll(PDO::FETCH_ASSOC);
-        } elseif ($role !== 'va') {
+        } else {
             $vas = $this->db->query("SELECT id, name, email FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
-            $clients = $this->db->query('SELECT id, agency_name FROM clients ORDER BY agency_name ASC')->fetchAll(PDO::FETCH_ASSOC);
+            $clients = $this->db->query('SELECT id, agency_name, name, contracted_hours_per_month, consumed_hours_month, contract_status FROM clients ORDER BY agency_name ASC')->fetchAll(PDO::FETCH_ASSOC);
             if ($role === 'admin') {
                 $staffDirectory = $this->db->query("SELECT id, name, role FROM users WHERE is_active = TRUE ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
             }

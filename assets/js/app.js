@@ -1,8 +1,8 @@
 /* ==========================================================================
    Workly Platform — Production Client Orchestrator (Vanilla JS, Zero TS)
-   Full-Width Choreographed UX: Staged Section Skeletons, Entry/Exit Motion,
-   Kanban Right-Click + Drag & Drop, Command Palette, Interactive SVG Charts,
-   Right-Side Drawers, CSV Exports, SVG CAPTCHA Refresh & CSRF API Fetch.
+   Global Skeleton & Progress Coordinator, Hardened JSON Fetch, Swimlanes +
+   Kanban Drag & Drop, Intelligent Calendar Scheduler, Right-Side Drawers,
+   Command Palette, Interactive SVG Charts, CSV Exports & SVG CAPTCHA.
    ========================================================================== */
 
 (function () {
@@ -15,6 +15,66 @@
   const EYE_OPEN_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
   const EYE_OFF_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-6.5 0-10-7-10-7a21.78 21.78 0 0 1 5.06-5.94"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c6.5 0 10 7 10 7a21.78 21.78 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
 
+  // ------------------------------------------------------------------------
+  // Global Loading State Coordinator (Progress Bar + Module Skeleton Screens)
+  // ------------------------------------------------------------------------
+  const WorklyLoader = (function () {
+    let activeRequests = 0;
+    let hideTimer = null;
+
+    function getBar() {
+      return document.getElementById('workly-global-progress');
+    }
+
+    function start() {
+      activeRequests++;
+      if (hideTimer) {
+        window.clearTimeout(hideTimer);
+        hideTimer = null;
+      }
+      const bar = getBar();
+      if (!bar) return;
+      bar.classList.add('is-active');
+      bar.style.width = '68%';
+    }
+
+    function done() {
+      activeRequests = Math.max(0, activeRequests - 1);
+      if (activeRequests > 0) return;
+      const bar = getBar();
+      if (!bar) return;
+      bar.style.width = '100%';
+      hideTimer = window.setTimeout(() => {
+        bar.classList.remove('is-active');
+        bar.style.width = '0%';
+      }, 220);
+    }
+
+    function showSkeleton() {
+      start();
+      const skel = document.getElementById('workly-skeleton');
+      const content = document.getElementById('workly-view-content');
+      if (skel && content) {
+        content.classList.add('is-hidden');
+        skel.classList.remove('is-hidden', 'is-leaving');
+      }
+    }
+
+    function revealContent() {
+      const skel = document.getElementById('workly-skeleton');
+      const content = document.getElementById('workly-view-content');
+      if (!skel || !content) return;
+      skel.classList.add('is-leaving');
+      window.setTimeout(() => {
+        skel.classList.add('is-hidden');
+        skel.classList.remove('is-leaving');
+        content.classList.remove('is-hidden');
+      }, reducedMotion ? 0 : 140);
+    }
+
+    return { start, done, showSkeleton, revealContent };
+  })();
+
   window.addEventListener('DOMContentLoaded', () => {
     initSkeletonStaging();
     initAuthControls();
@@ -24,6 +84,7 @@
     initCommandPalette();
     initChartTooltipsAndToggles();
     initKanbanBoard();
+    initCalendarScheduler();
     initClientDossiers();
     initAdminEditDrawers();
     initHrmPtoRejection();
@@ -33,6 +94,13 @@
     initOnboardingTour();
   });
 
+  window.addEventListener('pageshow', (e) => {
+    if (e.persisted) {
+      WorklyLoader.done();
+      WorklyLoader.revealContent();
+    }
+  });
+
   // ------------------------------------------------------------------------
   // Staged Skeleton Loader (Visible Before Section Content Reveal & Navigation)
   // ------------------------------------------------------------------------
@@ -40,14 +108,9 @@
     const skel = document.getElementById('workly-skeleton');
     const content = document.getElementById('workly-view-content');
     if (skel && content) {
-      const settleMs = reducedMotion ? 10 : 230;
+      const settleMs = reducedMotion ? 10 : 210;
       window.setTimeout(() => {
-        skel.classList.add('is-leaving');
-        window.setTimeout(() => {
-          skel.classList.add('is-hidden');
-          skel.classList.remove('is-leaving');
-          content.classList.remove('is-hidden');
-        }, reducedMotion ? 0 : 140);
+        WorklyLoader.revealContent();
       }, settleMs);
 
       // Show matching skeleton immediately when navigating across workspace sections
@@ -56,8 +119,14 @@
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
           const href = link.getAttribute('href');
           if (!href || href.startsWith('#')) return;
-          content.classList.add('is-hidden');
-          skel.classList.remove('is-hidden', 'is-leaving');
+          WorklyLoader.showSkeleton();
+        });
+      });
+
+      // Trigger skeleton before GET filter submissions inside the workspace
+      document.querySelectorAll('.page-content form[method="GET"]').forEach((form) => {
+        form.addEventListener('submit', () => {
+          WorklyLoader.showSkeleton();
         });
       });
     }
@@ -90,7 +159,7 @@
   }
 
   // ------------------------------------------------------------------------
-  // Toast (Entry + Exit Choreography) & CSRF API Fetch Helper
+  // Toast (Entry + Exit Choreography) & Hardened CSRF API Fetch Helper
   // ------------------------------------------------------------------------
   function showToast(message, type) {
     const existing = document.querySelector('.toast');
@@ -102,27 +171,46 @@
     window.setTimeout(() => {
       el.classList.add('is-leaving');
       window.setTimeout(() => el.remove(), reducedMotion ? 0 : 210);
-    }, 3300);
+    }, 3400);
   }
 
   async function apiFetch(url, options) {
     const opts = options || {};
     const headers = Object.assign({
-      'X-CSRF-Token': CSRF_TOKEN
+      'X-CSRF-Token': CSRF_TOKEN,
+      'Accept': 'application/json'
     }, opts.headers || {});
 
     if (!(opts.body instanceof FormData) && !headers['Content-Type']) {
       headers['Content-Type'] = 'application/json';
     }
 
-    const res = await fetch(url, Object.assign({}, opts, { headers }));
-    const contentType = res.headers.get('content-type') || '';
-    const data = contentType.includes('application/json') ? await res.json() : await res.text();
-    if (!res.ok) {
-      const msg = (data && data.error) ? data.error : 'Request failed (' + res.status + ')';
-      throw new Error(msg);
+    WorklyLoader.start();
+    try {
+      const res = await fetch(url, Object.assign({}, opts, { headers }));
+      const rawText = await res.text();
+      let data = null;
+
+      if (rawText !== '') {
+        try {
+          data = JSON.parse(rawText);
+        } catch (_parseErr) {
+          const stripped = rawText.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+          const fallbackMsg = stripped
+            ? stripped.slice(0, 140)
+            : 'Unexpected non-JSON response from server (HTTP ' + res.status + ')';
+          throw new Error(fallbackMsg);
+        }
+      }
+
+      if (!res.ok) {
+        const msg = (data && data.error) ? data.error : 'Request failed (' + res.status + ')';
+        throw new Error(msg);
+      }
+      return data || {};
+    } finally {
+      WorklyLoader.done();
     }
-    return data;
   }
 
   function escapeHtml(str) {
@@ -276,6 +364,7 @@
       const drawer = btn.getAttribute('data-cmdk-drawer');
       closeCommandPalette();
       if (url) {
+        WorklyLoader.showSkeleton();
         window.location.href = url;
       } else if (drawer) {
         openDrawer(drawer);
@@ -295,7 +384,7 @@
   }
 
   // ------------------------------------------------------------------------
-  // Interactive SVG Chart Tooltips & Team Leader Bar Chart Mode Switcher
+  // Interactive SVG Chart Tooltips & Click Targets
   // ------------------------------------------------------------------------
   function initChartTooltipsAndToggles() {
     let tip = document.getElementById('workly-chart-tooltip');
@@ -321,6 +410,7 @@
       const href = el.getAttribute('data-chart-href');
       if (href) {
         el.addEventListener('click', () => {
+          WorklyLoader.showSkeleton();
           window.location.href = href;
         });
       }
@@ -328,7 +418,7 @@
   }
 
   // ------------------------------------------------------------------------
-  // Kanban Drag-and-Drop + Right-Click Context Menu + Right Detail Drawer
+  // Kanban Horizontal Swimlanes + 5-Column Board + Context Menu + Drawer
   // ------------------------------------------------------------------------
   let contextTaskId = null;
 
@@ -347,124 +437,210 @@
     }, 120);
   }
 
+  function updateBoardCounters(filterTerm) {
+    const hasFilter = Boolean(filterTerm && filterTerm.trim() !== '');
+    document.querySelectorAll('.kanban-col, .swimlane-col').forEach((col) => {
+      const cards = Array.from(col.querySelectorAll('.task-card'));
+      const visibleCount = cards.filter((c) => c.style.display !== 'none').length;
+      const badge = col.querySelector('.col-count');
+      if (badge) badge.textContent = String(visibleCount);
+    });
+
+    document.querySelectorAll('.swimlane-section').forEach((lane) => {
+      const cards = Array.from(lane.querySelectorAll('.task-card'));
+      const visibleCount = cards.filter((c) => c.style.display !== 'none').length;
+      const laneBadge = lane.querySelector('.swimlane-count');
+      if (laneBadge) laneBadge.textContent = visibleCount + (visibleCount === 1 ? ' task' : ' tasks');
+      lane.style.display = (hasFilter && visibleCount === 0) ? 'none' : '';
+    });
+  }
+
   function initKanbanBoard() {
-    const board = document.getElementById('workly-kanban');
-    if (!board) return;
+    const surfaces = Array.from(document.querySelectorAll('.kanban-surface'));
+    if (surfaces.length === 0) return;
 
     let draggedCard = null;
+    let activeSurface = null;
     const placeholder = document.createElement('div');
     placeholder.className = 'drop-placeholder';
 
-    // Real-time search filter
+    // Collapsible Swimlanes
+    document.querySelectorAll('[data-toggle-swimlane]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const lane = btn.closest('.swimlane-section');
+        if (!lane) return;
+        const collapsed = lane.classList.toggle('is-collapsed');
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      });
+    });
+
+    // Quick-add Deliverable directly inside a Client Swimlane
+    document.querySelectorAll('[data-create-for-client]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const cid = btn.getAttribute('data-create-for-client') || '';
+        const drawer = document.getElementById('drawer-create-task');
+        if (drawer && cid) {
+          const clSelect = drawer.querySelector('select[name="client_id"]');
+          if (clSelect) clSelect.value = cid;
+        }
+        openDrawer('drawer-create-task');
+      });
+    });
+
+    // Real-time search filter across Swimlanes and 5-Column Board
     const searchInput = document.getElementById('kanban-search');
     if (searchInput) {
       searchInput.addEventListener('input', () => {
         const term = searchInput.value.trim().toLowerCase();
-        board.querySelectorAll('.task-card').forEach((card) => {
-          const text = (card.getAttribute('data-search') || '').toLowerCase();
-          card.style.display = text.includes(term) ? '' : 'none';
+        surfaces.forEach((surface) => {
+          surface.querySelectorAll('.task-card').forEach((card) => {
+            const text = (card.getAttribute('data-search') || '').toLowerCase();
+            card.style.display = text.includes(term) ? '' : 'none';
+          });
         });
+        updateBoardCounters(term);
       });
     }
 
-    // Drag & Drop handlers with 3D lift + Squash-and-Stretch landing
-    board.querySelectorAll('.task-card').forEach((card) => {
-      card.addEventListener('dragstart', (e) => {
-        hideContextMenu();
-        draggedCard = card;
-        board.classList.add('is-dragging');
-        card.classList.add('dragging');
-        if (e.dataTransfer) {
-          e.dataTransfer.effectAllowed = 'move';
-          e.dataTransfer.setData('text/plain', card.getAttribute('data-task-id') || '');
-        }
-      });
-
-      card.addEventListener('dragend', () => {
-        board.classList.remove('is-dragging');
-        card.classList.remove('dragging');
-        if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
-        board.querySelectorAll('.kanban-col').forEach((c) => c.classList.remove('drag-over'));
-        draggedCard = null;
-      });
-
-      // Native Right-Click Context Menu
-      card.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        const tid = card.getAttribute('data-task-id');
-        if (!tid) return;
-        showContextMenuAt(tid, e.clientX, e.clientY);
-      });
-    });
-
-    board.querySelectorAll('.kanban-col').forEach((col) => {
-      const container = col.querySelector('.kanban-col-cards');
-      col.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        col.classList.add('drag-over');
-        if (container && draggedCard && !container.contains(placeholder)) {
-          container.appendChild(placeholder);
-        }
-      });
-
-      col.addEventListener('dragleave', (e) => {
-        if (!col.contains(e.relatedTarget)) {
-          col.classList.remove('drag-over');
-          if (container && container.contains(placeholder)) {
-            container.removeChild(placeholder);
+    // Bind DnD and right-click context menu on every card across surfaces
+    surfaces.forEach((surface) => {
+      surface.querySelectorAll('.task-card').forEach((card) => {
+        card.addEventListener('dragstart', (e) => {
+          hideContextMenu();
+          draggedCard = card;
+          activeSurface = surface;
+          surface.classList.add('is-dragging');
+          card.classList.add('dragging');
+          if (e.dataTransfer) {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', card.getAttribute('data-task-id') || '');
           }
-        }
+        });
+
+        card.addEventListener('dragend', () => {
+          surface.classList.remove('is-dragging');
+          card.classList.remove('dragging');
+          if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+          document.querySelectorAll('.kanban-col, .swimlane-col').forEach((c) => c.classList.remove('drag-over'));
+          draggedCard = null;
+          activeSurface = null;
+        });
+
+        card.addEventListener('contextmenu', (e) => {
+          e.preventDefault();
+          const tid = card.getAttribute('data-task-id');
+          if (!tid) return;
+          showContextMenuAt(tid, e.clientX, e.clientY);
+        });
       });
 
-      col.addEventListener('drop', async (e) => {
-        e.preventDefault();
-        col.classList.remove('drag-over');
-        board.classList.remove('is-dragging');
-        if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
-        if (!draggedCard || !container) return;
+      surface.querySelectorAll('.kanban-col, .swimlane-col').forEach((col) => {
+        const container = col.querySelector('.kanban-col-cards, .swimlane-col-cards');
 
-        const dropped = draggedCard;
-        const newStatus = col.getAttribute('data-status');
-        const oldCol = dropped.closest('.kanban-col');
-        const oldStatus = oldCol ? oldCol.getAttribute('data-status') : '';
-        const taskId = dropped.getAttribute('data-task-id');
+        col.addEventListener('dragover', (e) => {
+          if (!draggedCard || (activeSurface && !activeSurface.contains(col))) return;
+          e.preventDefault();
+          col.classList.add('drag-over');
+          if (container && !container.contains(placeholder)) {
+            container.appendChild(placeholder);
+          }
+        });
 
-        if (!newStatus || !taskId || newStatus === oldStatus) return;
-        container.appendChild(dropped);
-        dropped.classList.add('just-dropped');
-        window.setTimeout(() => dropped.classList.remove('just-dropped'), 360);
-        updateColumnCounters();
+        col.addEventListener('dragleave', (e) => {
+          if (!col.contains(e.relatedTarget)) {
+            col.classList.remove('drag-over');
+            if (container && container.contains(placeholder)) {
+              container.removeChild(placeholder);
+            }
+          }
+        });
 
-        try {
-          await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId) + '/status', {
-            method: 'PATCH',
-            body: JSON.stringify({ status: newStatus })
+        col.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          col.classList.remove('drag-over');
+          surface.classList.remove('is-dragging');
+          if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+          if (!draggedCard || !container || (activeSurface && !activeSurface.contains(col))) return;
+
+          const dropped = draggedCard;
+          const oldCol = dropped.closest('.kanban-col, .swimlane-col');
+          const oldStatus = oldCol ? (oldCol.getAttribute('data-status') || '') : '';
+          const oldClientId = oldCol ? (oldCol.getAttribute('data-client-id') || '') : (dropped.getAttribute('data-client-id') || '');
+          const newStatus = col.getAttribute('data-status') || '';
+          const newClientId = col.getAttribute('data-client-id') || '';
+          const taskId = dropped.getAttribute('data-task-id') || '';
+
+          const statusChanged = newStatus !== '' && newStatus !== oldStatus;
+          const clientChanged = newClientId !== '' && oldClientId !== '' && newClientId !== oldClientId;
+
+          if (!taskId || (!statusChanged && !clientChanged)) return;
+
+          container.appendChild(dropped);
+          dropped.classList.add('just-dropped');
+          window.setTimeout(() => dropped.classList.remove('just-dropped'), 360);
+          if (clientChanged) {
+            dropped.setAttribute('data-client-id', newClientId);
+          }
+
+          // Mirror card across sibling view container when status changes so tab switches stay synchronized
+          document.querySelectorAll('.task-card[data-task-id="' + taskId + '"]').forEach((twin) => {
+            if (twin === dropped) return;
+            const twinColParent = twin.closest('.kanban-surface');
+            if (!twinColParent) return;
+            let destSelector = '[data-status="' + newStatus + '"]';
+            if (twinColParent.id === 'workly-kanban-swimlanes') {
+              const targetCid = newClientId || twin.getAttribute('data-client-id') || oldClientId;
+              destSelector = '.swimlane-col[data-client-id="' + targetCid + '"][data-status="' + newStatus + '"]';
+            } else {
+              destSelector = '.kanban-col[data-status="' + newStatus + '"]';
+            }
+            const destCol = twinColParent.querySelector(destSelector);
+            const destCards = destCol ? destCol.querySelector('.kanban-col-cards, .swimlane-col-cards') : null;
+            if (destCards) destCards.appendChild(twin);
           });
-          showToast('Moved deliverable to ' + newStatus.replace('_', ' '), 'success');
-        } catch (err) {
-          showToast(err.message, 'error');
-          window.location.reload();
+
+          updateBoardCounters(searchInput ? searchInput.value : '');
+
+          try {
+            if (clientChanged) {
+              await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId), {
+                method: 'PATCH',
+                body: JSON.stringify({ status: newStatus, client_id: newClientId })
+              });
+              showToast('Moved deliverable to new client swimlane & stage', 'success');
+              window.setTimeout(() => window.location.reload(), 280);
+            } else {
+              await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId) + '/status', {
+                method: 'PATCH',
+                body: JSON.stringify({ status: newStatus })
+              });
+              showToast('Moved deliverable to ' + newStatus.replace('_', ' '), 'success');
+            }
+          } catch (err) {
+            showToast(err.message, 'error');
+            window.setTimeout(() => window.location.reload(), 380);
+          }
+        });
+      });
+
+      // Click delegation for 3-dot card menu and opening right-side detail drawer tabs
+      surface.addEventListener('click', (e) => {
+        const menuBtn = e.target.closest('.task-menu-btn');
+        if (menuBtn) {
+          e.stopPropagation();
+          const tid = menuBtn.getAttribute('data-task-id');
+          const rect = menuBtn.getBoundingClientRect();
+          if (tid) showContextMenuAt(tid, rect.left - 165, rect.bottom + 6);
+          return;
+        }
+
+        const tabTrigger = e.target.closest('[data-open-task]');
+        if (tabTrigger) {
+          const tid = tabTrigger.getAttribute('data-open-task');
+          const initialTab = tabTrigger.getAttribute('data-task-tab') || 'details';
+          openTaskDetailDrawer(tid, initialTab);
         }
       });
-    });
-
-    // Click delegation on cards (trigger drawer tabs or 3-dot menu)
-    board.addEventListener('click', (e) => {
-      const menuBtn = e.target.closest('.task-menu-btn');
-      if (menuBtn) {
-        e.stopPropagation();
-        const tid = menuBtn.getAttribute('data-task-id');
-        const rect = menuBtn.getBoundingClientRect();
-        if (tid) showContextMenuAt(tid, rect.left - 165, rect.bottom + 6);
-        return;
-      }
-
-      const tabTrigger = e.target.closest('[data-open-task]');
-      if (tabTrigger) {
-        const tid = tabTrigger.getAttribute('data-open-task');
-        const initialTab = tabTrigger.getAttribute('data-task-tab') || 'details';
-        openTaskDetailDrawer(tid, initialTab);
-      }
     });
 
     // Context Menu Actions
@@ -529,14 +705,6 @@
     const maxTop = window.innerHeight - 395;
     cm.style.left = Math.max(10, Math.min(x, maxLeft)) + 'px';
     cm.style.top = Math.max(10, Math.min(y, maxTop)) + 'px';
-  }
-
-  function updateColumnCounters() {
-    document.querySelectorAll('.kanban-col').forEach((col) => {
-      const cnt = col.querySelectorAll('.task-card').length;
-      const badge = col.querySelector('.col-count');
-      if (badge) badge.textContent = String(cnt);
-    });
   }
 
   function openTaskDetailDrawer(taskId, initialTab) {
@@ -622,6 +790,231 @@
   }
 
   // ------------------------------------------------------------------------
+  // Intelligent Drag-and-Drop Calendar Focus Scheduler & CRM Sync
+  // ------------------------------------------------------------------------
+  function initCalendarScheduler() {
+    const grid = document.querySelector('.calendar-grid');
+    if (!grid) return;
+
+    let dragState = null;
+
+    // 1. Draggable Quick-Block Focus / Client Availability Templates
+    document.querySelectorAll('[data-focus-template][draggable="true"]').forEach((chip) => {
+      chip.addEventListener('dragstart', (e) => {
+        dragState = {
+          kind: 'template',
+          title: chip.getAttribute('data-title') || 'Deep Focus Block',
+          meeting_type: chip.getAttribute('data-type') || 'focus_block',
+          duration_minutes: parseInt(chip.getAttribute('data-duration') || '60', 10) || 60
+        };
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'copy';
+          e.dataTransfer.setData('text/plain', dragState.title);
+        }
+      });
+
+      chip.addEventListener('dragend', () => {
+        dragState = null;
+        grid.querySelectorAll('.cal-cell').forEach((c) => c.classList.remove('cal-drag-over'));
+      });
+    });
+
+    // 2. Draggable Scheduled Meetings / Focus Blocks for Date Rescheduling
+    grid.querySelectorAll('.cal-event-chip[draggable="true"][data-meeting-id]').forEach((chip) => {
+      chip.addEventListener('dragstart', (e) => {
+        e.stopPropagation();
+        dragState = {
+          kind: 'event',
+          id: chip.getAttribute('data-meeting-id') || ''
+        };
+        if (e.dataTransfer) {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', dragState.id);
+        }
+      });
+
+      chip.addEventListener('dragend', () => {
+        dragState = null;
+        grid.querySelectorAll('.cal-cell').forEach((c) => c.classList.remove('cal-drag-over'));
+      });
+    });
+
+    // 3. Calendar Cell Drop Targets & Quick Slot Inspection
+    grid.querySelectorAll('.cal-cell[data-cal-date]').forEach((cell) => {
+      const targetDate = cell.getAttribute('data-cal-date');
+
+      cell.addEventListener('dragover', (e) => {
+        if (!dragState) return;
+        e.preventDefault();
+        cell.classList.add('cal-drag-over');
+      });
+
+      cell.addEventListener('dragleave', (e) => {
+        if (!cell.contains(e.relatedTarget)) {
+          cell.classList.remove('cal-drag-over');
+        }
+      });
+
+      cell.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        cell.classList.remove('cal-drag-over');
+        if (!dragState || !targetDate) return;
+
+        const payload = dragState;
+        dragState = null;
+
+        try {
+          if (payload.kind === 'template') {
+            const vaInput = document.getElementById('focus-va-id');
+            const body = {
+              title: payload.title,
+              meeting_type: payload.meeting_type,
+              duration_minutes: payload.duration_minutes,
+              target_date: targetDate,
+              auto_slot: true
+            };
+            if (vaInput && vaInput.value) {
+              body.va_id = vaInput.value;
+            }
+            const res = await apiFetch('/api/v1/meetings', {
+              method: 'POST',
+              body: JSON.stringify(body)
+            });
+            showToast('Scheduled ' + payload.title + ' on ' + (res.start_time || targetDate), 'success');
+            window.setTimeout(() => window.location.reload(), 320);
+          } else if (payload.kind === 'event' && payload.id) {
+            const res = await apiFetch('/api/v1/meetings/' + encodeURIComponent(payload.id) + '/reschedule', {
+              method: 'PATCH',
+              body: JSON.stringify({ target_date: targetDate })
+            });
+            showToast('Rescheduled to ' + (res.start_time || targetDate), 'success');
+            window.setTimeout(() => window.location.reload(), 320);
+          }
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+
+      cell.addEventListener('click', (e) => {
+        if (e.target.closest('.cal-event-chip') || e.target.closest('.cal-chip-del')) return;
+        const focusDrawer = document.getElementById('drawer-focus-block');
+        if (!focusDrawer || !targetDate) return;
+        const sInp = document.getElementById('focus-start-time');
+        const eInp = document.getElementById('focus-end-time');
+        if (sInp) sInp.value = targetDate + 'T09:00';
+        if (eInp) eInp.value = targetDate + 'T11:00';
+        openDrawer('drawer-focus-block');
+        loadOpenSlots(targetDate);
+      });
+    });
+
+    // 4. Delete Focus Block / Scheduled Event Chips
+    grid.addEventListener('click', async (e) => {
+      const delBtn = e.target.closest('.cal-chip-del[data-delete-meeting]');
+      if (!delBtn) return;
+      e.stopPropagation();
+      const mid = delBtn.getAttribute('data-delete-meeting');
+      if (!mid) return;
+      try {
+        delBtn.disabled = true;
+        await apiFetch('/api/v1/meetings/' + encodeURIComponent(mid), { method: 'DELETE' });
+        showToast('Removed calendar block', 'success');
+        window.setTimeout(() => window.location.reload(), 260);
+      } catch (err) {
+        showToast(err.message, 'error');
+        delBtn.disabled = false;
+      }
+    });
+
+    // 5. CRM Client Sync Strip Buttons
+    document.querySelectorAll('[data-sync-client]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const cid = btn.getAttribute('data-sync-client') || '';
+        const cname = btn.getAttribute('data-sync-client-name') || 'Client';
+        const typeSel = document.getElementById('focus-meeting-type');
+        const clSel = document.getElementById('focus-client-id');
+        const titleInp = document.getElementById('focus-title');
+        const sInp = document.getElementById('focus-start-time');
+        const eInp = document.getElementById('focus-end-time');
+
+        if (typeSel) typeSel.value = 'availability_window';
+        if (clSel && cid) clSel.value = cid;
+        if (titleInp) titleInp.value = 'Client Sync Availability — ' + cname;
+
+        const baseDate = sInp && sInp.value ? sInp.value.slice(0, 10) : new Date().toISOString().slice(0, 10);
+        if (sInp) sInp.value = baseDate + 'T10:00';
+        if (eInp) eInp.value = baseDate + 'T11:00';
+
+        openDrawer('drawer-focus-block');
+        loadOpenSlots(baseDate);
+      });
+    });
+
+    // 6. Live PostgreSQL Open Slot Scanner
+    const checkBtn = document.getElementById('btn-check-slots');
+    if (checkBtn) {
+      checkBtn.addEventListener('click', () => {
+        const sInp = document.getElementById('focus-start-time');
+        const dStr = sInp && sInp.value ? sInp.value.slice(0, 10) : new Date().toISOString().slice(0, 10);
+        loadOpenSlots(dStr);
+      });
+    }
+
+    async function loadOpenSlots(dateStr) {
+      const box = document.getElementById('focus-slots-preview');
+      if (!box) return;
+      const vaInput = document.getElementById('focus-va-id');
+      const vaQuery = vaInput && vaInput.value ? '&va_id=' + encodeURIComponent(vaInput.value) : '';
+      box.textContent = 'Scanning PostgreSQL calendar conflicts for ' + dateStr + '...';
+
+      try {
+        const res = await apiFetch('/api/v1/meetings/availability?date=' + encodeURIComponent(dateStr) + vaQuery, {
+          method: 'GET'
+        });
+        box.innerHTML = '';
+
+        if (res.on_pto) {
+          const warn = document.createElement('span');
+          warn.className = 'badge badge-danger';
+          warn.textContent = 'Approved PTO on ' + dateStr + ' (Scheduling blocked)';
+          box.appendChild(warn);
+          return;
+        }
+
+        const slots = Array.isArray(res.open_slots) ? res.open_slots : [];
+        if (slots.length === 0) {
+          box.textContent = 'No open 1-hour windows remain on ' + dateStr + '.';
+          return;
+        }
+
+        const wrap = document.createElement('div');
+        wrap.style.display = 'flex';
+        wrap.style.flexWrap = 'wrap';
+        wrap.style.gap = '6px';
+
+        slots.forEach((slotLabel) => {
+          const parts = slotLabel.split(' - ');
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'btn btn-secondary btn-sm';
+          btn.textContent = slotLabel;
+          btn.addEventListener('click', () => {
+            const sInp = document.getElementById('focus-start-time');
+            const eInp = document.getElementById('focus-end-time');
+            if (sInp && parts[0]) sInp.value = dateStr + 'T' + parts[0];
+            if (eInp && parts[1]) eInp.value = dateStr + 'T' + parts[1];
+            showToast('Applied slot ' + slotLabel, 'success');
+          });
+          wrap.appendChild(btn);
+        });
+        box.appendChild(wrap);
+      } catch (err) {
+        box.textContent = 'Could not scan slots: ' + err.message;
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------------
   // Client CRM Right Dossier Drawer & CSV Bulk Importer
   // ------------------------------------------------------------------------
   function initClientDossiers() {
@@ -658,6 +1051,10 @@
         const pdfForm = drawer.querySelector('#form-upload-contract');
         if (pdfForm) {
           pdfForm.querySelector('[name="client_id"]').value = cid;
+        }
+        const avatarForm = drawer.querySelector('#form-upload-client-avatar');
+        if (avatarForm) {
+          avatarForm.querySelector('[name="client_id"]').value = cid;
         }
         const pdfLink = drawer.querySelector('#dossier-pdf-link');
         if (pdfLink) {
@@ -828,7 +1225,10 @@
   function initForms() {
     document.querySelectorAll('[data-auto-submit]').forEach((el) => {
       el.addEventListener('change', () => {
-        if (el.form) el.form.submit();
+        if (el.form) {
+          WorklyLoader.showSkeleton();
+          el.form.submit();
+        }
       });
     });
 
@@ -973,7 +1373,7 @@
 
     const steps = [
       { sel: '#workly-sidebar', title: 'Role-Scoped Workspace', text: 'Navigate modules tailored to your role with live PostgreSQL review & PTO alerts.' },
-      { sel: '#workly-view-content', title: 'Full-Width Operations', text: 'Right-click Kanban cards for quick actions, press Ctrl+K for Command Search, and use right-side slide-over drawers.' },
+      { sel: '#workly-view-content', title: 'Full-Width Operations', text: 'Organize Kanban tasks by Client Swimlanes, drag Focus blocks onto the Calendar, press Ctrl+K for Quick Jump, and use right-side drawers.' },
       { sel: '#sidebar-profile-anchor', title: 'Profile & Performance', text: 'Click your profile anchor at any time to edit your bio/specialties, review compensation, badges, and upload photos.' }
     ];
 

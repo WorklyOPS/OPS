@@ -27,6 +27,7 @@ $initials = substr($initials ?: 'W', 0, 2);
   <link rel="stylesheet" href="/assets/css/workly.css">
 </head>
 <body>
+  <div id="workly-global-progress" class="workly-global-progress" aria-hidden="true"></div>
   <div class="app-shell">
     <aside class="sidebar" id="workly-sidebar">
       <div class="sidebar-head">
@@ -195,55 +196,175 @@ $initials = substr($initials ?: 'W', 0, 2);
       </header>
 
       <main class="page-content">
-        <div id="workly-skeleton" class="skeleton-screen" aria-busy="true" aria-label="Loading section">
+        <div id="workly-skeleton" class="skeleton-screen" aria-busy="true" aria-label="Loading module">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-            <div>
-              <div class="skeleton-bar" style="width:280px;height:26px;margin-bottom:8px;"></div>
-              <div class="skeleton-bar" style="width:420px;max-width:75vw;height:14px;"></div>
+            <div style="display:flex;align-items:center;gap:14px;">
+              <?php if ($activeSection === 'profile' || ($activeSection === 'dashboard' && $role === 'va')): ?>
+                <div class="skeleton-circle" style="width:60px;height:60px;"></div>
+              <?php endif; ?>
+              <div>
+                <div class="skeleton-bar" style="width:280px;height:26px;margin-bottom:8px;"></div>
+                <div class="skeleton-bar" style="width:430px;max-width:75vw;height:14px;"></div>
+              </div>
             </div>
-            <div class="skeleton-bar" style="width:160px;height:38px;border-radius:10px;"></div>
+            <div style="display:flex;gap:10px;">
+              <div class="skeleton-bar" style="width:140px;height:40px;border-radius:10px;"></div>
+              <div class="skeleton-bar" style="width:150px;height:40px;border-radius:10px;"></div>
+            </div>
           </div>
 
           <?php if ($activeSection === 'tasks'): ?>
-            <div class="skeleton-bar" style="height:58px;border-radius:14px;"></div>
-            <div class="kanban-board">
-              <?php for ($col = 0; $col < 5; $col++): ?>
-                <div class="kanban-col" style="min-height:420px;">
-                  <div class="skeleton-bar" style="width:62%;height:18px;margin-bottom:8px;"></div>
-                  <div class="skeleton-card" style="height:126px;"></div>
-                  <div class="skeleton-card" style="height:112px;"></div>
-                  <?php if ($col < 3): ?>
-                    <div class="skeleton-card" style="height:118px;"></div>
-                  <?php endif; ?>
+            <div class="skeleton-bar" style="height:64px;border-radius:14px;"></div>
+            <div class="skeleton-bar" style="height:56px;border-radius:14px;"></div>
+            <div class="swimlane-section">
+              <div class="swimlane-header">
+                <div class="skeleton-bar" style="width:220px;height:20px;"></div>
+                <div class="skeleton-bar" style="width:160px;height:20px;"></div>
+              </div>
+              <div class="swimlane-body">
+                <div class="kanban-board">
+                  <?php for ($col = 0; $col < 5; $col++): ?>
+                    <div class="kanban-col" style="min-height:360px;">
+                      <div class="skeleton-bar" style="width:60%;height:18px;margin-bottom:8px;"></div>
+                      <div class="skeleton-card" style="height:126px;"></div>
+                      <div class="skeleton-card" style="height:112px;"></div>
+                      <?php if ($col < 3): ?>
+                        <div class="skeleton-card" style="height:112px;"></div>
+                      <?php endif; ?>
+                    </div>
+                  <?php endfor; ?>
                 </div>
+              </div>
+            </div>
+
+          <?php elseif ($activeSection === 'dashboard' && $role === 'admin'): ?>
+            <div class="grid-4">
+              <?php for ($i = 0; $i < 4; $i++): ?><div class="skeleton-card" style="height:106px;"></div><?php endfor; ?>
+            </div>
+            <div class="skeleton-bar" style="width:460px;max-width:90vw;height:42px;border-radius:12px;"></div>
+            <div class="card" style="display:grid;gap:10px;">
+              <?php for ($r = 0; $r < 6; $r++): ?>
+                <div class="skeleton-row"></div>
               <?php endfor; ?>
             </div>
-          <?php elseif ($activeSection === 'dashboard'): ?>
+
+          <?php elseif ($activeSection === 'dashboard' && $role === 'team_leader'): ?>
             <div class="grid-4">
-              <div class="skeleton-card" style="height:106px;"></div>
-              <div class="skeleton-card" style="height:106px;"></div>
-              <div class="skeleton-card" style="height:106px;"></div>
-              <div class="skeleton-card" style="height:106px;"></div>
+              <?php for ($i = 0; $i < 4; $i++): ?><div class="skeleton-card" style="height:106px;"></div><?php endfor; ?>
             </div>
-            <div class="skeleton-card" style="height:290px;"></div>
+            <div class="skeleton-chart">
+              <div class="skeleton-vbar" style="height:45%;"></div>
+              <div class="skeleton-vbar" style="height:78%;"></div>
+              <div class="skeleton-vbar" style="height:92%;"></div>
+              <div class="skeleton-vbar" style="height:56%;"></div>
+              <div class="skeleton-vbar" style="height:84%;"></div>
+            </div>
+            <div class="grid-2">
+              <div class="skeleton-card" style="height:240px;"></div>
+              <div class="skeleton-card" style="height:240px;"></div>
+            </div>
+
+          <?php elseif ($activeSection === 'dashboard' && $role === 'hrm'): ?>
+            <div class="grid-4">
+              <?php for ($i = 0; $i < 4; $i++): ?><div class="skeleton-card" style="height:106px;"></div><?php endfor; ?>
+            </div>
+            <div class="card" style="display:grid;gap:10px;">
+              <?php for ($r = 0; $r < 5; $r++): ?><div class="skeleton-row"></div><?php endfor; ?>
+            </div>
             <div class="grid-2">
               <div class="skeleton-card" style="height:220px;"></div>
               <div class="skeleton-card" style="height:220px;"></div>
             </div>
-          <?php elseif ($activeSection === 'calendar_reports'): ?>
-            <div class="skeleton-bar" style="width:320px;height:40px;border-radius:12px;"></div>
+
+          <?php elseif ($activeSection === 'profile' || ($activeSection === 'dashboard' && $role === 'va')): ?>
             <div class="grid-4">
-              <div class="skeleton-card" style="height:92px;"></div>
-              <div class="skeleton-card" style="height:92px;"></div>
-              <div class="skeleton-card" style="height:92px;"></div>
-              <div class="skeleton-card" style="height:92px;"></div>
+              <?php for ($i = 0; $i < 4; $i++): ?><div class="skeleton-card" style="height:106px;"></div><?php endfor; ?>
             </div>
-            <div class="skeleton-card" style="height:360px;"></div>
+            <div class="grid-2">
+              <div class="skeleton-card" style="height:290px;"></div>
+              <div class="skeleton-chart" style="height:290px;">
+                <?php for ($b = 0; $b < 6; $b++): ?>
+                  <div class="skeleton-vbar" style="height:<?= 38 + (($b * 13) % 52) ?>%;"></div>
+                <?php endfor; ?>
+              </div>
+            </div>
+
+          <?php elseif ($activeSection === 'va_directory'): ?>
+            <div class="grid-3">
+              <?php for ($v = 0; $v < 6; $v++): ?>
+                <div class="card" style="display:grid;gap:12px;">
+                  <div style="display:flex;gap:12px;align-items:center;">
+                    <div class="skeleton-circle"></div>
+                    <div style="flex:1;display:grid;gap:6px;">
+                      <div class="skeleton-bar" style="width:70%;height:16px;"></div>
+                      <div class="skeleton-bar" style="width:50%;height:12px;"></div>
+                    </div>
+                  </div>
+                  <div class="skeleton-bar" style="height:36px;"></div>
+                </div>
+              <?php endfor; ?>
+            </div>
+
+          <?php elseif ($activeSection === 'clients'): ?>
+            <div class="grid-4">
+              <?php for ($i = 0; $i < 4; $i++): ?><div class="skeleton-card" style="height:106px;"></div><?php endfor; ?>
+            </div>
+            <div class="skeleton-bar" style="height:56px;border-radius:14px;"></div>
+            <div class="grid-2">
+              <?php for ($c = 0; $c < 4; $c++): ?>
+                <div class="card" style="display:grid;gap:12px;">
+                  <div style="display:flex;gap:12px;align-items:center;">
+                    <div class="skeleton-circle"></div>
+                    <div style="flex:1;display:grid;gap:6px;">
+                      <div class="skeleton-bar" style="width:65%;height:18px;"></div>
+                      <div class="skeleton-bar" style="width:45%;height:13px;"></div>
+                    </div>
+                  </div>
+                  <div class="skeleton-bar" style="height:10px;"></div>
+                  <div class="skeleton-bar" style="width:140px;height:34px;"></div>
+                </div>
+              <?php endfor; ?>
+            </div>
+
+          <?php elseif ($activeSection === 'calendar_reports'): ?>
+            <div class="skeleton-bar" style="width:340px;height:42px;border-radius:12px;"></div>
+            <div class="skeleton-bar" style="height:68px;border-radius:12px;"></div>
+            <div class="calendar-grid">
+              <?php for ($d = 0; $d < 28; $d++): ?>
+                <div class="cal-cell" style="min-height:92px;">
+                  <div class="skeleton-bar" style="width:24px;height:14px;margin-bottom:6px;"></div>
+                  <?php if ($d % 3 === 0): ?>
+                    <div class="skeleton-bar" style="height:18px;border-radius:6px;"></div>
+                  <?php endif; ?>
+                </div>
+              <?php endfor; ?>
+            </div>
+
+          <?php elseif ($activeSection === 'pto'): ?>
+            <div class="grid-3">
+              <?php for ($i = 0; $i < 3; $i++): ?><div class="skeleton-card" style="height:104px;"></div><?php endfor; ?>
+            </div>
+            <div class="grid-2">
+              <div class="skeleton-card" style="height:290px;"></div>
+              <div class="card" style="display:grid;gap:10px;">
+                <?php for ($r = 0; $r < 5; $r++): ?><div class="skeleton-row"></div><?php endfor; ?>
+              </div>
+            </div>
+
           <?php elseif ($activeSection === 'email'): ?>
             <div class="email-layout">
-              <div class="skeleton-card" style="height:520px;"></div>
+              <div class="card" style="display:grid;gap:10px;align-content:start;">
+                <?php for ($e = 0; $e < 6; $e++): ?><div class="skeleton-row" style="height:62px;"></div><?php endfor; ?>
+              </div>
               <div class="skeleton-card" style="height:520px;"></div>
             </div>
+
+          <?php elseif ($activeSection === 'knowledge' || $activeSection === 'perks'): ?>
+            <div class="skeleton-bar" style="height:56px;border-radius:12px;"></div>
+            <div class="grid-3">
+              <?php for ($k = 0; $k < 6; $k++): ?><div class="skeleton-card" style="height:175px;"></div><?php endfor; ?>
+            </div>
+
           <?php else: ?>
             <div class="grid-3">
               <div class="skeleton-card" style="height:118px;"></div>

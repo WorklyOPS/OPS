@@ -75,8 +75,32 @@ try {
     exit;
 }
 
-// REST API v1 Routing
+// REST API v1 Routing (Hardened against HTML PHP warning leakage)
 if (str_starts_with($uri, '/api/v1/')) {
+    @ini_set('display_errors', '0');
+    if (ob_get_level() === 0) {
+        ob_start();
+    }
+    set_error_handler(static function (int $severity, string $message, string $file, int $line): bool {
+        if (!(error_reporting() & $severity)) {
+            return false;
+        }
+        error_log("Workly API PHP Warning [{$severity}]: {$message} in {$file}:{$line}");
+        return true;
+    });
+    register_shutdown_function(static function (): void {
+        $err = error_get_last();
+        if ($err && in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) {
+            while (ob_get_level() > 0) {
+                @ob_end_clean();
+            }
+            if (!headers_sent()) {
+                http_response_code(500);
+                SecurityHelper::sendApiHeaders();
+            }
+            echo json_encode(['error' => 'Server processing error while handling request.']);
+        }
+    });
     SecurityHelper::sendApiHeaders();
 
     if ($uri === '/api/v1/auth/login' && $method === 'POST') {
@@ -152,6 +176,30 @@ if ($uri === '/captcha.svg') {
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('X-Content-Type-Options: nosniff');
     echo SecurityHelper::renderSvgCaptcha();
+    exit;
+}
+
+// PostgreSQL Fallback Media Serving Endpoint (for restricted filesystems)
+if (preg_match('#^/media/([a-zA-Z0-9_-]+)/?$#', $uri, $mMedia)) {
+    try {
+        $mStmt = $db->prepare('SELECT mime_type, data_base64 FROM uploaded_assets WHERE id = :id LIMIT 1');
+        $mStmt->execute([':id' => $mMedia[1]]);
+        $asset = $mStmt->fetch(PDO::FETCH_ASSOC);
+        if ($asset && in_array($asset['mime_type'], ['image/jpeg', 'image/png', 'image/webp'], true)) {
+            $raw = base64_decode((string) $asset['data_base64'], true);
+            if ($raw !== false) {
+                header('Content-Type: ' . $asset['mime_type']);
+                header('Content-Length: ' . strlen($raw));
+                header('Cache-Control: public, max-age=86400');
+                header('X-Content-Type-Options: nosniff');
+                echo $raw;
+                exit;
+            }
+        }
+    } catch (Throwable) {
+        // Fallback 404
+    }
+    http_response_code(404);
     exit;
 }
 

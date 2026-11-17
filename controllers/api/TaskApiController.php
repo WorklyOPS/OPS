@@ -59,12 +59,12 @@ final class TaskApiController
                 echo json_encode(['error' => 'Task ID is required']);
                 return;
             }
-            if (isset($input['status'])) {
-                $this->updateStatus($id, $user, $input);
+            if (isset($input['client_id']) || isset($input['priority']) || count($input) > 1) {
+                $this->updateTask($id, $user, $input);
                 return;
             }
-            if (isset($input['priority'])) {
-                $this->updateTask($id, $user, $input);
+            if (isset($input['status'])) {
+                $this->updateStatus($id, $user, $input);
                 return;
             }
         }
