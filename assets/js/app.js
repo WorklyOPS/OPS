@@ -1,7 +1,8 @@
 /* ==========================================================================
    Workly Platform — Production Client Orchestrator (Vanilla JS, Zero TS)
-   Handles Right-Side Drawers, Kanban Drag & Drop + Right-Click Context Menu,
-   Segmented Tabs, CSV Client Bulk Import, CAPTCHA Refresh, and CSRF Fetch.
+   Full-Width Choreographed UX: Staged Section Skeletons, Entry/Exit Motion,
+   Kanban Right-Click + Drag & Drop, Command Palette, Interactive SVG Charts,
+   Right-Side Drawers, CSV Exports, SVG CAPTCHA Refresh & CSRF API Fetch.
    ========================================================================== */
 
 (function () {
@@ -9,30 +10,61 @@
 
   const csrfMeta = document.querySelector('meta[name="workly-csrf"]');
   const CSRF_TOKEN = csrfMeta ? csrfMeta.getAttribute('content') || '' : '';
+  const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const EYE_OPEN_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
+  const EYE_OFF_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-6.5 0-10-7-10-7a21.78 21.78 0 0 1 5.06-5.94"/><path d="M9.9 4.24A10.94 10.94 0 0 1 12 4c6.5 0 10 7 10 7a21.78 21.78 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
 
   window.addEventListener('DOMContentLoaded', () => {
-    const skel = document.getElementById('workly-skeleton');
-    const content = document.getElementById('workly-view-content');
-    if (skel && content) {
-      window.requestAnimationFrame(() => {
-        skel.classList.add('is-hidden');
-        content.classList.remove('is-hidden');
-      });
-    }
+    initSkeletonStaging();
     initAuthControls();
     initMobileDrawer();
     initDrawers();
     initTabs();
+    initCommandPalette();
+    initChartTooltipsAndToggles();
     initKanbanBoard();
     initClientDossiers();
     initAdminEditDrawers();
+    initHrmPtoRejection();
+    initCsvExports();
     initForms();
     initInteractiveButtons();
     initOnboardingTour();
   });
 
   // ------------------------------------------------------------------------
-  // Auth Screen Helpers (CAPTCHA refresh + Password visibility)
+  // Staged Skeleton Loader (Visible Before Section Content Reveal & Navigation)
+  // ------------------------------------------------------------------------
+  function initSkeletonStaging() {
+    const skel = document.getElementById('workly-skeleton');
+    const content = document.getElementById('workly-view-content');
+    if (skel && content) {
+      const settleMs = reducedMotion ? 10 : 230;
+      window.setTimeout(() => {
+        skel.classList.add('is-leaving');
+        window.setTimeout(() => {
+          skel.classList.add('is-hidden');
+          skel.classList.remove('is-leaving');
+          content.classList.remove('is-hidden');
+        }, reducedMotion ? 0 : 140);
+      }, settleMs);
+
+      // Show matching skeleton immediately when navigating across workspace sections
+      document.querySelectorAll('.sidebar-nav a.nav-link, .topbar a.user-pill').forEach((link) => {
+        link.addEventListener('click', (e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+          const href = link.getAttribute('href');
+          if (!href || href.startsWith('#')) return;
+          content.classList.add('is-hidden');
+          skel.classList.remove('is-hidden', 'is-leaving');
+        });
+      });
+    }
+  }
+
+  // ------------------------------------------------------------------------
+  // Auth Screen Helpers (CAPTCHA Refresh + Minimalist SVG Password Eye Icon)
   // ------------------------------------------------------------------------
   function initAuthControls() {
     const refreshBtn = document.getElementById('btn-refresh-captcha');
@@ -44,19 +76,21 @@
     }
 
     document.querySelectorAll('[data-toggle-password]').forEach((btn) => {
+      btn.innerHTML = EYE_OPEN_SVG;
       btn.addEventListener('click', () => {
         const targetId = btn.getAttribute('data-toggle-password');
         const input = targetId ? document.getElementById(targetId) : null;
         if (!input) return;
         const isPass = input.type === 'password';
         input.type = isPass ? 'text' : 'password';
-        btn.textContent = isPass ? 'Hide' : 'Show';
+        btn.innerHTML = isPass ? EYE_OFF_SVG : EYE_OPEN_SVG;
+        btn.setAttribute('aria-pressed', isPass ? 'true' : 'false');
       });
     });
   }
 
   // ------------------------------------------------------------------------
-  // Toast & CSRF API Fetch Helper
+  // Toast (Entry + Exit Choreography) & CSRF API Fetch Helper
   // ------------------------------------------------------------------------
   function showToast(message, type) {
     const existing = document.querySelector('.toast');
@@ -65,7 +99,10 @@
     el.className = 'toast ' + (type === 'error' ? 'error' : 'success');
     el.textContent = message;
     document.body.appendChild(el);
-    window.setTimeout(() => el.remove(), 3500);
+    window.setTimeout(() => {
+      el.classList.add('is-leaving');
+      window.setTimeout(() => el.remove(), reducedMotion ? 0 : 210);
+    }, 3300);
   }
 
   async function apiFetch(url, options) {
@@ -112,16 +149,29 @@
   }
 
   // ------------------------------------------------------------------------
-  // Right-Side Slide-Over Drawer System
+  // Right-Side Slide-Over Drawer System (With Pose-to-Pose Exit Transitions)
   // ------------------------------------------------------------------------
   function openDrawer(id) {
-    closeAllDrawers();
+    closeAllDrawers(true);
     const el = document.getElementById(id);
-    if (el) el.classList.remove('is-hidden');
+    if (el) {
+      el.classList.remove('is-closing', 'is-hidden');
+    }
   }
 
-  function closeAllDrawers() {
-    document.querySelectorAll('.drawer-backdrop').forEach((d) => d.classList.add('is-hidden'));
+  function closeAllDrawers(immediate) {
+    document.querySelectorAll('.drawer-backdrop:not(.is-hidden)').forEach((d) => {
+      if (immediate || reducedMotion) {
+        d.classList.remove('is-closing');
+        d.classList.add('is-hidden');
+        return;
+      }
+      d.classList.add('is-closing');
+      window.setTimeout(() => {
+        d.classList.remove('is-closing');
+        d.classList.add('is-hidden');
+      }, 175);
+    });
   }
 
   function initDrawers() {
@@ -129,17 +179,18 @@
       btn.addEventListener('click', () => openDrawer(btn.getAttribute('data-open-drawer')));
     });
     document.querySelectorAll('[data-close-drawer]').forEach((btn) => {
-      btn.addEventListener('click', closeAllDrawers);
+      btn.addEventListener('click', () => closeAllDrawers(false));
     });
     document.querySelectorAll('.drawer-backdrop').forEach((backdrop) => {
       backdrop.addEventListener('click', (e) => {
-        if (e.target === backdrop) closeAllDrawers();
+        if (e.target === backdrop) closeAllDrawers(false);
       });
     });
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        closeAllDrawers();
+        closeAllDrawers(false);
         hideContextMenu();
+        closeCommandPalette();
       }
     });
   }
@@ -156,7 +207,13 @@
           b.classList.toggle('active', b === btn);
         });
         document.querySelectorAll('[data-tab-group="' + group + '"][data-tab-panel]').forEach((panel) => {
-          panel.classList.toggle('is-hidden', panel.getAttribute('data-tab-panel') !== target);
+          const isMatch = panel.getAttribute('data-tab-panel') === target;
+          panel.classList.toggle('is-hidden', !isMatch);
+          if (isMatch) {
+            panel.classList.remove('view-animate');
+            void panel.offsetWidth;
+            panel.classList.add('view-animate');
+          }
         });
       });
     });
@@ -168,14 +225,126 @@
   }
 
   // ------------------------------------------------------------------------
+  // Command Palette Quick Launcher (Ctrl+K / Cmd+K)
+  // ------------------------------------------------------------------------
+  function closeCommandPalette() {
+    const bd = document.getElementById('workly-cmdk');
+    if (!bd || bd.classList.contains('is-hidden')) return;
+    if (reducedMotion) {
+      bd.classList.add('is-hidden');
+      return;
+    }
+    bd.classList.add('is-closing');
+    window.setTimeout(() => {
+      bd.classList.remove('is-closing');
+      bd.classList.add('is-hidden');
+    }, 140);
+  }
+
+  function initCommandPalette() {
+    const bd = document.getElementById('workly-cmdk');
+    const openBtn = document.getElementById('btn-open-cmdk');
+    const input = document.getElementById('cmdk-search-input');
+    const list = document.getElementById('cmdk-results');
+    if (!bd || !input || !list) return;
+
+    function openCmdk() {
+      bd.classList.remove('is-closing', 'is-hidden');
+      input.value = '';
+      filterItems('');
+      window.setTimeout(() => input.focus(), 30);
+    }
+
+    function filterItems(q) {
+      const term = q.trim().toLowerCase();
+      list.querySelectorAll('.cmdk-item').forEach((item) => {
+        const hay = (item.textContent || '').toLowerCase();
+        item.classList.toggle('is-hidden', term !== '' && !hay.includes(term));
+      });
+    }
+
+    if (openBtn) openBtn.addEventListener('click', openCmdk);
+    bd.addEventListener('click', (e) => {
+      if (e.target === bd) closeCommandPalette();
+    });
+    input.addEventListener('input', () => filterItems(input.value));
+
+    list.addEventListener('click', (e) => {
+      const btn = e.target.closest('.cmdk-item');
+      if (!btn) return;
+      const url = btn.getAttribute('data-cmdk-href');
+      const drawer = btn.getAttribute('data-cmdk-drawer');
+      closeCommandPalette();
+      if (url) {
+        window.location.href = url;
+      } else if (drawer) {
+        openDrawer(drawer);
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (bd.classList.contains('is-hidden')) {
+          openCmdk();
+        } else {
+          closeCommandPalette();
+        }
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // Interactive SVG Chart Tooltips & Team Leader Bar Chart Mode Switcher
+  // ------------------------------------------------------------------------
+  function initChartTooltipsAndToggles() {
+    let tip = document.getElementById('workly-chart-tooltip');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'workly-chart-tooltip';
+      tip.className = 'chart-tooltip is-hidden';
+      document.body.appendChild(tip);
+    }
+
+    document.querySelectorAll('[data-chart-tip]').forEach((el) => {
+      el.addEventListener('mouseenter', () => {
+        tip.textContent = el.getAttribute('data-chart-tip') || '';
+        tip.classList.remove('is-hidden');
+      });
+      el.addEventListener('mousemove', (e) => {
+        tip.style.left = Math.min(window.innerWidth - 260, e.clientX + 14) + 'px';
+        tip.style.top = Math.max(10, e.clientY - 38) + 'px';
+      });
+      el.addEventListener('mouseleave', () => {
+        tip.classList.add('is-hidden');
+      });
+      const href = el.getAttribute('data-chart-href');
+      if (href) {
+        el.addEventListener('click', () => {
+          window.location.href = href;
+        });
+      }
+    });
+  }
+
+  // ------------------------------------------------------------------------
   // Kanban Drag-and-Drop + Right-Click Context Menu + Right Detail Drawer
   // ------------------------------------------------------------------------
   let contextTaskId = null;
 
   function hideContextMenu() {
     const cm = document.getElementById('kanban-context-menu');
-    if (cm) cm.classList.add('is-hidden');
+    if (!cm || cm.classList.contains('is-hidden')) return;
     contextTaskId = null;
+    if (reducedMotion) {
+      cm.classList.add('is-hidden');
+      return;
+    }
+    cm.classList.add('is-closing');
+    window.setTimeout(() => {
+      cm.classList.remove('is-closing');
+      cm.classList.add('is-hidden');
+    }, 120);
   }
 
   function initKanbanBoard() {
@@ -198,11 +367,12 @@
       });
     }
 
-    // Drag & Drop handlers
+    // Drag & Drop handlers with 3D lift + Squash-and-Stretch landing
     board.querySelectorAll('.task-card').forEach((card) => {
       card.addEventListener('dragstart', (e) => {
         hideContextMenu();
         draggedCard = card;
+        board.classList.add('is-dragging');
         card.classList.add('dragging');
         if (e.dataTransfer) {
           e.dataTransfer.effectAllowed = 'move';
@@ -211,6 +381,7 @@
       });
 
       card.addEventListener('dragend', () => {
+        board.classList.remove('is-dragging');
         card.classList.remove('dragging');
         if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
         board.querySelectorAll('.kanban-col').forEach((c) => c.classList.remove('drag-over'));
@@ -248,16 +419,20 @@
       col.addEventListener('drop', async (e) => {
         e.preventDefault();
         col.classList.remove('drag-over');
+        board.classList.remove('is-dragging');
         if (placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
         if (!draggedCard || !container) return;
 
+        const dropped = draggedCard;
         const newStatus = col.getAttribute('data-status');
-        const oldCol = draggedCard.closest('.kanban-col');
+        const oldCol = dropped.closest('.kanban-col');
         const oldStatus = oldCol ? oldCol.getAttribute('data-status') : '';
-        const taskId = draggedCard.getAttribute('data-task-id');
+        const taskId = dropped.getAttribute('data-task-id');
 
         if (!newStatus || !taskId || newStatus === oldStatus) return;
-        container.appendChild(draggedCard);
+        container.appendChild(dropped);
+        dropped.classList.add('just-dropped');
+        window.setTimeout(() => dropped.classList.remove('just-dropped'), 360);
         updateColumnCounters();
 
         try {
@@ -265,7 +440,7 @@
             method: 'PATCH',
             body: JSON.stringify({ status: newStatus })
           });
-          showToast('Task moved to ' + newStatus.replace('_', ' '), 'success');
+          showToast('Moved deliverable to ' + newStatus.replace('_', ' '), 'success');
         } catch (err) {
           showToast(err.message, 'error');
           window.location.reload();
@@ -280,7 +455,7 @@
         e.stopPropagation();
         const tid = menuBtn.getAttribute('data-task-id');
         const rect = menuBtn.getBoundingClientRect();
-        if (tid) showContextMenuAt(tid, rect.left - 160, rect.bottom + 6);
+        if (tid) showContextMenuAt(tid, rect.left - 165, rect.bottom + 6);
         return;
       }
 
@@ -311,7 +486,7 @@
               method: 'PATCH',
               body: JSON.stringify({ status })
             });
-            showToast('Status updated', 'success');
+            showToast('Stage updated', 'success');
             window.location.reload();
           } catch (err) {
             showToast(err.message, 'error');
@@ -331,7 +506,7 @@
         } else if (action === 'delete') {
           try {
             await apiFetch('/api/v1/tasks/' + encodeURIComponent(tid), { method: 'DELETE' });
-            showToast('Task deleted', 'success');
+            showToast('Deliverable deleted', 'success');
             window.location.reload();
           } catch (err) {
             showToast(err.message, 'error');
@@ -349,9 +524,9 @@
     const cm = document.getElementById('kanban-context-menu');
     if (!cm) return;
     contextTaskId = taskId;
-    cm.classList.remove('is-hidden');
-    const maxLeft = window.innerWidth - 230;
-    const maxTop = window.innerHeight - 380;
+    cm.classList.remove('is-closing', 'is-hidden');
+    const maxLeft = window.innerWidth - 235;
+    const maxTop = window.innerHeight - 395;
     cm.style.left = Math.max(10, Math.min(x, maxLeft)) + 'px';
     cm.style.top = Math.max(10, Math.min(y, maxTop)) + 'px';
   }
@@ -376,9 +551,8 @@
 
     drawer.querySelector('#detail-task-title').textContent = task.title;
     drawer.querySelector('#detail-task-meta').textContent =
-      task.client_name + ' • ' + task.va_name + ' • Due ' + task.deadline + ' • Est ' + task.estimated_hours + 'h';
+      task.client_name + ' · ' + task.va_name + ' · Due ' + task.deadline + ' · Est ' + task.estimated_hours + 'h';
 
-    // Populate Inline Edit Form inside right drawer
     const editForm = drawer.querySelector('#form-edit-task');
     if (editForm) {
       editForm.setAttribute('data-api-form', '/api/v1/tasks/' + encodeURIComponent(taskId));
@@ -393,7 +567,6 @@
       editForm.querySelector('[name="estimated_hours"]').value = task.estimated_hours || 4;
     }
 
-    // Notes
     const notesList = drawer.querySelector('#detail-notes-list');
     notesList.innerHTML = '';
     const notes = (allData.notes || {})[taskId] || [];
@@ -410,7 +583,6 @@
       });
     }
 
-    // Comments
     const commentsList = drawer.querySelector('#detail-comments-list');
     commentsList.innerHTML = '';
     const comments = (allData.comments || {})[taskId] || [];
@@ -427,7 +599,6 @@
       });
     }
 
-    // Extra hours history
     const ehList = drawer.querySelector('#detail-extrahours-list');
     if (ehList) {
       ehList.innerHTML = '';
@@ -467,7 +638,7 @@
         if (!drawer) return;
 
         drawer.querySelector('#dossier-agency').textContent = cl.agency_name;
-        drawer.querySelector('#dossier-contact').textContent = cl.name + ' • ' + cl.email;
+        drawer.querySelector('#dossier-contact').textContent = cl.name + ' · ' + cl.email;
 
         const editForm = drawer.querySelector('#form-edit-client');
         if (editForm) {
@@ -526,7 +697,6 @@
       });
     });
 
-    // Bulk CSV Import
     const bulkForm = document.getElementById('form-bulk-clients');
     if (bulkForm) {
       bulkForm.addEventListener('submit', async (e) => {
@@ -559,7 +729,7 @@
             body: JSON.stringify({ clients })
           });
           showToast('Imported ' + (res.imported || 0) + ' clients', 'success');
-          window.setTimeout(() => window.location.reload(), 450);
+          window.setTimeout(() => window.location.reload(), 420);
         } catch (err) {
           showToast(err.message, 'error');
         }
@@ -592,6 +762,62 @@
         const tlSel = form.querySelector('[name="team_leader_id"]');
         if (tlSel) tlSel.value = u.team_leader_id || '';
         openDrawer('drawer-edit-user');
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // HRM Custom Rejection Reason Drawer
+  // ------------------------------------------------------------------------
+  function initHrmPtoRejection() {
+    document.querySelectorAll('[data-pto-reject]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const reqId = btn.getAttribute('data-pto-reject');
+        const vaName = btn.getAttribute('data-pto-va') || 'Staff Member';
+        const drawer = document.getElementById('drawer-pto-reject');
+        if (!drawer || !reqId) return;
+        const form = drawer.querySelector('#form-pto-reject');
+        const label = drawer.querySelector('#pto-reject-target');
+        if (label) label.textContent = vaName;
+        if (form) {
+          form.setAttribute('data-api-form', '/api/v1/pto/' + encodeURIComponent(reqId) + '/review');
+        }
+        openDrawer('drawer-pto-reject');
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // Client-Side CSV Export of Rendered PostgreSQL Tables
+  // ------------------------------------------------------------------------
+  function initCsvExports() {
+    document.querySelectorAll('[data-export-csv]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const tableId = btn.getAttribute('data-export-csv');
+        const fileName = btn.getAttribute('data-csv-filename') || 'workly_export.csv';
+        const table = tableId ? document.getElementById(tableId) : null;
+        if (!table) return;
+
+        const rows = [];
+        table.querySelectorAll('tr').forEach((tr) => {
+          const cols = [];
+          tr.querySelectorAll('th, td').forEach((cell) => {
+            const text = (cell.innerText || cell.textContent || '').replace(/\s+/g, ' ').trim();
+            cols.push('"' + text.replace(/"/g, '""') + '"');
+          });
+          if (cols.length > 0) rows.push(cols.join(','));
+        });
+
+        const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showToast('CSV exported', 'success');
       });
     });
   }
@@ -652,7 +878,7 @@
           }
 
           showToast('Saved to PostgreSQL database', 'success');
-          window.setTimeout(() => window.location.reload(), 420);
+          window.setTimeout(() => window.location.reload(), 380);
         } catch (err) {
           showToast(err.message, 'error');
           if (submitBtn) submitBtn.disabled = false;
@@ -660,7 +886,6 @@
       });
     });
 
-    // Dynamic PTO business-day counter (Mon-Fri max 5)
     const ptoStart = document.getElementById('pto-start');
     const ptoEnd = document.getElementById('pto-end');
     const ptoPreview = document.getElementById('pto-days-preview');
@@ -705,7 +930,7 @@
         btn.disabled = true;
         await apiFetch(url, { method, body: bodyRaw || undefined });
         showToast('Updated in PostgreSQL', 'success');
-        window.setTimeout(() => window.location.reload(), 380);
+        window.setTimeout(() => window.location.reload(), 340);
       } catch (err) {
         showToast(err.message, 'error');
         btn.disabled = false;
@@ -714,7 +939,10 @@
 
     const printBtn = document.getElementById('btn-print-sla');
     if (printBtn) {
-      printBtn.addEventListener('click', () => window.print());
+      printBtn.addEventListener('click', () => {
+        activateTab('cal-rep', 'reports');
+        window.setTimeout(() => window.print(), 120);
+      });
     }
 
     const auditFilterBtn = document.getElementById('btn-filter-audit');
@@ -745,8 +973,8 @@
 
     const steps = [
       { sel: '#workly-sidebar', title: 'Role-Scoped Workspace', text: 'Navigate modules tailored to your role with live PostgreSQL review & PTO alerts.' },
-      { sel: '#workly-view-content', title: 'Interactive Operations', text: 'Right-click Kanban cards for quick actions, open right-side drawers for details, and inspect clients in depth.' },
-      { sel: '#sidebar-profile-anchor', title: 'Profile & Performance', text: 'Click your profile anchor at any time to review rates, compensation history, badges, and upload photos.' }
+      { sel: '#workly-view-content', title: 'Full-Width Operations', text: 'Right-click Kanban cards for quick actions, press Ctrl+K for Command Search, and use right-side slide-over drawers.' },
+      { sel: '#sidebar-profile-anchor', title: 'Profile & Performance', text: 'Click your profile anchor at any time to edit your bio/specialties, review compensation, badges, and upload photos.' }
     ];
 
     let idx = 0;
@@ -777,7 +1005,7 @@
 
       const rect = target.getBoundingClientRect();
       tooltip.style.top = Math.min(window.innerHeight - 190, Math.max(16, rect.top + 16)) + 'px';
-      tooltip.style.left = Math.min(window.innerWidth - 335, Math.max(16, rect.left + 20)) + 'px';
+      tooltip.style.left = Math.min(window.innerWidth - 340, Math.max(16, rect.left + 20)) + 'px';
 
       tooltip.querySelector('#tour-title').textContent = step.title;
       tooltip.querySelector('#tour-desc').textContent = step.text;

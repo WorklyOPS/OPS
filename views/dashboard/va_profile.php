@@ -18,9 +18,12 @@ foreach ($chartEarnings as $er) {
     <?php endif; ?>
     <div>
       <h1><?= SecurityHelper::e($p['name']) ?></h1>
-      <p class="muted"><?= SecurityHelper::e($p['email']) ?> • Joined <?= SecurityHelper::e($p['hire_date']) ?></p>
+      <p class="muted"><?= SecurityHelper::e($p['email']) ?> • Joined <?= SecurityHelper::e($p['hire_date']) ?><?= !empty($p['phone']) ? ' • ' . SecurityHelper::e($p['phone']) : '' ?></p>
     </div>
   </div>
+  <?php if ($p['id'] === $user['id']): ?>
+    <button type="button" class="btn btn-primary" data-open-drawer="drawer-edit-self">Edit Bio &amp; Specialties</button>
+  <?php endif; ?>
 </div>
 
 <div class="grid-4" style="margin-bottom:22px;">
@@ -182,3 +185,37 @@ foreach ($chartEarnings as $er) {
     <?php endif; ?>
   </div>
 </div>
+
+<?php if ($p['id'] === $user['id']): ?>
+  <div id="drawer-edit-self" class="drawer-backdrop is-hidden">
+    <aside class="drawer-panel" role="dialog" aria-label="Edit My Profile">
+      <div class="drawer-head">
+        <div>
+          <h3>Edit My Profile</h3>
+          <div class="muted" style="font-size:12px;">Update your contact number, operational bio &amp; specialties.</div>
+        </div>
+        <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
+      </div>
+      <div class="drawer-body">
+        <form data-api-form="/api/v1/users/me" data-api-method="PUT">
+          <div class="form-group">
+            <label class="form-label">Work Phone / WhatsApp</label>
+            <input class="input" name="phone" value="<?= SecurityHelper::e((string) ($p['phone'] ?? '')) ?>" placeholder="+1 (555) 000-0000">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Specialties (comma-separated)</label>
+            <input class="input" name="specialties_csv" value="<?= SecurityHelper::e(implode(', ', $data['specialties'] ?? [])) ?>" placeholder="Executive Inbox, CRM Ops, Bookkeeping">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Operational Bio</label>
+            <textarea class="textarea" name="bio" rows="5" placeholder="Describe your workflows, tools, and time zone coverage..."><?= SecurityHelper::e((string) ($p['bio'] ?? '')) ?></textarea>
+          </div>
+          <div style="display:flex;justify-content:flex-end;gap:10px;">
+            <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
+            <button type="submit" class="btn btn-primary">Save Profile</button>
+          </div>
+        </form>
+      </div>
+    </aside>
+  </div>
+<?php endif; ?>

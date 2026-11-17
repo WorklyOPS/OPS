@@ -29,6 +29,10 @@ final class UserApiController
             $this->listUsers();
             return;
         }
+        if (($method === 'PUT' || $method === 'PATCH') && $targetId === 'me' && !$action) {
+            $this->updateSelfProfile($actor);
+            return;
+        }
 
         AuthMiddleware::requireRoles(['admin'], $actor);
 
@@ -231,6 +235,35 @@ final class UserApiController
         $this->invalidate();
         AuditLogger::log('USER_REACTIVATED', 'success', "Reactivated account {$targetId}", $actor['id'], $actor['role'], $this->db);
         echo json_encode(['success' => true, 'status' => 'active']);
+    }
+
+    private function updateSelfProfile(array $actor): void
+    {
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $phone = SecurityHelper::sanitizePlainText($input['phone'] ?? '', 64);
+        $bio = SecurityHelper::sanitizePlainText($input['bio'] ?? '', 2000);
+
+        $stmt = $this->db->prepare('UPDATE users SET phone = :phone, bio = :bio, updated_at = NOW() WHERE id = :id');
+        $stmt->execute([
+            ':phone' => $phone,
+            ':bio'   => $bio,
+            ':id'    => $actor['id'],
+        ]);
+
+        if (isset($input['specialties']) && is_array($input['specialties'])) {
+            $this->db->prepare('DELETE FROM va_specialties WHERE va_id = :va')->execute([':va' => $actor['id']]);
+            $ins = $this->db->prepare('INSERT INTO va_specialties (va_id, specialty) VALUES (:va, :sp) ON CONFLICT DO NOTHING');
+            foreach ($input['specialties'] as $sp) {
+                $clean = SecurityHelper::sanitizePlainText((string) $sp, 64);
+                if ($clean !== '') {
+                    $ins->execute([':va' => $actor['id'], ':sp' => $clean]);
+                }
+            }
+        }
+
+        $this->invalidate();
+        AuditLogger::log('PROFILE_UPDATED', 'success', 'User updated personal profile & specialties', (string) $actor['id'], (string) $actor['role'], $this->db);
+        echo json_encode(['success' => true, 'id' => $actor['id']]);
     }
 
     private function deleteUser(string $targetId, array $actor): void

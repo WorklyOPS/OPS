@@ -173,10 +173,30 @@ $sec = $data['secrets_status'] ?? [];
 
 <!-- Tab 3: Environment & Security Controls -->
 <div class="card is-hidden" data-tab-group="admin-tabs" data-tab-panel="security">
-  <h3>Environment Keys &amp; Security Controls</h3>
-  <p class="muted" style="font-size:12px;margin-bottom:16px;">Live runtime configuration read from <code>config/.env</code> without exposing secrets.</p>
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:16px;">
+    <div>
+      <h3>Environment Keys, PostgreSQL Footprint &amp; Cache Control</h3>
+      <p class="muted" style="font-size:12px;">Live runtime configuration and PostgreSQL table metrics without exposing secret keys.</p>
+    </div>
+    <button type="button"
+            class="btn btn-secondary btn-sm"
+            data-action-url="/api/v1/logs/flush-cache"
+            data-action-method="POST">Flush Cache Store (<?= (int) ($data['cache_entries'] ?? 0) ?> keys)</button>
+  </div>
 
-  <div style="display:flex;flex-direction:column;gap:12px;max-width:540px;">
+  <?php $dbStats = $data['db_stats'] ?? []; ?>
+  <?php if (!empty($dbStats)): ?>
+    <div class="grid-4" style="margin-bottom:18px;">
+      <?php foreach ($dbStats as $tbl => $cnt): ?>
+        <div style="padding:12px 14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
+          <div class="muted" style="font-size:11.5px;font-weight:600;"><?= SecurityHelper::e(ucwords(str_replace('_', ' ', (string) $tbl))) ?></div>
+          <div class="kpi-value" style="font-size:21px;margin-top:2px;"><?= (int) $cnt ?></div>
+        </div>
+      <?php endforeach; ?>
+    </div>
+  <?php endif; ?>
+
+  <div style="display:flex;flex-direction:column;gap:12px;max-width:560px;">
     <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
       <span>Cloudflare Turnstile (or Built-in SVG CAPTCHA fallback)</span>
       <span class="badge <?= !empty($sec['turnstile_configured']) ? 'badge-success' : 'badge-brand' ?>">

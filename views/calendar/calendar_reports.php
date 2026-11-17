@@ -38,34 +38,57 @@ foreach (($data['calendar_pto'] ?? []) as $pto) {
     }
 }
 
-// Compute SLA summary metrics from report_tasks
 $repTasks = $data['report_tasks'] ?? [];
-$repTotal = count($repTasks);
-$repDone = 0;
-$repOnTime = 0;
-$repHours = 0.0;
-foreach ($repTasks as $rt) {
-    $repHours += (float) $rt['estimated_hours'] + (float) $rt['extra_hours_logged'];
-    if ($rt['status'] === 'completed') {
-        $repDone++;
-        $compDate = $rt['completed_at'] ? substr((string) $rt['completed_at'], 0, 10) : (string) $rt['deadline'];
-        if ($compDate <= (string) $rt['deadline']) {
-            $repOnTime++;
+$analytics = $data['report_analytics'] ?? [
+    'total'           => 0,
+    'completed'       => 0,
+    'on_time'         => 0,
+    'late'            => 0,
+    'overdue'         => 0,
+    'est_hours'       => 0.0,
+    'extra_hours'     => 0.0,
+    'total_hours'     => 0.0,
+    'status_counts'   => ['backlog' => 0, 'todo' => 0, 'in_progress' => 0, 'in_review' => 0, 'completed' => 0],
+    'priority_counts' => ['high' => 0, 'medium' => 0, 'low' => 0],
+    'by_client'       => [],
+    'by_va'           => [],
+];
+
+$repTotal = (int) ($analytics['total'] ?? 0);
+$repDone = (int) ($analytics['completed'] ?? 0);
+$repOnTime = (int) ($analytics['on_time'] ?? 0);
+$repLate = (int) ($analytics['late'] ?? 0);
+$repOverdue = (int) ($analytics['overdue'] ?? 0);
+$repEstHours = (float) ($analytics['est_hours'] ?? 0.0);
+$repExtraHours = (float) ($analytics['extra_hours'] ?? 0.0);
+$repHours = (float) ($analytics['total_hours'] ?? 0.0);
+$repCompletionRate = $repTotal > 0 ? round(($repDone / $repTotal) * 100, 1) : 0.0;
+$repSla = $repDone > 0 ? round(($repOnTime / $repDone) * 100, 1) : ($repTotal === 0 ? 100.0 : 0.0);
+$selectedRepVa = $data['report_va'] ?? 'all';
+
+$scopeName = 'All Assigned Scope';
+if ($role === 'va') {
+    $scopeName = $user['name'];
+} elseif ($selectedRepVa !== 'all') {
+    foreach (($data['vas'] ?? []) as $v) {
+        if ($v['id'] === $selectedRepVa) {
+            $scopeName = $v['name'];
+            break;
         }
     }
 }
-$repSla = $repDone > 0 ? round(($repOnTime / $repDone) * 100, 1) : ($repTotal === 0 ? 100.0 : 0.0);
 
-$summaryPlainText = "Workly SLA Performance Report\n"
-    . "Period: {$data['start_date']} to {$data['end_date']}\n"
-    . "Submitted By: {$user['name']} ({$user['email']})\n"
-    . "Total Tasks: {$repTotal} | Completed: {$repDone} | SLA On-Time: {$repSla}% | Hours: " . number_format($repHours, 1) . "h\n\n";
+$summaryPlainText = "Workly Executive SLA Performance Report\n"
+    . "Period: {$data['start_date']} to {$data['end_date']} | Scope: {$scopeName}\n"
+    . "Prepared By: {$user['name']} ({$user['email']})\n"
+    . "Total Tasks: {$repTotal} | Completed: {$repDone} ({$repCompletionRate}%) | SLA On-Time: {$repSla}% | Late: {$repLate} | Overdue: {$repOverdue}\n"
+    . "Hours: " . number_format($repHours, 1) . "h (Est " . number_format($repEstHours, 1) . "h + Extra " . number_format($repExtraHours, 1) . "h)\n\n";
 foreach ($repTasks as $rt) {
-    $summaryPlainText .= "- [{$rt['status']}] {$rt['title']} ({$rt['client_name']}) | Due {$rt['deadline']}\n";
+    $noteStr = !empty($rt['latest_note']) ? ' | Note: ' . $rt['latest_note'] : '';
+    $summaryPlainText .= "- [{$rt['status']} | {$rt['sla_state']}] {$rt['title']} ({$rt['client_name']} / {$rt['va_name']}) | Due {$rt['deadline']}{$noteStr}\n";
 }
 
-// Preserve active tab if custom report filter dates were submitted
-$defaultTab = (isset($_GET['start_date']) || isset($_GET['end_date'])) && !isset($_GET['month']) ? 'reports' : 'calendar';
+$defaultTab = (isset($_GET['start_date']) || isset($_GET['end_date']) || isset($_GET['rep_va'])) && !isset($_GET['month']) ? 'reports' : 'calendar';
 if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)) {
     $defaultTab = $_GET['tab'];
 }
@@ -73,20 +96,24 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
 
 <div class="page-header no-print">
   <div>
-    <h1>Calendar &amp; SLA Performance Reports</h1>
-    <p class="muted">Private user calendar events, approved PTO blocks, Team Leader meetings, and custom date-range PDF SLA reporting.</p>
+    <h1>Calendar &amp; Executive SLA Reports</h1>
+    <p class="muted">Role-scoped calendar milestones, approved PTO blocks, and analytical date-range PDF / CSV SLA reports.</p>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <?php if (in_array($role, ['team_leader', 'admin'], true)): ?>
       <button type="button" class="btn btn-secondary" data-open-drawer="drawer-schedule-meeting">+ Schedule Meeting</button>
     <?php endif; ?>
+    <button type="button"
+            class="btn btn-secondary"
+            data-export-csv="sla-tasks-table"
+            data-csv-filename="workly_sla_report_<?= SecurityHelper::e($data['start_date']) ?>_to_<?= SecurityHelper::e($data['end_date']) ?>.csv">Export CSV</button>
     <button type="button" id="btn-print-sla" class="btn btn-primary">Export SLA Report PDF</button>
   </div>
 </div>
 
 <div class="tab-strip no-print">
   <button type="button" class="tab-btn <?= $defaultTab === 'calendar' ? 'active' : '' ?>" data-tab-group="cal-rep" data-tab-btn="calendar">Monthly Schedule &amp; PTO</button>
-  <button type="button" class="tab-btn <?= $defaultTab === 'reports' ? 'active' : '' ?>" data-tab-group="cal-rep" data-tab-btn="reports">SLA Performance Reports</button>
+  <button type="button" class="tab-btn <?= $defaultTab === 'reports' ? 'active' : '' ?>" data-tab-group="cal-rep" data-tab-btn="reports">Executive SLA Analytics</button>
 </div>
 
 <!-- Tab 1: Private Role-Scoped Calendar -->
@@ -94,6 +121,7 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
   <form method="GET" action="/calendar-reports" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
     <input type="hidden" name="start_date" value="<?= SecurityHelper::e($data['start_date']) ?>">
     <input type="hidden" name="end_date" value="<?= SecurityHelper::e($data['end_date']) ?>">
+    <input type="hidden" name="rep_va" value="<?= SecurityHelper::e($selectedRepVa) ?>">
     <input type="hidden" name="tab" value="calendar">
     <div>
       <h3><?= SecurityHelper::e($firstDay->format('F Y')) ?> Schedule</h3>
@@ -143,15 +171,33 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
   </div>
 </div>
 
-<!-- Tab 2: Custom Date-Range SLA Performance Report Builder -->
-<div class="card <?= $defaultTab === 'reports' ? '' : 'is-hidden' ?>" data-tab-group="cal-rep" data-tab-panel="reports">
-  <div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:14px;margin-bottom:18px;">
+<!-- Tab 2: Detailed Executive SLA Analytics & PDF Print Report -->
+<div class="card print-report-panel <?= $defaultTab === 'reports' ? '' : 'is-hidden' ?>" data-tab-group="cal-rep" data-tab-panel="reports">
+  <!-- Print-only Executive PDF Masthead -->
+  <div class="print-only-header">
     <div>
-      <h2>Custom SLA Performance Report</h2>
-      <p class="muted" style="font-size:12.5px;">Period: <strong><?= SecurityHelper::e($data['start_date']) ?></strong> to <strong><?= SecurityHelper::e($data['end_date']) ?></strong></p>
+      <div style="font-size:11px;font-weight:700;color:#8822CE;letter-spacing:0.06em;">WORKLY OPERATIONS SUITE</div>
+      <h1 style="font-size:22px;margin-top:2px;">Executive SLA &amp; Deliverables Report</h1>
+      <div style="font-size:12px;color:#475569;margin-top:4px;">
+        Period: <strong><?= SecurityHelper::e($data['start_date']) ?></strong> to <strong><?= SecurityHelper::e($data['end_date']) ?></strong>
+        · Scope: <strong><?= SecurityHelper::e($scopeName) ?></strong>
+      </div>
+    </div>
+    <div style="text-align:right;font-size:11px;color:#475569;">
+      <div>Prepared by: <strong><?= SecurityHelper::e($user['name']) ?></strong></div>
+      <div>Generated: <?= SecurityHelper::e(gmdate('Y-m-d H:i')) ?> UTC</div>
+    </div>
+  </div>
+
+  <div class="no-print" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:14px;margin-bottom:18px;">
+    <div>
+      <h2>Executive SLA Analytics Builder</h2>
+      <p class="muted" style="font-size:12.5px;">
+        Period: <strong><?= SecurityHelper::e($data['start_date']) ?></strong> to <strong><?= SecurityHelper::e($data['end_date']) ?></strong> · Scope: <strong><?= SecurityHelper::e($scopeName) ?></strong>
+      </p>
     </div>
 
-    <form method="GET" action="/calendar-reports" class="no-print" style="display:flex;flex-wrap:wrap;gap:10px;align-items:end;">
+    <form method="GET" action="/calendar-reports" style="display:flex;flex-wrap:wrap;gap:10px;align-items:end;">
       <input type="hidden" name="month" value="<?= SecurityHelper::e($calMonth) ?>">
       <input type="hidden" name="tab" value="reports">
       <div class="form-group" style="margin-bottom:0;">
@@ -162,53 +208,232 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
         <label class="form-label">End Date</label>
         <input class="input" type="date" name="end_date" value="<?= SecurityHelper::e($data['end_date']) ?>" required>
       </div>
-      <button type="submit" class="btn btn-secondary">Generate SLA Report</button>
+      <?php if ($role !== 'va' && !empty($data['vas'])): ?>
+        <div class="form-group" style="margin-bottom:0;">
+          <label class="form-label">Filter by VA</label>
+          <select class="select" name="rep_va">
+            <option value="all" <?= $selectedRepVa === 'all' ? 'selected' : '' ?>>All Pod VAs</option>
+            <?php foreach ($data['vas'] as $v): ?>
+              <option value="<?= SecurityHelper::e($v['id']) ?>" <?= $selectedRepVa === $v['id'] ? 'selected' : '' ?>>
+                <?= SecurityHelper::e($v['name']) ?>
+              </option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+      <?php endif; ?>
+      <button type="submit" class="btn btn-primary">Run Analytics</button>
     </form>
   </div>
 
-  <div class="grid-4" style="margin-bottom:20px;">
+  <!-- 5-KPI Executive Strip -->
+  <div class="grid-5" style="margin-bottom:20px;">
     <div class="card" style="background:var(--bg);padding:14px;">
       <div class="kpi-label">Total Deliverables</div>
       <div class="kpi-value" style="font-size:22px;"><?= $repTotal ?></div>
+      <div class="kpi-sub">In date range</div>
     </div>
     <div class="card" style="background:var(--bg);padding:14px;">
-      <div class="kpi-label">Completed Deliverables</div>
-      <div class="kpi-value" style="font-size:22px;"><?= $repDone ?></div>
+      <div class="kpi-label">Completion Rate</div>
+      <div class="kpi-value" style="font-size:22px;"><?= $repCompletionRate ?>%</div>
+      <div class="kpi-sub"><?= $repDone ?> of <?= $repTotal ?> finished</div>
     </div>
     <div class="card" style="background:var(--bg);padding:14px;">
-      <div class="kpi-label">SLA On-Time Compliance</div>
+      <div class="kpi-label">SLA On-Time Rate</div>
       <div class="kpi-value" style="font-size:22px;color:var(--success);"><?= $repSla ?>%</div>
+      <div class="kpi-sub"><?= $repOnTime ?> on-time / <?= $repLate ?> late</div>
     </div>
     <div class="card" style="background:var(--bg);padding:14px;">
-      <div class="kpi-label">Total Logged Hours</div>
+      <div class="kpi-label">Logged Hours</div>
       <div class="kpi-value" style="font-size:22px;"><?= number_format($repHours, 1) ?>h</div>
+      <div class="kpi-sub"><?= number_format($repEstHours, 1) ?>h est + <?= number_format($repExtraHours, 1) ?>h extra</div>
+    </div>
+    <div class="card" style="background:var(--bg);padding:14px;">
+      <div class="kpi-label">Overdue Alerts</div>
+      <div class="kpi-value" style="font-size:22px;color:<?= $repOverdue > 0 ? 'var(--danger)' : 'var(--ink)' ?>;"><?= $repOverdue ?></div>
+      <div class="kpi-sub">Past deadline &amp; open</div>
     </div>
   </div>
 
+  <!-- Stage & Priority Analytics Row -->
+  <?php
+    $repStageMeta = [
+        'backlog'     => ['label' => 'Backlog',     'color' => '#94A3B8'],
+        'todo'        => ['label' => 'To Do',       'color' => '#A855F7'],
+        'in_progress' => ['label' => 'In Progress', 'color' => '#2563EB'],
+        'in_review'   => ['label' => 'In Review',   'color' => '#D97706'],
+        'completed'   => ['label' => 'Completed',   'color' => '#059669'],
+    ];
+    $stCounts = $analytics['status_counts'] ?? [];
+    $prCounts = $analytics['priority_counts'] ?? [];
+    $maxRepStage = max(1, ...array_map('intval', array_values($stCounts ?: [1])));
+  ?>
+  <div class="grid-2" style="margin-bottom:20px;">
+    <div class="card" style="background:var(--bg);">
+      <h4 style="margin-bottom:10px;">Stage Distribution in Period</h4>
+      <div class="svg-chart-wrap">
+        <svg width="100%" height="170" viewBox="0 0 500 170" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Report Stage Breakdown">
+          <line x1="16" y1="130" x2="484" y2="130" stroke="#D4C8EA" stroke-width="1"/>
+          <?php $idx = 0; foreach ($repStageMeta as $k => $m): ?>
+            <?php
+              $cnt = (int) ($stCounts[$k] ?? 0);
+              $bh = $cnt > 0 ? max(8, (int) round(($cnt / $maxRepStage) * 98)) : 4;
+              $bx = 32 + ($idx * 92);
+              $by = 130 - $bh;
+              $idx++;
+            ?>
+            <g>
+              <rect class="chart-bar-rect" x="<?= $bx ?>" y="<?= $by ?>" width="44" height="<?= $bh ?>" rx="6" fill="<?= SecurityHelper::e($m['color']) ?>" data-chart-tip="<?= SecurityHelper::e($m['label'] . ': ' . $cnt . ' task(s)') ?>"/>
+              <text x="<?= $bx + 22 ?>" y="<?= $by - 5 ?>" text-anchor="middle" font-size="11" font-weight="800" fill="#0F172A"><?= $cnt ?></text>
+              <text x="<?= $bx + 22 ?>" y="150" text-anchor="middle" font-size="10.5" font-weight="600" fill="#475569"><?= SecurityHelper::e($m['label']) ?></text>
+            </g>
+          <?php endforeach; ?>
+        </svg>
+      </div>
+    </div>
+
+    <div class="card" style="background:var(--bg);display:flex;flex-direction:column;justify-content:space-between;">
+      <div>
+        <h4 style="margin-bottom:12px;">Priority &amp; Punctuality Breakdown</h4>
+        <div style="display:grid;gap:10px;margin-bottom:14px;">
+          <?php foreach (['high' => ['High Priority', 'var(--danger)'], 'medium' => ['Medium Priority', 'var(--warn)'], 'low' => ['Low Priority', '#64748B']] as $pk => [$plbl, $pcol]): ?>
+            <?php
+              $pcnt = (int) ($prCounts[$pk] ?? 0);
+              $ppct = $repTotal > 0 ? round(($pcnt / $repTotal) * 100, 1) : 0;
+            ?>
+            <div>
+              <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px;">
+                <strong><?= SecurityHelper::e($plbl) ?></strong>
+                <span class="tabular-nums"><?= $pcnt ?> (<?= $ppct ?>%)</span>
+              </div>
+              <div class="progress-track">
+                <div style="width:<?= $ppct ?>%;height:100%;background:<?= $pcol ?>;border-radius:999px;"></div>
+              </div>
+            </div>
+          <?php endforeach; ?>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--border);font-size:12px;">
+        <span class="badge badge-success">On Time: <?= $repOnTime ?></span>
+        <span class="badge badge-warn">Late Completed: <?= $repLate ?></span>
+        <span class="badge badge-danger">Overdue Open: <?= $repOverdue ?></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Client Account & VA Assignee Breakdown Matrices -->
+  <div class="grid-2" style="margin-bottom:20px;">
+    <div class="card" style="background:var(--bg);">
+      <h4 style="margin-bottom:10px;">SLA Breakdown by Client Account</h4>
+      <?php if (empty($analytics['by_client'])): ?>
+        <p class="muted" style="font-size:12.5px;">No client activity in range.</p>
+      <?php else: ?>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Client</th>
+                <th>Done / Total</th>
+                <th>On-Time</th>
+                <th>Hours (Est+Extra)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php foreach ($analytics['by_client'] as $cb): ?>
+                <?php $cSla = $cb['completed'] > 0 ? round(($cb['on_time'] / $cb['completed']) * 100, 0) : 100; ?>
+                <tr>
+                  <td><strong><?= SecurityHelper::e($cb['name']) ?></strong></td>
+                  <td class="tabular-nums"><?= (int) $cb['completed'] ?> / <?= (int) $cb['total'] ?></td>
+                  <td class="tabular-nums"><?= $cSla ?>%</td>
+                  <td class="tabular-nums"><?= number_format((float) $cb['est_hours'] + (float) $cb['extra_hours'], 1) ?>h</td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+      <?php endif; ?>
+    </div>
+
+    <div class="card" style="background:var(--bg);">
+      <h4 style="margin-bottom:10px;">SLA Breakdown by VA Assignee</h4>
+      <?php if (empty($analytics['by_va'])): ?>
+        <p class="muted" style="font-size:12.5px;">No VA deliverables in range.</p>
+      <?php else: ?>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Virtual Assistant</th>
+                <th>Done / Total</th>
+                <th>On-Time</th>
+                <th>Hours (Est+Extra)</th>
+              </tr>
+            </thead>
+            <tbody>
+              <?php foreach ($analytics['by_va'] as $vb): ?>
+                <?php $vSla = $vb['completed'] > 0 ? round(($vb['on_time'] / $vb['completed']) * 100, 0) : 100; ?>
+                <tr>
+                  <td><strong><?= SecurityHelper::e($vb['name']) ?></strong></td>
+                  <td class="tabular-nums"><?= (int) $vb['completed'] ?> / <?= (int) $vb['total'] ?></td>
+                  <td class="tabular-nums"><?= $vSla ?>%</td>
+                  <td class="tabular-nums"><?= number_format((float) $vb['est_hours'] + (float) $vb['extra_hours'], 1) ?>h</td>
+                </tr>
+              <?php endforeach; ?>
+            </tbody>
+          </table>
+        </div>
+      <?php endif; ?>
+    </div>
+  </div>
+
+  <!-- Granular Deliverables Ledger -->
+  <h4 style="margin-bottom:10px;">Detailed Deliverables &amp; Execution Notes Ledger</h4>
   <div class="table-wrap" style="margin-bottom:20px;">
-    <table class="table">
+    <table id="sla-tasks-table" class="table">
       <thead>
         <tr>
-          <th>Deliverable</th>
+          <th>Deliverable &amp; Latest VA Note</th>
+          <th>Priority</th>
           <th>Client</th>
           <th>Assigned VA</th>
           <th>Deadline</th>
-          <th>Hours</th>
-          <th>Status</th>
+          <th>Est / Extra Hrs</th>
+          <th>Stage</th>
+          <th>SLA State</th>
         </tr>
       </thead>
       <tbody>
         <?php if (empty($repTasks)): ?>
-          <tr><td colspan="6" class="muted">No deliverables fall inside this custom date range.</td></tr>
+          <tr><td colspan="8" class="muted">No deliverables fall inside this custom date range.</td></tr>
         <?php else: ?>
           <?php foreach ($repTasks as $rt): ?>
+            <?php
+              $slaBadge = match ($rt['sla_state'] ?? 'Active') {
+                  'On Time' => 'badge-success',
+                  'Late'    => 'badge-warn',
+                  'Overdue' => 'badge-danger',
+                  default   => 'badge-info',
+              };
+            ?>
             <tr>
-              <td><strong><?= SecurityHelper::e($rt['title']) ?></strong></td>
+              <td>
+                <strong><?= SecurityHelper::e($rt['title']) ?></strong>
+                <?php if (!empty($rt['latest_note'])): ?>
+                  <div class="muted" style="font-size:11.5px;margin-top:2px;">Note: <?= SecurityHelper::e($rt['latest_note']) ?></div>
+                <?php endif; ?>
+              </td>
+              <td><?= SecurityHelper::e(ucfirst((string) $rt['priority'])) ?></td>
               <td><?= SecurityHelper::e($rt['client_name']) ?></td>
               <td><?= SecurityHelper::e($rt['va_name']) ?></td>
-              <td><?= SecurityHelper::e($rt['deadline']) ?></td>
-              <td><?= number_format((float) $rt['estimated_hours'] + (float) $rt['extra_hours_logged'], 1) ?>h</td>
-              <td><span class="badge badge-brand"><?= SecurityHelper::e(strtoupper((string) $rt['status'])) ?></span></td>
+              <td class="mono" style="font-size:12px;"><?= SecurityHelper::e($rt['deadline']) ?></td>
+              <td class="tabular-nums">
+                <?= number_format((float) $rt['estimated_hours'], 1) ?>h
+                <?php if ((float) $rt['extra_hours_logged'] > 0): ?>
+                  <span class="muted">(+<?= number_format((float) $rt['extra_hours_logged'], 1) ?>h)</span>
+                <?php endif; ?>
+              </td>
+              <td><span class="badge badge-brand"><?= SecurityHelper::e(strtoupper(str_replace('_', ' ', (string) $rt['status']))) ?></span></td>
+              <td><span class="badge <?= $slaBadge ?>"><?= SecurityHelper::e($rt['sla_state'] ?? 'Active') ?></span></td>
             </tr>
           <?php endforeach; ?>
         <?php endif; ?>

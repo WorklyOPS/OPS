@@ -54,16 +54,20 @@
         <div class="form-group">
           <label class="form-label" for="setup-pass">Password (minimum 8 characters)</label>
           <div class="password-wrap">
-            <input class="input" id="setup-pass" name="password" type="password" minlength="8" required placeholder="Strong production password" style="padding-right:58px;">
-            <button type="button" class="password-toggle" data-toggle-password="setup-pass">Show</button>
+            <input class="input" id="setup-pass" name="password" type="password" minlength="8" required placeholder="Strong production password" style="padding-right:48px;">
+            <button type="button" class="password-toggle" data-toggle-password="setup-pass" aria-label="Toggle password visibility" aria-pressed="false" title="Toggle password visibility">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
           </div>
         </div>
 
         <div class="form-group">
           <label class="form-label" for="setup-confirm">Confirm Password</label>
           <div class="password-wrap">
-            <input class="input" id="setup-confirm" name="password_confirm" type="password" minlength="8" required placeholder="Re-enter password" style="padding-right:58px;">
-            <button type="button" class="password-toggle" data-toggle-password="setup-confirm">Show</button>
+            <input class="input" id="setup-confirm" name="password_confirm" type="password" minlength="8" required placeholder="Re-enter password" style="padding-right:48px;">
+            <button type="button" class="password-toggle" data-toggle-password="setup-confirm" aria-label="Toggle confirm password visibility" aria-pressed="false" title="Toggle password visibility">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
           </div>
         </div>
 

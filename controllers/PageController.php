@@ -264,12 +264,27 @@ final class PageController
             $months[] = ['value' => $m->format('Y-m'), 'label' => $m->format('F Y')];
         }
 
+        $today = date('Y-m-d');
+        $dueTodayCount = 0;
+        $overdueCount = 0;
+        foreach ($tasks as $t) {
+            if ($t['status'] !== 'completed') {
+                if ((string) $t['deadline'] === $today) {
+                    $dueTodayCount++;
+                } elseif ((string) $t['deadline'] < $today) {
+                    $overdueCount++;
+                }
+            }
+        }
+
         return [
             'tasks'                => $tasks,
             'notes_by_task'        => $notesByTask,
             'comments_by_task'     => $commentsByTask,
             'extra_hours_by_task'  => $extraHoursByTask,
             'status_counts'        => $statusCounts,
+            'due_today_count'      => $dueTodayCount,
+            'overdue_count'        => $overdueCount,
             'clients'              => $clients,
             'vas'                  => $vas,
             'months'               => $months,
@@ -331,6 +346,15 @@ final class PageController
                 $res['audit_entries'] = AuditLogger::queryLogEntries($this->db, null, null, 80);
                 $res['secrets_status'] = Secrets::publicStatus();
                 $res['cache_entries'] = (int) $this->db->query('SELECT COUNT(*)::INTEGER FROM cache_store WHERE expires_at > NOW()')->fetchColumn();
+                $res['db_stats'] = [
+                    'users'          => (int) $this->db->query('SELECT COUNT(*)::INTEGER FROM users')->fetchColumn(),
+                    'clients'        => (int) $this->db->query('SELECT COUNT(*)::INTEGER FROM clients')->fetchColumn(),
+                    'tasks'          => $totalTasks,
+                    'pto_requests'   => (int) $this->db->query('SELECT COUNT(*)::INTEGER FROM pto_requests')->fetchColumn(),
+                    'email_messages' => (int) $this->db->query('SELECT COUNT(*)::INTEGER FROM email_messages')->fetchColumn(),
+                    'knowledge_docs' => (int) $this->db->query('SELECT COUNT(*)::INTEGER FROM knowledge_docs')->fetchColumn(),
+                    'audit_logs'     => (int) $this->db->query('SELECT COUNT(*)::INTEGER FROM audit_logs')->fetchColumn(),
+                ];
             } elseif ($role === 'team_leader') {
                 $podStmt = $this->db->prepare("
                     SELECT v.*, u.avatar_url, u.hourly_rate
@@ -358,20 +382,95 @@ final class PageController
                            COUNT(*) FILTER (WHERE t.status = 'completed')::INTEGER AS done_count
                     FROM tasks t
                     JOIN users u ON t.assigned_va_id = u.id
-                    WHERE (u.team_leader_id = :tl OR t.created_by_id = :tl2)
+                    WHERE (u.team_leader_id = :tl OR t.assigned_va_id = :tl2 OR t.created_by_id = :tl3)
                       AND t.deadline >= CURRENT_DATE - INTERVAL '30 days'
                     GROUP BY TO_CHAR(t.deadline, 'YYYY-MM-DD')
                     ORDER BY day_label ASC
                 ");
-                $trendStmt->execute([':tl' => $uid, ':tl2' => $uid]);
+                $trendStmt->execute([':tl' => $uid, ':tl2' => $uid, ':tl3' => $uid]);
                 $res['completion_trend'] = $trendStmt->fetchAll(PDO::FETCH_ASSOC);
+
+                // Kanban distribution per status & per VA assignee
+                $kDistStmt = $this->db->prepare("
+                    SELECT u.id AS va_id,
+                           u.name AS va_name,
+                           u.avatar_url,
+                           COALESCE(m.on_time_rate, 100.0) AS on_time_rate,
+                           COUNT(t.id) FILTER (WHERE t.status = 'backlog')::INTEGER AS backlog,
+                           COUNT(t.id) FILTER (WHERE t.status = 'todo')::INTEGER AS todo,
+                           COUNT(t.id) FILTER (WHERE t.status = 'in_progress')::INTEGER AS in_progress,
+                           COUNT(t.id) FILTER (WHERE t.status = 'in_review')::INTEGER AS in_review,
+                           COUNT(t.id) FILTER (WHERE t.status = 'completed')::INTEGER AS completed,
+                           COUNT(t.id)::INTEGER AS total_tasks,
+                           COALESCE(SUM(t.estimated_hours + COALESCE(t.extra_hours_logged, 0)), 0)::NUMERIC AS total_hours
+                    FROM users u
+                    LEFT JOIN va_task_metrics m ON u.id = m.va_id
+                    LEFT JOIN tasks t ON t.assigned_va_id = u.id
+                    WHERE u.is_active = TRUE
+                      AND (u.team_leader_id = :tl OR t.created_by_id = :tl2)
+                    GROUP BY u.id, u.name, u.avatar_url, m.on_time_rate
+                    ORDER BY total_tasks DESC, u.name ASC
+                ");
+                $kDistStmt->execute([':tl' => $uid, ':tl2' => $uid]);
+                $kanbanByVa = $kDistStmt->fetchAll(PDO::FETCH_ASSOC);
+
+                $kanbanStatusCounts = [
+                    'backlog'     => 0,
+                    'todo'        => 0,
+                    'in_progress' => 0,
+                    'in_review'   => 0,
+                    'completed'   => 0,
+                ];
+                foreach ($kanbanByVa as $vaRow) {
+                    foreach (array_keys($kanbanStatusCounts) as $stKey) {
+                        $kanbanStatusCounts[$stKey] += (int) ($vaRow[$stKey] ?? 0);
+                    }
+                }
+                $res['kanban_status_counts'] = $kanbanStatusCounts;
+                $res['kanban_by_va'] = $kanbanByVa;
+
+                // Review queue (In Review deliverables awaiting TL approval)
+                $revStmt = $this->db->prepare("
+                    SELECT t.id, t.title, t.priority, t.deadline, t.estimated_hours,
+                           u.name AS va_name, c.agency_name AS client_name
+                    FROM tasks t
+                    JOIN users u ON t.assigned_va_id = u.id
+                    JOIN clients c ON t.client_id = c.id
+                    WHERE t.status = 'in_review'
+                      AND (u.team_leader_id = :tl OR t.created_by_id = :tl2)
+                    ORDER BY t.deadline ASC
+                    LIMIT 15
+                ");
+                $revStmt->execute([':tl' => $uid, ':tl2' => $uid]);
+                $res['review_queue'] = $revStmt->fetchAll(PDO::FETCH_ASSOC);
             } elseif ($role === 'hrm') {
-                $res['pto_requests'] = $this->db->query("
+                $ptoReqs = $this->db->query("
                     SELECT p.*, u.email AS va_email, u.pto_balance_days
                     FROM pto_requests p
                     JOIN users u ON p.va_id = u.id
                     ORDER BY CASE WHEN p.status = 'pending' THEN 0 ELSE 1 END, p.requested_at DESC
                 ")->fetchAll(PDO::FETCH_ASSOC);
+                $res['pto_requests'] = $ptoReqs;
+
+                // Detect coverage overlaps among active/pending PTO requests
+                $overlaps = [];
+                foreach ($ptoReqs as $idxA => $a) {
+                    if (!in_array($a['status'], ['pending', 'approved'], true)) {
+                        continue;
+                    }
+                    foreach ($ptoReqs as $idxB => $b) {
+                        if ($idxA === $idxB || !in_array($b['status'], ['pending', 'approved'], true) || $a['va_id'] === $b['va_id']) {
+                            continue;
+                        }
+                        if ($a['start_date'] <= $b['end_date'] && $a['end_date'] >= $b['start_date']) {
+                            $overlaps[$a['id']][] = $b['va_name'];
+                        }
+                    }
+                    if (!empty($overlaps[$a['id']])) {
+                        $overlaps[$a['id']] = array_values(array_unique($overlaps[$a['id']]));
+                    }
+                }
+                $res['pto_overlaps'] = $overlaps;
 
                 $res['extra_hours'] = $this->db->query('SELECT * FROM extra_hours_logs ORDER BY logged_at DESC LIMIT 50')->fetchAll(PDO::FETCH_ASSOC);
                 $res['payroll_projection'] = (float) $this->db->query("SELECT COALESCE(SUM(hourly_rate * 160), 0) FROM users WHERE role = 'va' AND is_active = TRUE")->fetchColumn();
@@ -380,6 +479,13 @@ final class PageController
                     FROM clients c
                     LEFT JOIN users u ON c.focus_va_id = u.id
                     ORDER BY c.agency_name ASC
+                ")->fetchAll(PDO::FETCH_ASSOC);
+                $res['va_roster_health'] = $this->db->query("
+                    SELECT v.*, u.is_suspended, u.hire_date
+                    FROM v_va_performance_summary v
+                    JOIN users u ON v.va_id = u.id
+                    WHERE u.is_active = TRUE
+                    ORDER BY v.va_name ASC
                 ")->fetchAll(PDO::FETCH_ASSOC);
             }
 
@@ -601,9 +707,12 @@ final class PageController
         $ptoStmt->execute([':uid' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
         $calendarPto = $ptoStmt->fetchAll(PDO::FETCH_ASSOC);
 
+        $reportVa = SecurityHelper::sanitizePlainText($_GET['rep_va'] ?? 'all', 64);
+
         // SLA Report summary for initial range
         $repSql = "
-            SELECT t.*, u.name AS va_name, c.agency_name AS client_name
+            SELECT t.*, u.name AS va_name, c.agency_name AS client_name,
+                   (SELECT n.content FROM task_notes n WHERE n.task_id = t.id ORDER BY n.created_at DESC LIMIT 1) AS latest_note
             FROM tasks t
             JOIN users u ON t.assigned_va_id = u.id
             JOIN clients c ON t.client_id = c.id
@@ -617,11 +726,82 @@ final class PageController
             $repSql .= ' AND (u.team_leader_id = :tl OR t.assigned_va_id = :tl2)';
             $repParams[':tl'] = $uid;
             $repParams[':tl2'] = $uid;
+            if ($reportVa !== '' && $reportVa !== 'all') {
+                $repSql .= ' AND t.assigned_va_id = :rep_va';
+                $repParams[':rep_va'] = $reportVa;
+            }
+        } elseif ($reportVa !== '' && $reportVa !== 'all') {
+            $repSql .= ' AND t.assigned_va_id = :rep_va';
+            $repParams[':rep_va'] = $reportVa;
         }
-        $repSql .= ' ORDER BY t.deadline ASC';
+        $repSql .= ' ORDER BY t.deadline ASC, t.priority DESC';
         $rStmt = $this->db->prepare($repSql);
         $rStmt->execute($repParams);
         $reportTasks = $rStmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // Compute granular executive SLA analytics
+        $todayStr = date('Y-m-d');
+        $repStatusCounts = ['backlog' => 0, 'todo' => 0, 'in_progress' => 0, 'in_review' => 0, 'completed' => 0];
+        $repPriorityCounts = ['high' => 0, 'medium' => 0, 'low' => 0];
+        $repByClient = [];
+        $repByVa = [];
+        $repDone = 0;
+        $repOnTime = 0;
+        $repLate = 0;
+        $repOverdue = 0;
+        $repEstHours = 0.0;
+        $repExtraHours = 0.0;
+
+        foreach ($reportTasks as &$rt) {
+            $st = isset($repStatusCounts[$rt['status']]) ? $rt['status'] : 'todo';
+            $repStatusCounts[$st]++;
+            $pr = isset($repPriorityCounts[$rt['priority']]) ? $rt['priority'] : 'medium';
+            $repPriorityCounts[$pr]++;
+
+            $est = (float) $rt['estimated_hours'];
+            $ext = (float) $rt['extra_hours_logged'];
+            $totH = $est + $ext;
+            $repEstHours += $est;
+            $repExtraHours += $ext;
+
+            $cname = (string) $rt['client_name'];
+            if (!isset($repByClient[$cname])) {
+                $repByClient[$cname] = ['name' => $cname, 'total' => 0, 'completed' => 0, 'on_time' => 0, 'est_hours' => 0.0, 'extra_hours' => 0.0];
+            }
+            $repByClient[$cname]['total']++;
+            $repByClient[$cname]['est_hours'] += $est;
+            $repByClient[$cname]['extra_hours'] += $ext;
+
+            $vname = (string) $rt['va_name'];
+            if (!isset($repByVa[$vname])) {
+                $repByVa[$vname] = ['name' => $vname, 'total' => 0, 'completed' => 0, 'on_time' => 0, 'est_hours' => 0.0, 'extra_hours' => 0.0];
+            }
+            $repByVa[$vname]['total']++;
+            $repByVa[$vname]['est_hours'] += $est;
+            $repByVa[$vname]['extra_hours'] += $ext;
+
+            if ($rt['status'] === 'completed') {
+                $repDone++;
+                $repByClient[$cname]['completed']++;
+                $repByVa[$vname]['completed']++;
+                $compDate = $rt['completed_at'] ? substr((string) $rt['completed_at'], 0, 10) : (string) $rt['deadline'];
+                if ($compDate <= (string) $rt['deadline']) {
+                    $repOnTime++;
+                    $repByClient[$cname]['on_time']++;
+                    $repByVa[$vname]['on_time']++;
+                    $rt['sla_state'] = 'On Time';
+                } else {
+                    $repLate++;
+                    $rt['sla_state'] = 'Late';
+                }
+            } elseif ((string) $rt['deadline'] < $todayStr) {
+                $repOverdue++;
+                $rt['sla_state'] = 'Overdue';
+            } else {
+                $rt['sla_state'] = 'Active';
+            }
+        }
+        unset($rt);
 
         $vas = [];
         $clients = [];
@@ -645,18 +825,33 @@ final class PageController
         $teamLeaders = $this->db->query("SELECT id, name, email FROM users WHERE role IN ('team_leader', 'admin') AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
         return [
-            'cal_month'       => $calMonth,
-            'start_date'      => $startDate,
-            'end_date'        => $endDate,
-            'monitor_user'    => $monitorUser,
-            'meetings'        => $meetings,
-            'calendar_tasks'  => $calendarTasks,
-            'calendar_pto'    => $calendarPto,
-            'report_tasks'    => $reportTasks,
-            'vas'             => $vas,
-            'clients'         => $clients,
-            'staff_directory' => $staffDirectory,
-            'team_leaders'    => $teamLeaders,
+            'cal_month'        => $calMonth,
+            'start_date'       => $startDate,
+            'end_date'         => $endDate,
+            'report_va'        => $reportVa,
+            'monitor_user'     => $monitorUser,
+            'meetings'         => $meetings,
+            'calendar_tasks'   => $calendarTasks,
+            'calendar_pto'     => $calendarPto,
+            'report_tasks'     => $reportTasks,
+            'report_analytics' => [
+                'total'           => count($reportTasks),
+                'completed'       => $repDone,
+                'on_time'         => $repOnTime,
+                'late'            => $repLate,
+                'overdue'         => $repOverdue,
+                'est_hours'       => round($repEstHours, 2),
+                'extra_hours'     => round($repExtraHours, 2),
+                'total_hours'     => round($repEstHours + $repExtraHours, 2),
+                'status_counts'   => $repStatusCounts,
+                'priority_counts' => $repPriorityCounts,
+                'by_client'       => array_values($repByClient),
+                'by_va'           => array_values($repByVa),
+            ],
+            'vas'              => $vas,
+            'clients'          => $clients,
+            'staff_directory'  => $staffDirectory,
+            'team_leaders'     => $teamLeaders,
         ];
     }
 

@@ -85,8 +85,10 @@
         <div class="form-group">
           <label class="form-label" for="login-password">Password</label>
           <div class="password-wrap">
-            <input class="input" id="login-password" name="password" type="password" required autocomplete="current-password" placeholder="Enter your password" style="padding-right:58px;">
-            <button type="button" class="password-toggle" data-toggle-password="login-password">Show</button>
+            <input class="input" id="login-password" name="password" type="password" required autocomplete="current-password" placeholder="Enter your password" style="padding-right:48px;">
+            <button type="button" class="password-toggle" data-toggle-password="login-password" aria-label="Toggle password visibility" aria-pressed="false" title="Toggle password visibility">
+              <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
           </div>
         </div>
 

@@ -162,13 +162,21 @@ $initials = substr($initials ?: 'W', 0, 2);
           <button type="button" id="mobile-menu-toggle" class="mobile-menu-btn" aria-label="Toggle Menu">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
           </button>
-          <div>
-            <strong style="font-size:15px;"><?= SecurityHelper::e($pageTitle) ?></strong>
+          <div class="topbar-breadcrumb">
+            <span class="muted">Workly</span>
+            <span class="muted">/</span>
+            <strong style="font-size:15px;color:var(--ink);"><?= SecurityHelper::e($pageTitle) ?></strong>
           </div>
         </div>
 
         <div class="topbar-right">
-          <button type="button" id="btn-start-tour" class="btn btn-secondary btn-sm no-print">Workspace Guide</button>
+          <button type="button" id="btn-open-cmdk" class="cmdk-trigger no-print" title="Quick workspace navigation (Ctrl+K)">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            <span>Quick Jump</span>
+            <span class="kbd-hint">Ctrl+K</span>
+          </button>
+
+          <button type="button" id="btn-start-tour" class="btn btn-secondary btn-sm no-print">Guide</button>
 
           <a href="/profile" id="topbar-user-pill" class="user-pill" style="text-decoration:none;">
             <?php if (!empty($user['avatar_url'])): ?>
@@ -187,14 +195,63 @@ $initials = substr($initials ?: 'W', 0, 2);
       </header>
 
       <main class="page-content">
-        <div id="workly-skeleton" class="skeleton-screen">
-          <div class="skeleton-bar" style="width:240px;"></div>
-          <div class="grid-3">
-            <div class="skeleton-card"></div>
-            <div class="skeleton-card"></div>
-            <div class="skeleton-card"></div>
+        <div id="workly-skeleton" class="skeleton-screen" aria-busy="true" aria-label="Loading section">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+            <div>
+              <div class="skeleton-bar" style="width:280px;height:26px;margin-bottom:8px;"></div>
+              <div class="skeleton-bar" style="width:420px;max-width:75vw;height:14px;"></div>
+            </div>
+            <div class="skeleton-bar" style="width:160px;height:38px;border-radius:10px;"></div>
           </div>
-          <div class="skeleton-card" style="height:260px;"></div>
+
+          <?php if ($activeSection === 'tasks'): ?>
+            <div class="skeleton-bar" style="height:58px;border-radius:14px;"></div>
+            <div class="kanban-board">
+              <?php for ($col = 0; $col < 5; $col++): ?>
+                <div class="kanban-col" style="min-height:420px;">
+                  <div class="skeleton-bar" style="width:62%;height:18px;margin-bottom:8px;"></div>
+                  <div class="skeleton-card" style="height:126px;"></div>
+                  <div class="skeleton-card" style="height:112px;"></div>
+                  <?php if ($col < 3): ?>
+                    <div class="skeleton-card" style="height:118px;"></div>
+                  <?php endif; ?>
+                </div>
+              <?php endfor; ?>
+            </div>
+          <?php elseif ($activeSection === 'dashboard'): ?>
+            <div class="grid-4">
+              <div class="skeleton-card" style="height:106px;"></div>
+              <div class="skeleton-card" style="height:106px;"></div>
+              <div class="skeleton-card" style="height:106px;"></div>
+              <div class="skeleton-card" style="height:106px;"></div>
+            </div>
+            <div class="skeleton-card" style="height:290px;"></div>
+            <div class="grid-2">
+              <div class="skeleton-card" style="height:220px;"></div>
+              <div class="skeleton-card" style="height:220px;"></div>
+            </div>
+          <?php elseif ($activeSection === 'calendar_reports'): ?>
+            <div class="skeleton-bar" style="width:320px;height:40px;border-radius:12px;"></div>
+            <div class="grid-4">
+              <div class="skeleton-card" style="height:92px;"></div>
+              <div class="skeleton-card" style="height:92px;"></div>
+              <div class="skeleton-card" style="height:92px;"></div>
+              <div class="skeleton-card" style="height:92px;"></div>
+            </div>
+            <div class="skeleton-card" style="height:360px;"></div>
+          <?php elseif ($activeSection === 'email'): ?>
+            <div class="email-layout">
+              <div class="skeleton-card" style="height:520px;"></div>
+              <div class="skeleton-card" style="height:520px;"></div>
+            </div>
+          <?php else: ?>
+            <div class="grid-3">
+              <div class="skeleton-card" style="height:118px;"></div>
+              <div class="skeleton-card" style="height:118px;"></div>
+              <div class="skeleton-card" style="height:118px;"></div>
+            </div>
+            <div class="skeleton-card" style="height:280px;"></div>
+          <?php endif; ?>
         </div>
 
         <div id="workly-view-content" class="is-hidden view-animate">
@@ -221,6 +278,67 @@ $initials = substr($initials ?: 'W', 0, 2);
           ?>
         </div>
       </main>
+    </div>
+  </div>
+
+  <!-- Spotlight Command Palette (Ctrl+K / Cmd+K) -->
+  <div id="workly-cmdk" class="cmdk-backdrop is-hidden" role="dialog" aria-modal="true" aria-label="Workspace Command Palette">
+    <div class="cmdk-panel">
+      <div class="cmdk-input-wrap">
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--muted);flex-shrink:0;"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="cmdk-search-input" class="cmdk-input" type="text" placeholder="Jump to workspace section, reports, CRM, PTO, or profile...">
+        <span class="kbd-hint">ESC</span>
+      </div>
+      <div id="cmdk-results" class="cmdk-results">
+        <?php if ($role !== 'va'): ?>
+          <button type="button" class="cmdk-item" data-cmdk-href="/dashboard">
+            <span><strong>Overview Dashboard</strong> — Role KPIs &amp; Operations Hub</span>
+            <span class="kbd-hint">Overview</span>
+          </button>
+        <?php endif; ?>
+        <button type="button" class="cmdk-item" data-cmdk-href="/tasks">
+          <span><strong>Weekly Task Kanban</strong> — Drag &amp; drop, right-click actions, VA notes</span>
+          <span class="kbd-hint">Kanban</span>
+        </button>
+        <?php if ($role !== 'va'): ?>
+          <button type="button" class="cmdk-item" data-cmdk-href="/va-directory">
+            <span><strong>VA Directory</strong> — Roster performance &amp; pod workload</span>
+            <span class="kbd-hint">Roster</span>
+          </button>
+        <?php endif; ?>
+        <button type="button" class="cmdk-item" data-cmdk-href="/clients">
+          <span><strong>Clients CRM</strong> — Accounts, hour utilization &amp; PDF contracts</span>
+          <span class="kbd-hint">CRM</span>
+        </button>
+        <button type="button" class="cmdk-item" data-cmdk-href="/calendar-reports">
+          <span><strong>Calendar &amp; Executive SLA Reports</strong> — Schedule, CSV &amp; PDF export</span>
+          <span class="kbd-hint">Reports</span>
+        </button>
+        <button type="button" class="cmdk-item" data-cmdk-href="/calendar-reports?tab=reports">
+          <span><strong>Open SLA Performance Report Builder</strong> — Filter by VA &amp; date range</span>
+          <span class="kbd-hint">SLA PDF</span>
+        </button>
+        <button type="button" class="cmdk-item" data-cmdk-href="/pto">
+          <span><strong>PTO &amp; Leave Console</strong> — Submit, approve &amp; check coverage overlaps</span>
+          <span class="kbd-hint">Leave</span>
+        </button>
+        <button type="button" class="cmdk-item" data-cmdk-href="/email">
+          <span><strong>Email Hub</strong> — Unified PostgreSQL inbox &amp; threads</span>
+          <span class="kbd-hint">Inbox</span>
+        </button>
+        <button type="button" class="cmdk-item" data-cmdk-href="/knowledge">
+          <span><strong>Knowledge Base</strong> — SOP playbooks &amp; client runbooks</span>
+          <span class="kbd-hint">SOPs</span>
+        </button>
+        <button type="button" class="cmdk-item" data-cmdk-href="/perks">
+          <span><strong>Perks &amp; Badges</strong> — Recognition tiers &amp; staff benefits</span>
+          <span class="kbd-hint">Perks</span>
+        </button>
+        <button type="button" class="cmdk-item" data-cmdk-href="/profile">
+          <span><strong>My Profile</strong> — Edit bio/specialties, earnings ledger &amp; photo</span>
+          <span class="kbd-hint">Profile</span>
+        </button>
+      </div>
     </div>
   </div>
 

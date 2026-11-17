@@ -30,29 +30,42 @@ $extraHoursMap = $data['extra_hours_by_task'] ?? [];
   <?php endif; ?>
 </div>
 
-<?php if ($role === 'team_leader'): ?>
-  <div class="card" style="margin-bottom:18px;">
-    <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;">
-      <div>
-        <h3 style="font-size:15px;">Team Workload Distribution</h3>
-        <span class="muted" style="font-size:12px;">Status breakdown across your assigned Virtual Assistants for the selected period.</span>
-      </div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;">
-        <span class="badge badge-neutral">Backlog: <?= (int) $data['status_counts']['backlog'] ?></span>
-        <span class="badge badge-neutral">To Do: <?= (int) $data['status_counts']['todo'] ?></span>
-        <span class="badge badge-info">In Progress: <?= (int) $data['status_counts']['in_progress'] ?></span>
-        <span class="badge badge-warn">In Review: <?= (int) $data['status_counts']['in_review'] ?></span>
-        <span class="badge badge-success">Completed: <?= (int) $data['status_counts']['completed'] ?></span>
+<?php
+  $dueToday = (int) ($data['due_today_count'] ?? 0);
+  $overdue = (int) ($data['overdue_count'] ?? 0);
+  $todayYmd = date('Y-m-d');
+?>
+
+<div class="card" style="margin-bottom:18px;padding:14px 18px;">
+  <div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px;<?= $role === 'team_leader' ? 'margin-bottom:12px;' : '' ?>">
+    <div>
+      <h3 style="font-size:15px;">Daily Priority Focus</h3>
+      <div class="meta-inline" style="margin-top:3px;">
+        <span>Total Period Deliverables: <strong class="tabular-nums" style="color:var(--ink);"><?= count($data['tasks']) ?></strong></span>
+        <span>·</span>
+        <span style="color:<?= $dueToday > 0 ? 'var(--brand-secondary)' : 'var(--muted)' ?>;">Due Today: <strong class="tabular-nums"><?= $dueToday ?></strong></span>
+        <span>·</span>
+        <span style="color:<?= $overdue > 0 ? 'var(--danger)' : 'var(--success)' ?>;">Overdue Alerts: <strong class="tabular-nums"><?= $overdue ?></strong></span>
       </div>
     </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+      <span class="badge badge-neutral">Backlog: <?= (int) $data['status_counts']['backlog'] ?></span>
+      <span class="badge badge-neutral">To Do: <?= (int) $data['status_counts']['todo'] ?></span>
+      <span class="badge badge-info">In Progress: <?= (int) $data['status_counts']['in_progress'] ?></span>
+      <span class="badge badge-warn">In Review: <?= (int) $data['status_counts']['in_review'] ?></span>
+      <span class="badge badge-success">Completed: <?= (int) $data['status_counts']['completed'] ?></span>
+    </div>
+  </div>
+  <?php if ($role === 'team_leader'): ?>
     <div class="progress-track" style="display:flex;height:10px;">
       <div style="width:<?= round(($data['status_counts']['completed'] / $totalCount) * 100, 1) ?>%;background:var(--success);"></div>
       <div style="width:<?= round(($data['status_counts']['in_review'] / $totalCount) * 100, 1) ?>%;background:var(--warn);"></div>
       <div style="width:<?= round(($data['status_counts']['in_progress'] / $totalCount) * 100, 1) ?>%;background:var(--brand);"></div>
       <div style="width:<?= round(($data['status_counts']['todo'] / $totalCount) * 100, 1) ?>%;background:#C4B5FD;"></div>
     </div>
-  </div>
-<?php endif; ?>
+  <?php endif; ?>
+</div>
 
 <div class="card" style="margin-bottom:18px;padding:14px;">
   <form method="GET" action="/tasks" class="kanban-toolbar" style="margin-bottom:0;">
@@ -103,7 +116,7 @@ $extraHoursMap = $data['extra_hours_by_task'] ?? [];
     <div class="kanban-col" data-status="<?= SecurityHelper::e($colKey) ?>">
       <div class="kanban-col-head">
         <span class="kanban-col-title"><?= SecurityHelper::e($colTitle) ?></span>
-        <span class="badge badge-neutral col-count"><?= count($tasksByCol[$colKey]) ?></span>
+        <span class="badge badge-neutral col-count tabular-nums"><?= count($tasksByCol[$colKey]) ?></span>
       </div>
 
       <div class="kanban-col-cards">
@@ -118,13 +131,35 @@ $extraHoursMap = $data['extra_hours_by_task'] ?? [];
             $commentCount = count($commentsMap[$task['id']] ?? []);
             $extraHrs = (float) ($task['extra_hours_logged'] ?? 0);
             $vaInitials = strtoupper(substr((string) ($task['va_name'] ?? 'VA'), 0, 2));
+            $isOverdueCard = ($task['status'] !== 'completed' && (string) $task['deadline'] < $todayYmd);
+
+            $nextStage = null;
+            $nextLabel = null;
+            if ($task['status'] === 'backlog') {
+                $nextStage = 'todo';
+                $nextLabel = 'Queue';
+            } elseif ($task['status'] === 'todo') {
+                $nextStage = 'in_progress';
+                $nextLabel = 'Start';
+            } elseif ($task['status'] === 'in_progress') {
+                $nextStage = 'in_review';
+                $nextLabel = 'Submit';
+            } elseif ($task['status'] === 'in_review' && in_array($role, ['team_leader', 'admin'], true)) {
+                $nextStage = 'completed';
+                $nextLabel = 'Approve';
+            }
           ?>
           <article class="task-card"
                    draggable="true"
                    data-task-id="<?= SecurityHelper::e($task['id']) ?>"
                    data-search="<?= SecurityHelper::e($task['title'] . ' ' . $task['client_name'] . ' ' . $task['va_name']) ?>">
             <div class="task-card-top">
-              <span class="badge <?= $pBadge ?>"><?= SecurityHelper::e(ucfirst($task['priority'])) ?></span>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <span class="badge <?= $pBadge ?>"><?= SecurityHelper::e(ucfirst($task['priority'])) ?></span>
+                <?php if ($isOverdueCard): ?>
+                  <span class="badge badge-danger">Overdue</span>
+                <?php endif; ?>
+              </div>
               <button type="button" class="icon-chip-btn task-menu-btn" data-task-id="<?= SecurityHelper::e($task['id']) ?>" aria-label="Task context menu" title="Quick Actions">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
               </button>
@@ -134,13 +169,13 @@ $extraHoursMap = $data['extra_hours_by_task'] ?? [];
               <?= SecurityHelper::e($task['title']) ?>
             </div>
 
-            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:8px;">
-              <span class="badge badge-brand"><?= SecurityHelper::e($task['client_name']) ?></span>
-              <span class="muted mono" style="font-size:11px;"><?= SecurityHelper::e($task['deadline']) ?></span>
+            <div class="meta-inline" style="justify-content:space-between;margin-top:8px;">
+              <strong style="color:var(--brand-secondary);font-size:12px;"><?= SecurityHelper::e($task['client_name']) ?></strong>
+              <span class="mono" style="font-size:11px;color:<?= $isOverdueCard ? 'var(--danger)' : 'var(--muted)' ?>;"><?= SecurityHelper::e($task['deadline']) ?></span>
             </div>
 
             <div class="task-card-actions">
-              <div style="display:flex;align-items:center;gap:4px;">
+              <div style="display:flex;align-items:center;gap:2px;">
                 <button type="button" class="icon-chip-btn" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="notes" title="VA Notes">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
                   <span><?= $noteCount ?></span>
@@ -155,13 +190,25 @@ $extraHoursMap = $data['extra_hours_by_task'] ?? [];
                 </button>
               </div>
 
-              <span style="display:inline-flex;align-items:center;gap:5px;" title="<?= SecurityHelper::e($task['va_name']) ?>">
-                <?php if (!empty($task['va_avatar'])): ?>
-                  <img src="<?= SecurityHelper::e($task['va_avatar']) ?>" alt="<?= SecurityHelper::e($task['va_name']) ?>" class="avatar avatar-sm">
-                <?php else: ?>
-                  <span class="avatar avatar-sm"><?= SecurityHelper::e($vaInitials) ?></span>
+              <div style="display:inline-flex;align-items:center;gap:6px;">
+                <?php if ($nextStage !== null): ?>
+                  <button type="button"
+                          class="icon-chip-btn"
+                          style="background:var(--brand-tint);color:var(--brand-secondary);padding:3px 8px;"
+                          data-action-url="/api/v1/tasks/<?= SecurityHelper::e($task['id']) ?>/status"
+                          data-action-method="PATCH"
+                          data-action-body='<?= SecurityHelper::e(json_encode(['status' => $nextStage])) ?>'>
+                    <?= SecurityHelper::e($nextLabel) ?> →
+                  </button>
                 <?php endif; ?>
-              </span>
+                <span style="display:inline-flex;align-items:center;" title="<?= SecurityHelper::e($task['va_name']) ?>">
+                  <?php if (!empty($task['va_avatar'])): ?>
+                    <img src="<?= SecurityHelper::e($task['va_avatar']) ?>" alt="<?= SecurityHelper::e($task['va_name']) ?>" class="avatar avatar-sm">
+                  <?php else: ?>
+                    <span class="avatar avatar-sm"><?= SecurityHelper::e($vaInitials) ?></span>
+                  <?php endif; ?>
+                </span>
+              </div>
             </div>
           </article>
         <?php endforeach; ?>

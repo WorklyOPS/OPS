@@ -2,20 +2,45 @@
 $podVas = $data['pod_vas'] ?? [];
 $podClients = $data['pod_clients'] ?? [];
 $trend = $data['completion_trend'] ?? [];
+$statusCounts = $data['kanban_status_counts'] ?? [
+    'backlog'     => 0,
+    'todo'        => 0,
+    'in_progress' => 0,
+    'in_review'   => 0,
+    'completed'   => 0,
+];
+$byVa = $data['kanban_by_va'] ?? [];
+$reviewQueue = $data['review_queue'] ?? [];
+
+$totalKanbanTasks = array_sum(array_map('intval', $statusCounts));
+$maxStatusCount = max(1, ...array_map('intval', array_values($statusCounts)));
+$maxVaTotal = 1;
+foreach ($byVa as $vr) {
+    $maxVaTotal = max($maxVaTotal, (int) ($vr['total_tasks'] ?? 0));
+}
+
 $maxTrendTotal = 1;
 foreach ($trend as $day) {
     $maxTrendTotal = max($maxTrendTotal, (int) $day['total_count']);
 }
+
+$stageMeta = [
+    'backlog'     => ['label' => 'Backlog',     'color' => '#94A3B8'],
+    'todo'        => ['label' => 'To Do',       'color' => '#A855F7'],
+    'in_progress' => ['label' => 'In Progress', 'color' => '#2563EB'],
+    'in_review'   => ['label' => 'In Review',   'color' => '#D97706'],
+    'completed'   => ['label' => 'Completed',   'color' => '#059669'],
+];
 ?>
 
 <div class="page-header">
   <div>
     <h1>Team Leader Operations Hub</h1>
-    <p class="muted">Real-time visibility into your assigned Virtual Assistants, client capacity, and 30-day task velocity.</p>
+    <p class="muted">Real-time Kanban distribution by stage &amp; VA assignee, instant review approvals, pod capacity, and 30-day velocity.</p>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <a href="/tasks" class="btn btn-secondary">Open Kanban Board</a>
-    <a href="/calendar-reports" class="btn btn-primary">Schedule Meeting &amp; SLA Report</a>
+    <a href="/calendar-reports?tab=reports" class="btn btn-primary">Schedule Meeting &amp; SLA Report</a>
   </div>
 </div>
 
@@ -26,69 +51,306 @@ foreach ($trend as $day) {
     <div class="kpi-sub">Active roster</div>
   </div>
   <div class="card card-hover">
-    <div class="kpi-label">Managed Client Accounts</div>
-    <div class="kpi-value"><?= count($podClients) ?></div>
-    <div class="kpi-sub">Direct pod accounts</div>
+    <div class="kpi-label">Pod Deliverables Tracked</div>
+    <div class="kpi-value"><?= $totalKanbanTasks ?></div>
+    <div class="kpi-sub"><?= (int) $statusCounts['completed'] ?> completed</div>
   </div>
   <div class="card card-hover">
     <div class="kpi-label">Pending Task Reviews</div>
-    <div class="kpi-value"><?= (int) ($alerts['review_tasks'] ?? 0) ?></div>
-    <div class="kpi-sub">In Review column</div>
+    <div class="kpi-value" style="color:<?= count($reviewQueue) > 0 ? 'var(--warn)' : 'var(--ink)' ?>;"><?= count($reviewQueue) ?></div>
+    <div class="kpi-sub">Awaiting QA sign-off</div>
   </div>
   <div class="card card-hover">
-    <div class="kpi-label">Pod PTO Alerts</div>
-    <div class="kpi-value"><?= (int) ($alerts['pending_pto'] ?? 0) ?></div>
-    <div class="kpi-sub">Awaiting HR review</div>
+    <div class="kpi-label">Managed Client Accounts</div>
+    <div class="kpi-value"><?= count($podClients) ?></div>
+    <div class="kpi-sub"><?= (int) ($alerts['pending_pto'] ?? 0) ?> pending PTO alert(s)</div>
   </div>
 </div>
 
-<div class="card" style="margin-bottom:22px;">
-  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+<!-- Kanban Task Distribution Dashboard Component (Status & VA Assignee Bar Charts) -->
+<section class="card" style="margin-bottom:22px;" aria-label="Kanban Task Distribution Analytics">
+  <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
     <div>
-      <h3>30-Day Deliverable Completion Trend</h3>
-      <p class="muted" style="font-size:12px;">PostgreSQL aggregated deliverables due vs. completed across the past 30 days.</p>
+      <h3>Kanban Board Task Distribution</h3>
+      <p class="muted" style="font-size:12px;">Interactive breakdown by Kanban stage and per Virtual Assistant assignee. Click any bar to jump to filtered tasks.</p>
     </div>
-    <div style="display:flex;gap:12px;font-size:12px;">
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#E9D5FF;margin-right:4px;"></span>Total Due</span>
-      <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#8822CE;margin-right:4px;"></span>Completed</span>
+
+    <div class="tab-strip" style="margin-bottom:0;">
+      <button type="button" class="tab-btn active" data-tab-group="tl-kanban-dist" data-tab-btn="by-status">By Kanban Status</button>
+      <button type="button" class="tab-btn" data-tab-group="tl-kanban-dist" data-tab-btn="by-va">By VA Assignee</button>
     </div>
   </div>
 
-  <?php if (empty($trend)): ?>
-    <p class="muted">No deliverables recorded in the past 30 days yet.</p>
-  <?php else: ?>
+  <!-- Tab 1: Bar Chart by Kanban Status -->
+  <div data-tab-group="tl-kanban-dist" data-tab-panel="by-status">
     <?php
-      $barSlot = 44;
-      $chartW = max(560, count($trend) * $barSlot + 24);
-      $chartH = 190;
-      $plotH = 135;
+      $stKeys = array_keys($stageMeta);
+      $slotW = 148;
+      $svgW = max(720, count($stKeys) * $slotW + 40);
+      $svgH = 240;
+      $plotH = 165;
+      $baseY = 185;
     ?>
-    <div class="svg-chart-wrap" style="margin-bottom:12px;">
-      <svg width="<?= $chartW ?>" height="<?= $chartH ?>" viewBox="0 0 <?= $chartW ?> <?= $chartH ?>" role="img" aria-label="30-Day Completion Velocity">
-        <line x1="12" y1="<?= $plotH + 14 ?>" x2="<?= $chartW - 12 ?>" y2="<?= $plotH + 14 ?>" stroke="#E8E1F2" stroke-width="1"/>
-        <?php foreach ($trend as $idx => $day): ?>
+    <div class="svg-chart-wrap" style="margin-bottom:14px;">
+      <svg width="100%" height="<?= $svgH ?>" viewBox="0 0 <?= $svgW ?> <?= $svgH ?>" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Kanban Task Count Per Status Bar Chart">
+        <?php for ($g = 1; $g <= 4; $g++): ?>
+          <?php $gy = $baseY - (int) round(($g / 4) * $plotH); ?>
+          <line x1="20" y1="<?= $gy ?>" x2="<?= $svgW - 20 ?>" y2="<?= $gy ?>" stroke="#EFEAF8" stroke-width="1" stroke-dasharray="3 3"/>
+        <?php endfor; ?>
+        <line x1="20" y1="<?= $baseY ?>" x2="<?= $svgW - 20 ?>" y2="<?= $baseY ?>" stroke="#D4C8EA" stroke-width="1.5"/>
+
+        <?php foreach ($stKeys as $idx => $stKey): ?>
           <?php
-            $tot = (int) $day['total_count'];
-            $done = (int) $day['done_count'];
-            $x = 18 + ($idx * $barSlot);
-            $totH = $tot > 0 ? max(8, (int) round(($tot / $maxTrendTotal) * $plotH)) : 4;
-            $doneH = $done > 0 ? max(6, (int) round(($done / $maxTrendTotal) * $plotH)) : 0;
-            $yTot = ($plotH + 14) - $totH;
-            $yDone = ($plotH + 14) - $doneH;
-            $shortDate = substr((string) $day['day_label'], 5);
+            $cnt = (int) ($statusCounts[$stKey] ?? 0);
+            $pct = $totalKanbanTasks > 0 ? round(($cnt / $totalKanbanTasks) * 100, 1) : 0.0;
+            $meta = $stageMeta[$stKey];
+            $barH = $cnt > 0 ? max(10, (int) round(($cnt / $maxStatusCount) * $plotH)) : 4;
+            $barW = 68;
+            $x = 46 + ($idx * $slotW);
+            $y = $baseY - $barH;
+            $tip = $meta['label'] . ': ' . $cnt . ' task(s) (' . $pct . '% of board)';
           ?>
           <g>
-            <rect x="<?= $x ?>" y="<?= $yTot ?>" width="24" height="<?= $totH ?>" rx="5" fill="#F3E8FF"/>
-            <?php if ($doneH > 0): ?>
-              <rect x="<?= $x ?>" y="<?= $yDone ?>" width="24" height="<?= $doneH ?>" rx="5" fill="#8822CE"/>
-            <?php endif; ?>
-            <text x="<?= $x + 12 ?>" y="<?= $yTot - 4 ?>" text-anchor="middle" font-size="10" font-weight="700" fill="#475569"><?= $done ?>/<?= $tot ?></text>
-            <text x="<?= $x + 12 ?>" y="<?= $chartH - 12 ?>" text-anchor="middle" font-size="10" fill="#64748B"><?= SecurityHelper::e($shortDate) ?></text>
+            <rect class="chart-bar-rect"
+                  x="<?= $x ?>"
+                  y="<?= $y ?>"
+                  width="<?= $barW ?>"
+                  height="<?= $barH ?>"
+                  rx="8"
+                  fill="<?= SecurityHelper::e($meta['color']) ?>"
+                  data-chart-tip="<?= SecurityHelper::e($tip) ?>"
+                  data-chart-href="/tasks"/>
+            <text x="<?= $x + ($barW / 2) ?>" y="<?= $y - 7 ?>" text-anchor="middle" font-size="13" font-weight="800" fill="#0F172A"><?= $cnt ?></text>
+            <text x="<?= $x + ($barW / 2) ?>" y="<?= $baseY + 20 ?>" text-anchor="middle" font-size="12" font-weight="700" fill="#334155"><?= SecurityHelper::e($meta['label']) ?></text>
+            <text x="<?= $x + ($barW / 2) ?>" y="<?= $baseY + 37 ?>" text-anchor="middle" font-size="11" fill="#64748B"><?= $pct ?>%</text>
           </g>
         <?php endforeach; ?>
       </svg>
     </div>
-  <?php endif; ?>
+
+    <div class="grid-5">
+      <?php foreach ($stKeys as $stKey): ?>
+        <?php
+          $cnt = (int) ($statusCounts[$stKey] ?? 0);
+          $pct = $totalKanbanTasks > 0 ? round(($cnt / $totalKanbanTasks) * 100, 1) : 0.0;
+          $meta = $stageMeta[$stKey];
+        ?>
+        <div style="padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;">
+          <span style="display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;color:var(--ink-soft);">
+            <span style="width:9px;height:9px;border-radius:3px;background:<?= SecurityHelper::e($meta['color']) ?>;"></span>
+            <?= SecurityHelper::e($meta['label']) ?>
+          </span>
+          <strong class="tabular-nums" style="font-size:13.5px;"><?= $cnt ?> <span class="muted" style="font-weight:500;font-size:11px;">(<?= $pct ?>%)</span></strong>
+        </div>
+      <?php endforeach; ?>
+    </div>
+  </div>
+
+  <!-- Tab 2: Stacked Bar Chart by VA Assignee -->
+  <div class="is-hidden" data-tab-group="tl-kanban-dist" data-tab-panel="by-va">
+    <?php if (empty($byVa)): ?>
+      <p class="muted" style="padding:18px 0;">No Virtual Assistants with pod deliverables recorded yet.</p>
+    <?php else: ?>
+      <div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:14px;font-size:12px;">
+        <?php foreach ($stageMeta as $meta): ?>
+          <span style="display:inline-flex;align-items:center;gap:6px;color:var(--ink-soft);font-weight:600;">
+            <span style="width:10px;height:10px;border-radius:3px;background:<?= SecurityHelper::e($meta['color']) ?>;"></span>
+            <?= SecurityHelper::e($meta['label']) ?>
+          </span>
+        <?php endforeach; ?>
+      </div>
+
+      <?php
+        $vaSlot = 128;
+        $vaSvgW = max(700, count($byVa) * $vaSlot + 44);
+        $vaSvgH = 250;
+        $vaPlotH = 165;
+        $vaBaseY = 188;
+      ?>
+      <div class="svg-chart-wrap" style="margin-bottom:16px;">
+        <svg width="100%" height="<?= $vaSvgH ?>" viewBox="0 0 <?= $vaSvgW ?> <?= $vaSvgH ?>" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Kanban Task Count Per VA Assignee Stacked Bar Chart">
+          <?php for ($g = 1; $g <= 4; $g++): ?>
+            <?php $gy = $vaBaseY - (int) round(($g / 4) * $vaPlotH); ?>
+            <line x1="20" y1="<?= $gy ?>" x2="<?= $vaSvgW - 20 ?>" y2="<?= $gy ?>" stroke="#EFEAF8" stroke-width="1" stroke-dasharray="3 3"/>
+          <?php endfor; ?>
+          <line x1="20" y1="<?= $vaBaseY ?>" x2="<?= $vaSvgW - 20 ?>" y2="<?= $vaBaseY ?>" stroke="#D4C8EA" stroke-width="1.5"/>
+
+          <?php foreach ($byVa as $idx => $vr): ?>
+            <?php
+              $tot = (int) ($vr['total_tasks'] ?? 0);
+              $x = 44 + ($idx * $vaSlot);
+              $barW = 54;
+              $curY = $vaBaseY;
+              $firstName = explode(' ', trim((string) $vr['va_name']))[0] ?? 'VA';
+              $shortName = strlen($firstName) > 12 ? substr($firstName, 0, 11) . '…' : $firstName;
+              $vaHref = '/tasks?va=' . urlencode((string) $vr['va_id']);
+              $vaTip = $vr['va_name'] . ' — Total: ' . $tot . ' | Done: ' . (int) $vr['completed'] . ' | Review: ' . (int) $vr['in_review'] . ' | Active: ' . (int) $vr['in_progress'] . ' | Hrs: ' . number_format((float) $vr['total_hours'], 1) . 'h';
+            ?>
+            <g>
+              <?php if ($tot === 0): ?>
+                <rect x="<?= $x ?>" y="<?= $vaBaseY - 4 ?>" width="<?= $barW ?>" height="4" rx="2" fill="#E2E8F0" data-chart-tip="<?= SecurityHelper::e($vaTip) ?>" data-chart-href="<?= SecurityHelper::e($vaHref) ?>"/>
+              <?php else: ?>
+                <?php foreach (['completed', 'in_review', 'in_progress', 'todo', 'backlog'] as $stKey): ?>
+                  <?php
+                    $segCount = (int) ($vr[$stKey] ?? 0);
+                    if ($segCount <= 0) continue;
+                    $segH = max(5, (int) round(($segCount / $maxVaTotal) * $vaPlotH));
+                    $curY -= $segH;
+                    $segTip = $vr['va_name'] . ' · ' . $stageMeta[$stKey]['label'] . ': ' . $segCount . ' task(s)';
+                  ?>
+                  <rect class="chart-bar-rect"
+                        x="<?= $x ?>"
+                        y="<?= $curY ?>"
+                        width="<?= $barW ?>"
+                        height="<?= $segH ?>"
+                        rx="3"
+                        fill="<?= SecurityHelper::e($stageMeta[$stKey]['color']) ?>"
+                        data-chart-tip="<?= SecurityHelper::e($segTip) ?>"
+                        data-chart-href="<?= SecurityHelper::e($vaHref) ?>"/>
+                <?php endforeach; ?>
+              <?php endif; ?>
+              <text x="<?= $x + ($barW / 2) ?>" y="<?= max(16, ($tot > 0 ? $curY : $vaBaseY - 4) - 7) ?>" text-anchor="middle" font-size="12" font-weight="800" fill="#0F172A"><?= $tot ?></text>
+              <text x="<?= $x + ($barW / 2) ?>" y="<?= $vaBaseY + 20 ?>" text-anchor="middle" font-size="12" font-weight="700" fill="#334155"><?= SecurityHelper::e($shortName) ?></text>
+              <text x="<?= $x + ($barW / 2) ?>" y="<?= $vaBaseY + 37 ?>" text-anchor="middle" font-size="10.5" fill="#64748B"><?= number_format((float) $vr['on_time_rate'], 0) ?>% SLA</text>
+            </g>
+          <?php endforeach; ?>
+        </svg>
+      </div>
+
+      <div class="table-wrap">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>VA Assignee</th>
+              <th>Backlog</th>
+              <th>To Do</th>
+              <th>In Progress</th>
+              <th>In Review</th>
+              <th>Completed</th>
+              <th>Total Tasks</th>
+              <th>Logged Hours</th>
+              <th>SLA Rate</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($byVa as $vr): ?>
+              <tr>
+                <td>
+                  <a href="/tasks?va=<?= urlencode((string) $vr['va_id']) ?>" style="font-weight:700;">
+                    <?= SecurityHelper::e($vr['va_name']) ?>
+                  </a>
+                </td>
+                <td class="tabular-nums"><?= (int) $vr['backlog'] ?></td>
+                <td class="tabular-nums"><?= (int) $vr['todo'] ?></td>
+                <td class="tabular-nums"><?= (int) $vr['in_progress'] ?></td>
+                <td class="tabular-nums"><strong><?= (int) $vr['in_review'] ?></strong></td>
+                <td class="tabular-nums"><strong style="color:var(--success);"><?= (int) $vr['completed'] ?></strong></td>
+                <td class="tabular-nums"><strong><?= (int) $vr['total_tasks'] ?></strong></td>
+                <td class="tabular-nums"><?= number_format((float) $vr['total_hours'], 1) ?>h</td>
+                <td><span class="badge badge-success"><?= number_format((float) $vr['on_time_rate'], 1) ?>%</span></td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    <?php endif; ?>
+  </div>
+</section>
+
+<!-- Quick SLA Review Approval Queue + 30-Day Velocity Trend -->
+<div class="grid-2" style="margin-bottom:22px;">
+  <section class="card" aria-label="Deliverables Awaiting Review">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <div>
+        <h3>SLA Review Queue (In Review)</h3>
+        <p class="muted" style="font-size:12px;">Approve completed VA work or return deliverables for revision in one click.</p>
+      </div>
+      <span class="badge <?= count($reviewQueue) > 0 ? 'badge-warn' : 'badge-success' ?>"><?= count($reviewQueue) ?> Pending</span>
+    </div>
+
+    <?php if (empty($reviewQueue)): ?>
+      <div class="notice notice-info" style="margin-bottom:0;">All pod deliverables have been reviewed. No cards currently waiting in In Review.</div>
+    <?php else: ?>
+      <div style="display:flex;flex-direction:column;gap:10px;max-height:310px;overflow-y:auto;">
+        <?php foreach ($reviewQueue as $rq): ?>
+          <div style="padding:12px 14px;border:1px solid var(--border);border-radius:11px;background:var(--bg);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+            <div style="min-width:0;flex:1;">
+              <strong style="font-size:13.5px;display:block;"><?= SecurityHelper::e($rq['title']) ?></strong>
+              <div class="meta-inline" style="margin-top:3px;">
+                <span><?= SecurityHelper::e($rq['va_name']) ?></span>
+                <span>·</span>
+                <span><?= SecurityHelper::e($rq['client_name']) ?></span>
+                <span>·</span>
+                <span class="mono">Due <?= SecurityHelper::e($rq['deadline']) ?></span>
+              </div>
+            </div>
+            <div style="display:flex;gap:6px;flex-shrink:0;">
+              <button type="button"
+                      class="btn btn-primary btn-sm"
+                      data-action-url="/api/v1/tasks/<?= SecurityHelper::e($rq['id']) ?>/status"
+                      data-action-method="PATCH"
+                      data-action-body='{"status":"completed"}'>Approve</button>
+              <button type="button"
+                      class="btn btn-secondary btn-sm"
+                      data-action-url="/api/v1/tasks/<?= SecurityHelper::e($rq['id']) ?>/status"
+                      data-action-method="PATCH"
+                      data-action-body='{"status":"in_progress"}'>Revise</button>
+            </div>
+          </div>
+        <?php endforeach; ?>
+      </div>
+    <?php endif; ?>
+  </section>
+
+  <section class="card" aria-label="30-Day Completion Velocity">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+      <div>
+        <h3>30-Day Deliverable Velocity</h3>
+        <p class="muted" style="font-size:12px;">PostgreSQL aggregated deliverables due vs. completed.</p>
+      </div>
+      <div style="display:flex;gap:12px;font-size:12px;">
+        <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#E9D5FF;margin-right:4px;"></span>Total Due</span>
+        <span><span style="display:inline-block;width:10px;height:10px;border-radius:3px;background:#8822CE;margin-right:4px;"></span>Completed</span>
+      </div>
+    </div>
+
+    <?php if (empty($trend)): ?>
+      <p class="muted">No deliverables recorded in the past 30 days yet.</p>
+    <?php else: ?>
+      <?php
+        $barSlot = 44;
+        $chartW = max(520, count($trend) * $barSlot + 24);
+        $chartH = 200;
+        $plotH = 140;
+      ?>
+      <div class="svg-chart-wrap">
+        <svg width="<?= $chartW ?>" height="<?= $chartH ?>" viewBox="0 0 <?= $chartW ?> <?= $chartH ?>" role="img" aria-label="30-Day Completion Velocity">
+          <line x1="12" y1="<?= $plotH + 16 ?>" x2="<?= $chartW - 12 ?>" y2="<?= $plotH + 16 ?>" stroke="#E8E1F2" stroke-width="1"/>
+          <?php foreach ($trend as $idx => $day): ?>
+            <?php
+              $tot = (int) $day['total_count'];
+              $done = (int) $day['done_count'];
+              $x = 18 + ($idx * $barSlot);
+              $totH = $tot > 0 ? max(8, (int) round(($tot / $maxTrendTotal) * $plotH)) : 4;
+              $doneH = $done > 0 ? max(6, (int) round(($done / $maxTrendTotal) * $plotH)) : 0;
+              $yTot = ($plotH + 16) - $totH;
+              $yDone = ($plotH + 16) - $doneH;
+              $shortDate = substr((string) $day['day_label'], 5);
+              $dayTip = $day['day_label'] . ': ' . $done . ' completed out of ' . $tot . ' due';
+            ?>
+            <g>
+              <rect class="chart-bar-rect" x="<?= $x ?>" y="<?= $yTot ?>" width="24" height="<?= $totH ?>" rx="5" fill="#F3E8FF" data-chart-tip="<?= SecurityHelper::e($dayTip) ?>"/>
+              <?php if ($doneH > 0): ?>
+                <rect class="chart-bar-rect" x="<?= $x ?>" y="<?= $yDone ?>" width="24" height="<?= $doneH ?>" rx="5" fill="#8822CE" data-chart-tip="<?= SecurityHelper::e($dayTip) ?>"/>
+              <?php endif; ?>
+              <text x="<?= $x + 12 ?>" y="<?= $yTot - 5 ?>" text-anchor="middle" font-size="10" font-weight="700" fill="#475569"><?= $done ?>/<?= $tot ?></text>
+              <text x="<?= $x + 12 ?>" y="<?= $chartH - 12 ?>" text-anchor="middle" font-size="10" fill="#64748B"><?= SecurityHelper::e($shortDate) ?></text>
+            </g>
+          <?php endforeach; ?>
+        </svg>
+      </div>
+    <?php endif; ?>
+  </section>
 </div>
 
 <h3 style="margin-bottom:12px;">Assigned Virtual Assistants</h3>
@@ -114,13 +376,16 @@ foreach ($trend as $day) {
         </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12.5px;margin-bottom:12px;">
-          <div>Completed: <strong><?= (int) $va['completed_tasks'] ?></strong></div>
-          <div>In Progress: <strong><?= (int) $va['in_progress_tasks'] ?></strong></div>
-          <div>PTO Balance: <strong><?= (int) $va['pto_balance_days'] ?>d</strong></div>
-          <div>Rate: <strong>$<?= number_format((float) $va['hourly_rate'], 2) ?>/h</strong></div>
+          <div>Completed: <strong class="tabular-nums"><?= (int) $va['completed_tasks'] ?></strong></div>
+          <div>In Progress: <strong class="tabular-nums"><?= (int) $va['in_progress_tasks'] ?></strong></div>
+          <div>PTO Balance: <strong class="tabular-nums"><?= (int) $va['pto_balance_days'] ?>d</strong></div>
+          <div>Rate: <strong class="tabular-nums">$<?= number_format((float) $va['hourly_rate'], 2) ?>/h</strong></div>
         </div>
 
-        <a href="/profile?va_id=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm" style="width:100%;">Inspect VA Profile</a>
+        <div style="display:flex;gap:8px;">
+          <a href="/tasks?va=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm" style="flex:1;">Tasks</a>
+          <a href="/profile?va_id=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm" style="flex:1;">Inspect Profile</a>
+        </div>
       </div>
     <?php endforeach; ?>
   </div>
@@ -149,7 +414,7 @@ foreach ($trend as $day) {
         <div class="progress-track" style="margin-bottom:6px;">
           <div class="progress-fill" style="width:<?= $capPct ?>%;"></div>
         </div>
-        <div class="muted" style="font-size:11.5px;"><?= number_format((float) $cl['consumed_hours_month'], 1) ?> / <?= number_format((float) $cl['contracted_hours_per_month'], 1) ?> hrs (<?= $capPct ?>%)</div>
+        <div class="muted tabular-nums" style="font-size:11.5px;"><?= number_format((float) $cl['consumed_hours_month'], 1) ?> / <?= number_format((float) $cl['contracted_hours_per_month'], 1) ?> hrs (<?= $capPct ?>%)</div>
       </div>
     <?php endforeach; ?>
   </div>

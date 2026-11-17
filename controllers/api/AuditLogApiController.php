@@ -9,6 +9,7 @@ require_once __DIR__ . '/../../services/CacheService.php';
 require_once __DIR__ . '/../../services/AuditLogger.php';
 require_once __DIR__ . '/../../services/SecurityHelper.php';
 require_once __DIR__ . '/../../middleware/AuthMiddleware.php';
+require_once __DIR__ . '/../../middleware/CsrfMiddleware.php';
 
 final class AuditLogApiController
 {
@@ -16,14 +17,25 @@ final class AuditLogApiController
 
     public function handle(string $method, string $uri): void
     {
+        $actor = AuthMiddleware::authenticateApi($this->db);
+        AuthMiddleware::requireRoles(['admin'], $actor);
+        CsrfMiddleware::validateApi($method);
+
+        $parts = explode('/', trim($uri, '/'));
+        $sub = $parts[3] ?? '';
+
+        if ($method === 'POST' && $sub === 'flush-cache') {
+            $deleted = (int) $this->db->exec('DELETE FROM cache_store');
+            AuditLogger::log('CACHE_FLUSHED', 'success', "Admin flushed {$deleted} cached key(s) in PostgreSQL", (string) $actor['id'], (string) $actor['role'], $this->db);
+            echo json_encode(['success' => true, 'flushed' => $deleted]);
+            return;
+        }
+
         if ($method !== 'GET') {
             http_response_code(405);
             echo json_encode(['error' => 'Method not allowed']);
             return;
         }
-
-        $actor = AuthMiddleware::authenticateApi($this->db);
-        AuthMiddleware::requireRoles(['admin'], $actor);
 
         $month = SecurityHelper::sanitizePlainText($_GET['month'] ?? '', 32);
         $userId = SecurityHelper::sanitizePlainText($_GET['user_id'] ?? '', 64);
