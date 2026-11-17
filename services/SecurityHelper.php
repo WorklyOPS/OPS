@@ -29,7 +29,7 @@ final class SecurityHelper
         header('X-XSS-Protection: 1; mode=block');
         header('Referrer-Policy: strict-origin-when-cross-origin');
         header('Permissions-Policy: geolocation=(), microphone=(), camera=()');
-        header("Content-Security-Policy: default-src 'self'; script-src 'self' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data:; frame-src https://challenges.cloudflare.com; connect-src 'self'; frame-ancestors 'self'; base-uri 'self'; form-action 'self';");
+        header("Content-Security-Policy: default-src 'self'; script-src 'self' https://challenges.cloudflare.com https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data:; frame-src https://challenges.cloudflare.com https://*.firebaseapp.com https://accounts.google.com; connect-src 'self' https://*.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self';");
     }
 
     public static function configureSecureSession(): void
@@ -43,9 +43,10 @@ final class SecurityHelper
             ini_set('session.use_only_cookies', '1');
             ini_set('session.cookie_httponly', '1');
             ini_set('session.cookie_samesite', 'Lax');
+            ini_set('session.gc_maxlifetime', '604800');
 
             session_set_cookie_params([
-                'lifetime' => 86400,
+                'lifetime' => 604800,
                 'path'     => '/',
                 'domain'   => '',
                 'secure'   => $isHttps,
@@ -59,10 +60,7 @@ final class SecurityHelper
     public static function getClientFingerprint(): string
     {
         $ua = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
-        $ip = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? ($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
-        $firstIp = trim(explode(',', $ip)[0]);
-        $ipSubnet = implode('.', array_slice(explode('.', $firstIp), 0, 3));
-        return hash('sha256', $ua . '|' . $ipSubnet);
+        return hash('sha256', 'workly-ua|' . $ua);
     }
 
     public static function verifySessionIntegrity(): bool
@@ -103,6 +101,26 @@ final class SecurityHelper
         $stripped = strip_tags((string) $value);
         $cleaned = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $stripped) ?? '';
         return mb_substr(trim($cleaned), 0, $maxLength, 'UTF-8');
+    }
+
+    public static function sanitizeRichHtml(?string $html, int $maxLength = 30000): string
+    {
+        if ($html === null || trim($html) === '') {
+            return '';
+        }
+        $raw = preg_replace('#<(script|style|iframe|object|embed|form|input|button|textarea|select)[^>]*>.*?</\1>#is', '', $html) ?? '';
+        $raw = preg_replace('#<(script|style|iframe|object|embed|form|input|button|meta|link|base)[^>]*?/?>#is', '', $raw) ?? '';
+        $allowed = strip_tags($raw, '<p><br><b><strong><i><em><u><h3><h4><ul><ol><li><a><blockquote><code><pre>');
+        $allowed = preg_replace('/\son[a-z]+\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $allowed) ?? '';
+        $allowed = preg_replace('/\s(style|id|class)\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $allowed) ?? '';
+        $allowed = preg_replace_callback('/<a\s+[^>]*href\s*=\s*(?:"([^"]*)"|\'([^\']*)\')[^>]*>/i', static function (array $m): string {
+            $href = self::sanitizeUrl($m[1] !== '' ? $m[1] : ($m[2] ?? ''));
+            if ($href === '') {
+                return '<a>';
+            }
+            return '<a href="' . self::e($href) . '" target="_blank" rel="noopener noreferrer">';
+        }, $allowed) ?? '';
+        return mb_substr(trim($allowed), 0, $maxLength, 'UTF-8');
     }
 
     public static function sanitizeUrl(?string $url): string

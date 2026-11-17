@@ -20,7 +20,7 @@ final class UploadApiController
 
     public function handle(string $method, string $uri): void
     {
-        if ($method !== 'POST') {
+        if (!in_array($method, ['POST', 'DELETE'], true)) {
             $this->jsonError(405, 'Method not allowed');
             return;
         }
@@ -32,14 +32,22 @@ final class UploadApiController
         $sub = $parts[3] ?? '';
 
         if ($sub === 'avatar') {
-            $this->uploadAvatar($user);
+            if ($method === 'DELETE') {
+                $this->deleteAvatar($user);
+            } else {
+                $this->uploadAvatar($user);
+            }
             return;
         }
         if ($sub === 'client-avatar') {
-            $this->uploadClientAvatar($user);
+            if ($method === 'DELETE') {
+                $this->deleteClientAvatar($user);
+            } else {
+                $this->uploadClientAvatar($user);
+            }
             return;
         }
-        if ($sub === 'contract') {
+        if ($sub === 'contract' && $method === 'POST') {
             AuthMiddleware::requireRoles(['admin', 'team_leader', 'hrm'], $user);
             $this->uploadContract($user);
             return;
@@ -239,13 +247,18 @@ final class UploadApiController
 
     private function uploadAvatar(array $actor): void
     {
+        if ($actor['role'] === 'va') {
+            $this->jsonError(403, 'Forbidden: VAs cannot edit their profile photo. Ask an Admin or Team Leader.');
+            return;
+        }
+
         $targetUserId = SecurityHelper::sanitizePlainText($_POST['user_id'] ?? $actor['id'], 64);
         if ($targetUserId === '') {
             $targetUserId = (string) $actor['id'];
         }
 
-        if ($actor['role'] !== 'admin' && $targetUserId !== $actor['id']) {
-            $this->jsonError(403, 'Forbidden: Only administrators can upload photos for other staff');
+        if (!in_array($actor['role'], ['admin', 'team_leader'], true) && $targetUserId !== $actor['id']) {
+            $this->jsonError(403, 'Forbidden: Only administrators or team leaders can upload photos for staff');
             return;
         }
 
@@ -291,24 +304,52 @@ final class UploadApiController
         }
     }
 
+    private function deleteAvatar(array $actor): void
+    {
+        if ($actor['role'] === 'va') {
+            $this->jsonError(403, 'Forbidden: VAs have read-only profile access');
+            return;
+        }
+
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $targetUserId = SecurityHelper::sanitizePlainText($input['user_id'] ?? ($_GET['user_id'] ?? $actor['id']), 64);
+        if ($targetUserId === '') {
+            $targetUserId = (string) $actor['id'];
+        }
+
+        if (!in_array($actor['role'], ['admin', 'team_leader'], true) && $targetUserId !== $actor['id']) {
+            $this->jsonError(403, 'Forbidden: Cannot delete another user avatar');
+            return;
+        }
+
+        $stmt = $this->db->prepare('UPDATE users SET avatar_url = NULL, updated_at = NOW() WHERE id = :id');
+        $stmt->execute([':id' => $targetUserId]);
+
+        CacheService::invalidatePrefix($this->db, 'users:');
+        CacheService::invalidatePrefix($this->db, 'analytics:');
+        AuditLogger::log('AVATAR_DELETED', 'warning', "Removed avatar for {$targetUserId}", (string) $actor['id'], (string) $actor['role'], $this->db);
+
+        $this->jsonSuccess(['success' => true, 'avatar_url' => null]);
+    }
+
     private function uploadClientAvatar(array $actor): void
     {
+        if (!in_array($actor['role'], ['admin', 'team_leader', 'hrm'], true)) {
+            $this->jsonError(403, 'Forbidden: VAs do not have edit permissions on client accounts');
+            return;
+        }
+
         $clientId = SecurityHelper::sanitizePlainText($_POST['client_id'] ?? '', 64);
         if ($clientId === '') {
             $this->jsonError(422, 'Client ID is required');
             return;
         }
 
-        // Verify role access to client
         $cStmt = $this->db->prepare('SELECT id, focus_va_id, team_leader_id FROM clients WHERE id = :id LIMIT 1');
         $cStmt->execute([':id' => $clientId]);
         $client = $cStmt->fetch(PDO::FETCH_ASSOC);
         if (!$client) {
             $this->jsonError(404, 'Client account not found');
-            return;
-        }
-        if ($actor['role'] === 'va' && $client['focus_va_id'] !== $actor['id']) {
-            $this->jsonError(403, 'Forbidden: Not assigned to this client');
             return;
         }
 
@@ -352,6 +393,30 @@ final class UploadApiController
         } catch (Throwable $e) {
             $this->jsonError(500, 'Could not process client image: ' . $e->getMessage());
         }
+    }
+
+    private function deleteClientAvatar(array $actor): void
+    {
+        if (!in_array($actor['role'], ['admin', 'team_leader', 'hrm'], true)) {
+            $this->jsonError(403, 'Forbidden: VAs do not have edit permissions on client accounts');
+            return;
+        }
+
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $clientId = SecurityHelper::sanitizePlainText($input['client_id'] ?? ($_GET['client_id'] ?? ''), 64);
+        if ($clientId === '') {
+            $this->jsonError(422, 'Client ID is required');
+            return;
+        }
+
+        $stmt = $this->db->prepare('UPDATE clients SET avatar_url = NULL, updated_at = NOW() WHERE id = :id');
+        $stmt->execute([':id' => $clientId]);
+
+        CacheService::invalidatePrefix($this->db, 'clients:');
+        CacheService::invalidatePrefix($this->db, 'analytics:');
+        AuditLogger::log('CLIENT_AVATAR_DELETED', 'warning', "Removed avatar/logo for client {$clientId}", (string) $actor['id'], (string) $actor['role'], $this->db);
+
+        $this->jsonSuccess(['success' => true, 'avatar_url' => null]);
     }
 
     private function uploadContract(array $actor): void

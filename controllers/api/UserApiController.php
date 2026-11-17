@@ -1,6 +1,6 @@
 <?php
 /**
- * Workly User & Staff Governance API Controller (PHP 8 + PostgreSQL)
+ * Workly User, VA Specialties & Pod Roster Governance API Controller (PHP 8 + PostgreSQL)
  */
 
 declare(strict_types=1);
@@ -13,16 +13,43 @@ require_once __DIR__ . '/../../middleware/CsrfMiddleware.php';
 
 final class UserApiController
 {
+    public const DEFAULT_SPECIALTIES = [
+        'Development',
+        'Marketing',
+        'Legal',
+        'Insurance',
+        'Healthcare',
+        'Administrative',
+        'Management',
+        'Accounting',
+    ];
+
     public function __construct(private PDO $db) {}
 
     public function handle(string $method, string $uri): void
     {
         $actor = AuthMiddleware::authenticateApi($this->db);
         CsrfMiddleware::validateApi($method);
+        self::ensureSpecialtyCategoriesTable($this->db);
 
         $parts = explode('/', trim($uri, '/'));
         $targetId = $parts[3] ?? ($_GET['id'] ?? null);
         $action = $parts[4] ?? null;
+
+        if ($method === 'GET' && $targetId === 'specialties') {
+            echo json_encode(['data' => self::listSpecialtyCategories($this->db)]);
+            return;
+        }
+        if ($method === 'POST' && $targetId === 'specialties') {
+            AuthMiddleware::requireRoles(['admin'], $actor);
+            $this->createSpecialtyCategory($actor);
+            return;
+        }
+        if ($method === 'PATCH' && $targetId === 'pod-vas') {
+            AuthMiddleware::requireRoles(['admin', 'team_leader'], $actor);
+            $this->updatePodVas($actor);
+            return;
+        }
 
         if ($method === 'GET' && !$targetId) {
             AuthMiddleware::requireRoles(['admin', 'team_leader', 'hrm'], $actor);
@@ -31,6 +58,11 @@ final class UserApiController
         }
         if (($method === 'PUT' || $method === 'PATCH') && $targetId === 'me' && !$action) {
             $this->updateSelfProfile($actor);
+            return;
+        }
+        if (($method === 'PUT' || $method === 'PATCH') && $targetId && !$action) {
+            AuthMiddleware::requireRoles(['admin', 'team_leader'], $actor);
+            $this->updateUser($targetId, $actor);
             return;
         }
 
@@ -48,10 +80,6 @@ final class UserApiController
             $this->reactivateUser($targetId, $actor);
             return;
         }
-        if (($method === 'PUT' || $method === 'PATCH') && $targetId && !$action) {
-            $this->updateUser($targetId, $actor);
-            return;
-        }
         if ($method === 'DELETE' && $targetId) {
             $this->deleteUser($targetId, $actor);
             return;
@@ -61,10 +89,87 @@ final class UserApiController
         echo json_encode(['error' => 'User API route not found']);
     }
 
+    public static function ensureSpecialtyCategoriesTable(PDO $db): void
+    {
+        try {
+            $db->exec("
+                CREATE TABLE IF NOT EXISTS va_specialty_categories (
+                    name VARCHAR(64) PRIMARY KEY,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            ");
+            $ins = $db->prepare("INSERT INTO va_specialty_categories (name) VALUES (:n) ON CONFLICT (name) DO NOTHING");
+            foreach (self::DEFAULT_SPECIALTIES as $cat) {
+                $ins->execute([':n' => $cat]);
+            }
+        } catch (Throwable) {
+            // Schema already aligned
+        }
+    }
+
+    public static function listSpecialtyCategories(PDO $db): array
+    {
+        self::ensureSpecialtyCategoriesTable($db);
+        try {
+            return $db->query('SELECT name FROM va_specialty_categories ORDER BY name ASC')->fetchAll(PDO::FETCH_COLUMN);
+        } catch (Throwable) {
+            return self::DEFAULT_SPECIALTIES;
+        }
+    }
+
     private function invalidate(): void
     {
         CacheService::invalidatePrefix($this->db, 'users:');
         CacheService::invalidatePrefix($this->db, 'analytics:');
+    }
+
+    private function createSpecialtyCategory(array $actor): void
+    {
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $name = SecurityHelper::sanitizePlainText($input['name'] ?? '', 64);
+        if ($name === '') {
+            http_response_code(422);
+            echo json_encode(['error' => 'Specialty category name is required']);
+            return;
+        }
+
+        $stmt = $this->db->prepare('INSERT INTO va_specialty_categories (name) VALUES (:name) ON CONFLICT (name) DO NOTHING');
+        $stmt->execute([':name' => $name]);
+
+        $this->invalidate();
+        AuditLogger::log('VA_SPECIALTY_CREATED', 'success', "Admin added VA specialty category: {$name}", $actor['id'], $actor['role'], $this->db);
+        http_response_code(201);
+        echo json_encode(['success' => true, 'name' => $name, 'categories' => self::listSpecialtyCategories($this->db)]);
+    }
+
+    private function updatePodVas(array $actor): void
+    {
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $tlId = $actor['role'] === 'admin'
+            ? SecurityHelper::sanitizePlainText($input['team_leader_id'] ?? $actor['id'], 64)
+            : (string) $actor['id'];
+
+        $selectedIds = isset($input['va_ids']) && is_array($input['va_ids'])
+            ? array_values(array_unique(array_filter(array_map(
+                static fn($v) => SecurityHelper::sanitizePlainText((string) $v, 64),
+                $input['va_ids']
+            ))))
+            : [];
+
+        // Clear VAs previously assigned to this TL if they were unchecked
+        $clr = $this->db->prepare("UPDATE users SET team_leader_id = NULL, updated_at = NOW() WHERE role = 'va' AND team_leader_id = :tl");
+        $clr->execute([':tl' => $tlId]);
+
+        if (!empty($selectedIds)) {
+            $ph = implode(',', array_fill(0, count($selectedIds), '?'));
+            $params = array_merge([$tlId], $selectedIds);
+            $upd = $this->db->prepare("UPDATE users SET team_leader_id = ?, updated_at = NOW() WHERE role = 'va' AND id IN ({$ph})");
+            $upd->execute($params);
+        }
+
+        $this->invalidate();
+        AuditLogger::log('POD_VAS_UPDATED', 'success', "Updated assigned VAs for Team Leader {$tlId}", $actor['id'], $actor['role'], $this->db);
+        echo json_encode(['success' => true, 'team_leader_id' => $tlId, 'va_ids' => $selectedIds]);
     }
 
     private function listUsers(): void
@@ -72,13 +177,24 @@ final class UserApiController
         $hit = false;
         $payload = CacheService::remember($this->db, 'users:all', 45, function (): array {
             $stmt = $this->db->query("
-                SELECT id, name, email, role, avatar_url, phone, bio, hire_date,
-                       hourly_rate, total_earnings, pto_balance_days, pto_taken_days,
-                       team_leader_id, is_active, is_suspended, suspended_reason
-                FROM users
-                ORDER BY role ASC, name ASC
+                SELECT u.id, u.name, u.email, u.role, u.avatar_url, u.phone, u.bio, u.hire_date,
+                       u.hourly_rate, u.total_earnings, u.pto_balance_days, u.pto_taken_days,
+                       u.team_leader_id, u.is_active, u.is_suspended, u.suspended_reason,
+                       COALESCE(STRING_AGG(DISTINCT s.specialty, '||'), '') AS specialties_joined
+                FROM users u
+                LEFT JOIN va_specialties s ON u.id = s.va_id
+                GROUP BY u.id
+                ORDER BY u.role ASC, u.name ASC
             ");
-            return ['data' => $stmt->fetchAll(PDO::FETCH_ASSOC)];
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$r) {
+                $r['specialties'] = ($r['role'] === 'va' && $r['specialties_joined'] !== '')
+                    ? explode('||', (string) $r['specialties_joined'])
+                    : [];
+                unset($r['specialties_joined']);
+            }
+            unset($r);
+            return ['data' => $rows];
         }, $hit);
         CacheService::sendJsonWithEtag($payload, $hit, 30);
     }
@@ -125,11 +241,13 @@ final class UserApiController
             ':tl'    => $role === 'va' ? $tlId : null,
         ]);
 
-        if (!empty($input['specialties']) && is_array($input['specialties'])) {
+        // Specialties strictly reserved for VA accounts
+        if ($role === 'va' && !empty($input['specialties']) && is_array($input['specialties'])) {
+            $validCats = self::listSpecialtyCategories($this->db);
             $ins = $this->db->prepare('INSERT INTO va_specialties (va_id, specialty) VALUES (:va_id, :spec) ON CONFLICT DO NOTHING');
             foreach ($input['specialties'] as $sp) {
                 $clean = SecurityHelper::sanitizePlainText((string) $sp, 64);
-                if ($clean !== '') {
+                if ($clean !== '' && in_array($clean, $validCats, true)) {
                     $ins->execute([':va_id' => $id, ':spec' => $clean]);
                 }
             }
@@ -158,21 +276,40 @@ final class UserApiController
 
     private function updateUser(string $targetId, array $actor): void
     {
+        $uStmt = $this->db->prepare('SELECT id, role FROM users WHERE id = :id LIMIT 1');
+        $uStmt->execute([':id' => $targetId]);
+        $targetRow = $uStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$targetRow) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Target user account not found']);
+            return;
+        }
+
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
-        $allowed = ['name', 'email', 'role', 'phone', 'bio', 'hourly_rate', 'pto_balance_days', 'team_leader_id'];
+
+        // Team Leaders can edit profiles (name, phone, bio, team assignment, responsibilities, VA specialties)
+        // Admins can edit all fields including role, hourly_rate, pto_balance_days, password.
+        $allowed = $actor['role'] === 'admin'
+            ? ['name', 'email', 'role', 'phone', 'bio', 'hourly_rate', 'pto_balance_days', 'team_leader_id']
+            : ['name', 'phone', 'bio', 'team_leader_id'];
+
         $fields = [];
         $params = [':id' => $targetId];
 
         foreach ($allowed as $col) {
             if (array_key_exists($col, $input)) {
                 $fields[] = "{$col} = :{$col}";
-                $params[":{$col}"] = is_string($input[$col])
-                    ? (SecurityHelper::sanitizePlainText($input[$col]) ?: null)
-                    : $input[$col];
+                if ($col === 'email') {
+                    $params[':email'] = strtolower(filter_var($input[$col], FILTER_VALIDATE_EMAIL) ?: '');
+                } elseif (is_string($input[$col])) {
+                    $params[":{$col}"] = SecurityHelper::sanitizePlainText($input[$col]) ?: null;
+                } else {
+                    $params[":{$col}"] = $input[$col];
+                }
             }
         }
 
-        if (!empty($input['password']) && strlen((string) $input['password']) >= 8) {
+        if ($actor['role'] === 'admin' && !empty($input['password']) && strlen((string) $input['password']) >= 8) {
             $fields[] = 'password_hash = :password_hash';
             $params[':password_hash'] = password_hash((string) $input['password'], PASSWORD_BCRYPT, ['cost' => 11]);
         }
@@ -182,12 +319,19 @@ final class UserApiController
             $stmt->execute($params);
         }
 
-        if (isset($input['specialties']) && is_array($input['specialties'])) {
+        $effectiveRole = ($actor['role'] === 'admin' && !empty($input['role']))
+            ? (string) $input['role']
+            : (string) $targetRow['role'];
+
+        if ($effectiveRole !== 'va') {
+            $this->db->prepare('DELETE FROM va_specialties WHERE va_id = :va')->execute([':va' => $targetId]);
+        } elseif (isset($input['specialties']) && is_array($input['specialties'])) {
+            $validCats = self::listSpecialtyCategories($this->db);
             $this->db->prepare('DELETE FROM va_specialties WHERE va_id = :va')->execute([':va' => $targetId]);
             $ins = $this->db->prepare('INSERT INTO va_specialties (va_id, specialty) VALUES (:va, :sp) ON CONFLICT DO NOTHING');
             foreach ($input['specialties'] as $sp) {
                 $clean = SecurityHelper::sanitizePlainText((string) $sp, 64);
-                if ($clean !== '') {
+                if ($clean !== '' && in_array($clean, $validCats, true)) {
                     $ins->execute([':va' => $targetId, ':sp' => $clean]);
                 }
             }
@@ -205,7 +349,7 @@ final class UserApiController
         }
 
         $this->invalidate();
-        AuditLogger::log('USER_UPDATED', 'success', "Admin updated account {$targetId}", $actor['id'], $actor['role'], $this->db);
+        AuditLogger::log('USER_UPDATED', 'success', "{$actor['role']} updated account {$targetId}", $actor['id'], $actor['role'], $this->db);
         echo json_encode(['success' => true, 'id' => $targetId]);
     }
 
@@ -239,6 +383,12 @@ final class UserApiController
 
     private function updateSelfProfile(array $actor): void
     {
+        if ($actor['role'] === 'va') {
+            http_response_code(403);
+            echo json_encode(['error' => 'Forbidden: VAs have read-only profile access. Contact your Team Leader or Administrator.']);
+            return;
+        }
+
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
         $phone = SecurityHelper::sanitizePlainText($input['phone'] ?? '', 64);
         $bio = SecurityHelper::sanitizePlainText($input['bio'] ?? '', 2000);
@@ -250,19 +400,8 @@ final class UserApiController
             ':id'    => $actor['id'],
         ]);
 
-        if (isset($input['specialties']) && is_array($input['specialties'])) {
-            $this->db->prepare('DELETE FROM va_specialties WHERE va_id = :va')->execute([':va' => $actor['id']]);
-            $ins = $this->db->prepare('INSERT INTO va_specialties (va_id, specialty) VALUES (:va, :sp) ON CONFLICT DO NOTHING');
-            foreach ($input['specialties'] as $sp) {
-                $clean = SecurityHelper::sanitizePlainText((string) $sp, 64);
-                if ($clean !== '') {
-                    $ins->execute([':va' => $actor['id'], ':sp' => $clean]);
-                }
-            }
-        }
-
         $this->invalidate();
-        AuditLogger::log('PROFILE_UPDATED', 'success', 'User updated personal profile & specialties', (string) $actor['id'], (string) $actor['role'], $this->db);
+        AuditLogger::log('PROFILE_UPDATED', 'success', 'Staff member updated own profile details', (string) $actor['id'], (string) $actor['role'], $this->db);
         echo json_encode(['success' => true, 'id' => $actor['id']]);
     }
 

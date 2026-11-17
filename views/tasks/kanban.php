@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . '/../partials/icons.php';
+
 $columns = [
     'backlog'     => 'Backlog',
     'todo'        => 'To Do',
@@ -55,7 +57,7 @@ $dueToday = (int) ($data['due_today_count'] ?? 0);
 $overdue = (int) ($data['overdue_count'] ?? 0);
 $todayYmd = date('Y-m-d');
 
-$renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $todayYmd, $role): string {
+$renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $todayYmd): string {
     $pBadge = match ($task['priority']) {
         'high'  => 'badge-danger',
         'low'   => 'badge-neutral',
@@ -66,22 +68,6 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
     $extraHrs = (float) ($task['extra_hours_logged'] ?? 0);
     $vaInitials = strtoupper(substr((string) ($task['va_name'] ?? 'VA'), 0, 2));
     $isOverdueCard = ($task['status'] !== 'completed' && (string) $task['deadline'] < $todayYmd);
-
-    $nextStage = null;
-    $nextLabel = null;
-    if ($task['status'] === 'backlog') {
-        $nextStage = 'todo';
-        $nextLabel = 'Queue';
-    } elseif ($task['status'] === 'todo') {
-        $nextStage = 'in_progress';
-        $nextLabel = 'Start';
-    } elseif ($task['status'] === 'in_progress') {
-        $nextStage = 'in_review';
-        $nextLabel = 'Submit';
-    } elseif ($task['status'] === 'in_review' && in_array($role, ['team_leader', 'admin'], true)) {
-        $nextStage = 'completed';
-        $nextLabel = 'Approve';
-    }
 
     ob_start();
     ?>
@@ -102,7 +88,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
         </button>
       </div>
 
-      <div class="task-title" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="details">
+      <div class="task-title" data-open-task-edit="<?= SecurityHelper::e($task['id']) ?>">
         <?= SecurityHelper::e($task['title']) ?>
       </div>
 
@@ -112,40 +98,28 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
       </div>
 
       <div class="task-card-actions">
-        <div style="display:flex;align-items:center;gap:2px;">
-          <button type="button" class="icon-chip-btn" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="notes" title="VA Notes">
+        <div style="display:flex;align-items:center;gap:4px;">
+          <button type="button" class="icon-chip-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="notes" title="VA Notes">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
             <span><?= $noteCount ?></span>
           </button>
-          <button type="button" class="icon-chip-btn" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="comments" title="Comments">
+          <button type="button" class="icon-chip-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="comments" title="Comments">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             <span><?= $commentCount ?></span>
           </button>
-          <button type="button" class="icon-chip-btn" data-open-task="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="extrahours" title="Overtime Hours">
+          <button type="button" class="icon-chip-btn" data-open-task-overtime="<?= SecurityHelper::e($task['id']) ?>" title="Overtime Hours">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
             <span><?= $extraHrs > 0 ? '+' . number_format($extraHrs, 1) . 'h' : '0h' ?></span>
           </button>
         </div>
 
-        <div style="display:inline-flex;align-items:center;gap:6px;">
-          <?php if ($nextStage !== null): ?>
-            <button type="button"
-                    class="icon-chip-btn"
-                    style="background:var(--brand-tint);color:var(--brand-secondary);padding:3px 8px;"
-                    data-action-url="/api/v1/tasks/<?= SecurityHelper::e($task['id']) ?>/status"
-                    data-action-method="PATCH"
-                    data-action-body='<?= SecurityHelper::e(json_encode(['status' => $nextStage])) ?>'>
-              <?= SecurityHelper::e($nextLabel) ?> →
-            </button>
+        <span style="display:inline-flex;align-items:center;" title="<?= SecurityHelper::e($task['va_name']) ?>">
+          <?php if (!empty($task['va_avatar'])): ?>
+            <img src="<?= SecurityHelper::e($task['va_avatar']) ?>" alt="<?= SecurityHelper::e($task['va_name']) ?>" class="avatar avatar-sm">
+          <?php else: ?>
+            <span class="avatar avatar-sm"><?= SecurityHelper::e($vaInitials) ?></span>
           <?php endif; ?>
-          <span style="display:inline-flex;align-items:center;" title="<?= SecurityHelper::e($task['va_name']) ?>">
-            <?php if (!empty($task['va_avatar'])): ?>
-              <img src="<?= SecurityHelper::e($task['va_avatar']) ?>" alt="<?= SecurityHelper::e($task['va_name']) ?>" class="avatar avatar-sm">
-            <?php else: ?>
-              <span class="avatar avatar-sm"><?= SecurityHelper::e($vaInitials) ?></span>
-            <?php endif; ?>
-          </span>
-        </div>
+        </span>
       </div>
     </article>
     <?php
@@ -156,7 +130,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
 <div class="page-header">
   <div>
     <h1>Weekly Task Organizer</h1>
-    <p class="muted">Organize deliverables by Client Swimlanes or 5-Stage Kanban Board, right-click any card for instant actions, or click a card to open its dossier.</p>
+    <p class="muted">Drag cards across stages, right-click for instant quick actions, click a card title to edit details, or open Notes / Comments / Overtime separately.</p>
   </div>
   <?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
     <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-task">+ New Deliverable</button>
@@ -331,33 +305,33 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
   </section>
 </div>
 
-<!-- Floating Right-Click Context Menu -->
+<!-- Streamlined Floating Right-Click Context Menu with Minimalist Icons -->
 <div id="kanban-context-menu" class="context-menu is-hidden" role="menu">
-  <div class="context-menu-label">Inspect &amp; Collaborate</div>
-  <button type="button" data-cm-action="open" data-cm-tab="details">Edit Deliverable</button>
-  <button type="button" data-cm-action="open" data-cm-tab="notes">VA Notes &amp; Instructions</button>
-  <button type="button" data-cm-action="open" data-cm-tab="comments">Discussion Comments</button>
-  <button type="button" data-cm-action="open" data-cm-tab="extrahours">Log Overtime Hours</button>
+  <button type="button" data-cm-action="open-edit">
+    <?= workly_icon_svg('Edit', 14) ?> <span>Edit Details</span>
+  </button>
 
   <div class="context-menu-divider"></div>
   <div class="context-menu-label">Move Stage</div>
-  <button type="button" data-cm-action="status" data-status="backlog">Move to Backlog</button>
-  <button type="button" data-cm-action="status" data-status="todo">Move to To Do</button>
-  <button type="button" data-cm-action="status" data-status="in_progress">Move to In Progress</button>
-  <button type="button" data-cm-action="status" data-status="in_review">Move to In Review</button>
-  <button type="button" data-cm-action="status" data-status="completed">Mark Completed</button>
+  <button type="button" data-cm-action="status" data-status="backlog"><?= workly_icon_svg('ArrowRight', 13) ?> <span>Backlog</span></button>
+  <button type="button" data-cm-action="status" data-status="todo"><?= workly_icon_svg('ArrowRight', 13) ?> <span>To Do</span></button>
+  <button type="button" data-cm-action="status" data-status="in_progress"><?= workly_icon_svg('ArrowRight', 13) ?> <span>In Progress</span></button>
+  <button type="button" data-cm-action="status" data-status="in_review"><?= workly_icon_svg('ArrowRight', 13) ?> <span>In Review</span></button>
+  <button type="button" data-cm-action="status" data-status="completed"><?= workly_icon_svg('Check', 13) ?> <span>Completed</span></button>
 
   <div class="context-menu-divider"></div>
-  <div class="context-menu-label">Set Priority</div>
-  <button type="button" data-cm-action="priority" data-priority="high">High Priority</button>
-  <button type="button" data-cm-action="priority" data-priority="medium">Medium Priority</button>
-  <button type="button" data-cm-action="priority" data-priority="low">Low Priority</button>
+  <div class="context-menu-label">Priority</div>
+  <button type="button" data-cm-action="priority" data-priority="high"><?= workly_icon_svg('Flag', 13) ?> <span>High Priority</span></button>
+  <button type="button" data-cm-action="priority" data-priority="medium"><?= workly_icon_svg('Flag', 13) ?> <span>Medium Priority</span></button>
+  <button type="button" data-cm-action="priority" data-priority="low"><?= workly_icon_svg('Flag', 13) ?> <span>Low Priority</span></button>
 
   <div class="context-menu-divider"></div>
-  <button type="button" class="danger" data-cm-action="delete">Delete Deliverable</button>
+  <button type="button" class="danger" data-cm-action="delete">
+    <?= workly_icon_svg('Trash', 14) ?> <span>Delete Deliverable</span>
+  </button>
 </div>
 
-<!-- Embedded Non-Executable JSON Payload for Drawer Inspection -->
+<!-- Embedded Non-Executable JSON Payload for Drawer/Modal Inspection -->
 <script type="application/json" id="task-details-json"><?= json_encode([
     'tasks'       => $tasksMap,
     'notes'       => $notesMap,
@@ -451,86 +425,96 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
   </aside>
 </div>
 
-<!-- Right-Side Slide-Over Drawer: Task Details, Inline Edit, VA Notes, Comments & Overtime -->
-<div id="drawer-task-detail" class="drawer-backdrop is-hidden">
-  <aside class="drawer-panel" role="dialog" aria-label="Deliverable Dossier">
+<!-- Window 1: Centered Popup Modal for Editing Task Details -->
+<div id="modal-task-edit" class="modal-backdrop is-hidden">
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-label="Edit Deliverable Details">
+    <div class="modal-head">
+      <div>
+        <h3 id="modal-edit-task-title">Edit Deliverable Details</h3>
+        <div id="modal-edit-task-meta" class="muted" style="font-size:12px;margin-top:2px;"></div>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+    </div>
+    <div class="modal-body">
+      <form id="form-edit-task" data-api-form="/api/v1/tasks" data-api-method="PUT">
+        <div class="form-group">
+          <label class="form-label">Deliverable Title</label>
+          <input class="input" name="title" required>
+        </div>
+
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Stage</label>
+            <select class="select" name="status">
+              <option value="backlog">Backlog</option>
+              <option value="todo">To Do</option>
+              <option value="in_progress">In Progress</option>
+              <option value="in_review">In Review</option>
+              <option value="completed">Completed</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Priority</label>
+            <select class="select" name="priority">
+              <option value="low">Low</option>
+              <option value="medium">Medium</option>
+              <option value="high">High</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="grid-3">
+          <div class="form-group">
+            <label class="form-label">Client</label>
+            <select class="select" name="client_id">
+              <?php foreach ($data['clients'] as $c): ?>
+                <option value="<?= SecurityHelper::e($c['id']) ?>"><?= SecurityHelper::e($c['agency_name']) ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Deadline</label>
+            <input class="input" type="date" name="deadline" required>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Estimated Hrs</label>
+            <input class="input" type="number" step="0.5" min="0.5" name="estimated_hours" required>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Description &amp; Acceptance Criteria</label>
+          <textarea class="textarea" name="description" rows="4"></textarea>
+        </div>
+
+        <div style="display:flex;justify-content:flex-end;gap:10px;">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Task Changes</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Window 2: Right-Side Drawer for VA Notes & Comments -->
+<div id="drawer-task-collab" class="drawer-backdrop is-hidden">
+  <aside class="drawer-panel" role="dialog" aria-label="Task Notes and Comments">
     <div class="drawer-head">
       <div>
-        <h3 id="detail-task-title"></h3>
-        <div id="detail-task-meta" class="muted" style="font-size:12px;margin-top:3px;"></div>
+        <h3 id="collab-task-title">Deliverable Conversation</h3>
+        <div id="collab-task-meta" class="muted" style="font-size:12px;margin-top:3px;"></div>
       </div>
       <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
     </div>
 
     <div class="drawer-body">
       <div class="tab-strip">
-        <button type="button" class="tab-btn active" data-tab-group="task-drawer" data-tab-btn="details">Details &amp; Edit</button>
-        <button type="button" class="tab-btn" data-tab-group="task-drawer" data-tab-btn="notes">VA Notes</button>
-        <button type="button" class="tab-btn" data-tab-group="task-drawer" data-tab-btn="comments">Comments</button>
-        <button type="button" class="tab-btn" data-tab-group="task-drawer" data-tab-btn="extrahours">Overtime</button>
-      </div>
-
-      <!-- Tab: Inline Edit -->
-      <div data-tab-group="task-drawer" data-tab-panel="details">
-        <form id="form-edit-task" data-api-form="/api/v1/tasks" data-api-method="PUT">
-          <div class="form-group">
-            <label class="form-label">Deliverable Title</label>
-            <input class="input" name="title" required>
-          </div>
-
-          <div class="grid-2">
-            <div class="form-group">
-              <label class="form-label">Stage</label>
-              <select class="select" name="status">
-                <option value="backlog">Backlog</option>
-                <option value="todo">To Do</option>
-                <option value="in_progress">In Progress</option>
-                <option value="in_review">In Review</option>
-                <option value="completed">Completed</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Priority</label>
-              <select class="select" name="priority">
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            </div>
-          </div>
-
-          <div class="grid-3">
-            <div class="form-group">
-              <label class="form-label">Client</label>
-              <select class="select" name="client_id">
-                <?php foreach ($data['clients'] as $c): ?>
-                  <option value="<?= SecurityHelper::e($c['id']) ?>"><?= SecurityHelper::e($c['agency_name']) ?></option>
-                <?php endforeach; ?>
-              </select>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Deadline</label>
-              <input class="input" type="date" name="deadline" required>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Estimated Hrs</label>
-              <input class="input" type="number" step="0.5" min="0.5" name="estimated_hours" required>
-            </div>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">Description &amp; Acceptance Criteria</label>
-            <textarea class="textarea" name="description" rows="4"></textarea>
-          </div>
-
-          <div style="display:flex;justify-content:flex-end;gap:10px;">
-            <button type="submit" class="btn btn-primary">Save Task Changes</button>
-          </div>
-        </form>
+        <button type="button" class="tab-btn active" data-tab-group="task-collab" data-tab-btn="notes">VA Notes</button>
+        <button type="button" class="tab-btn" data-tab-group="task-collab" data-tab-btn="comments">Comments</button>
       </div>
 
       <!-- Tab: Execution Notes -->
-      <div class="is-hidden" data-tab-group="task-drawer" data-tab-panel="notes">
+      <div data-tab-group="task-collab" data-tab-panel="notes">
         <div id="detail-notes-list" style="margin-bottom:14px;"></div>
         <form data-api-form="/api/v1/tasks/{task_id}/notes" data-api-method="POST">
           <input type="hidden" name="task_id" value="">
@@ -543,7 +527,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
       </div>
 
       <!-- Tab: Comments -->
-      <div class="is-hidden" data-tab-group="task-drawer" data-tab-panel="comments">
+      <div class="is-hidden" data-tab-group="task-collab" data-tab-panel="comments">
         <div id="detail-comments-list" style="margin-bottom:14px;"></div>
         <form data-api-form="/api/v1/tasks/{task_id}/comments" data-api-method="POST">
           <input type="hidden" name="task_id" value="">
@@ -554,23 +538,37 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $t
           <button type="submit" class="btn btn-primary">Post Comment</button>
         </form>
       </div>
-
-      <!-- Tab: Overtime / Extra Hours -->
-      <div class="is-hidden" data-tab-group="task-drawer" data-tab-panel="extrahours">
-        <div id="detail-extrahours-list" style="margin-bottom:14px;"></div>
-        <form data-api-form="/api/v1/tasks/{task_id}/extra-hours" data-api-method="POST">
-          <input type="hidden" name="task_id" value="">
-          <div class="form-group">
-            <label class="form-label">Overtime Hours</label>
-            <input class="input" type="number" step="0.25" min="0.25" name="hours" value="1.0" required>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Justification</label>
-            <textarea class="textarea" name="justification" rows="3" required placeholder="Explain scope expansion or urgent client request..."></textarea>
-          </div>
-          <button type="submit" class="btn btn-primary">Record Extra Hours</button>
-        </form>
-      </div>
     </div>
   </aside>
+</div>
+
+<!-- Window 3: Separate Centered Modal for Overtime Logging -->
+<div id="modal-task-overtime" class="modal-backdrop is-hidden">
+  <div class="modal-panel" role="dialog" aria-modal="true" aria-label="Log Deliverable Overtime">
+    <div class="modal-head">
+      <div>
+        <h3 id="overtime-task-title">Overtime &amp; Extra Hours</h3>
+        <div id="overtime-task-meta" class="muted" style="font-size:12px;margin-top:2px;"></div>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+    </div>
+    <div class="modal-body">
+      <div id="detail-extrahours-list" style="margin-bottom:14px;max-height:190px;overflow-y:auto;"></div>
+      <form data-api-form="/api/v1/tasks/{task_id}/extra-hours" data-api-method="POST">
+        <input type="hidden" name="task_id" value="">
+        <div class="form-group">
+          <label class="form-label">Overtime Hours</label>
+          <input class="input" type="number" step="0.25" min="0.25" name="hours" value="1.0" required>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Justification</label>
+          <textarea class="textarea" name="justification" rows="3" required placeholder="Explain scope expansion or urgent client request..."></textarea>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;">
+          <button type="button" class="btn btn-secondary" data-close-modal>Cancel</button>
+          <button type="submit" class="btn btn-primary">Record Extra Hours</button>
+        </div>
+      </form>
+    </div>
+  </div>
 </div>

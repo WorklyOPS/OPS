@@ -1,5 +1,6 @@
 <?php
 $podVas = $data['pod_vas'] ?? [];
+$allVas = $data['all_vas'] ?? [];
 $podClients = $data['pod_clients'] ?? [];
 $trend = $data['completion_trend'] ?? [];
 $statusCounts = $data['kanban_status_counts'] ?? [
@@ -36,9 +37,10 @@ $stageMeta = [
 <div class="page-header">
   <div>
     <h1>Team Leader Operations Hub</h1>
-    <p class="muted">Real-time Kanban distribution by stage &amp; VA assignee, instant review approvals, pod capacity, and 30-day velocity.</p>
+    <p class="muted">Real-time Kanban distribution by stage &amp; VA assignee, pod management, instant review approvals, and 30-day velocity.</p>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <button type="button" class="btn btn-secondary" data-open-drawer="drawer-tl-pod">Manage Pod VAs</button>
     <a href="/tasks" class="btn btn-secondary">Open Kanban Board</a>
     <a href="/calendar-reports?tab=reports" class="btn btn-primary">Schedule Meeting &amp; SLA Report</a>
   </div>
@@ -353,10 +355,13 @@ $stageMeta = [
   </section>
 </div>
 
-<h3 style="margin-bottom:12px;">Assigned Virtual Assistants</h3>
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+  <h3>Assigned Virtual Assistants</h3>
+  <button type="button" class="btn btn-secondary btn-sm" data-open-drawer="drawer-tl-pod">Edit Pod Assignment</button>
+</div>
 <?php if (empty($podVas)): ?>
   <div class="card" style="margin-bottom:22px;">
-    <p class="muted">No Virtual Assistants are assigned to your pod yet. An Administrator can link VAs to you from Governance.</p>
+    <p class="muted">No Virtual Assistants are assigned to your pod yet. Click <strong>Manage Pod VAs</strong> to select VAs for your pod.</p>
   </div>
 <?php else: ?>
   <div class="grid-3" style="margin-bottom:22px;">
@@ -419,3 +424,37 @@ $stageMeta = [
     <?php endforeach; ?>
   </div>
 <?php endif; ?>
+
+<!-- Right-Side Drawer: Manage Pod VAs -->
+<div id="drawer-tl-pod" class="drawer-backdrop is-hidden">
+  <aside class="drawer-panel" role="dialog" aria-label="Manage Pod Virtual Assistants">
+    <div class="drawer-head">
+      <div>
+        <h3>Manage Pod Virtual Assistants</h3>
+        <div class="muted" style="font-size:12px;">Select or unassign VAs directly supervised in your operational pod.</div>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
+    </div>
+    <div class="drawer-body">
+      <form id="form-tl-pod" data-api-form="/api/v1/users/pod-vas" data-api-method="PATCH">
+        <input type="hidden" name="team_leader_id" value="<?= SecurityHelper::e($user['id']) ?>">
+        <div class="form-group">
+          <label class="form-label">Active Virtual Assistants</label>
+          <div class="choice-grid">
+            <?php foreach ($allVas as $av): ?>
+              <?php $inPod = ($av['team_leader_id'] === $user['id']); ?>
+              <label class="choice-pill">
+                <input type="checkbox" name="va_ids[]" value="<?= SecurityHelper::e($av['id']) ?>"<?= $inPod ? ' checked' : '' ?>>
+                <span><?= SecurityHelper::e($av['name']) ?></span>
+              </label>
+            <?php endforeach; ?>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:10px;">
+          <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Pod Roster</button>
+        </div>
+      </form>
+    </div>
+  </aside>
+</div>

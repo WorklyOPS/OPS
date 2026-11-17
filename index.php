@@ -164,6 +164,11 @@ if (str_starts_with($uri, '/api/v1/')) {
         (new AuditLogApiController($db))->handle($method, $uri);
         exit;
     }
+    if (str_starts_with($uri, '/api/v1/notifications')) {
+        require_once __DIR__ . '/controllers/api/NotificationApiController.php';
+        (new NotificationApiController($db))->handle($method, $uri);
+        exit;
+    }
 
     http_response_code(404);
     echo json_encode(['error' => 'API endpoint not found']);

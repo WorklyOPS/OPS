@@ -4,12 +4,13 @@ foreach (($data['all_users'] ?? []) as $uRow) {
     $usersMap[$uRow['id']] = $uRow;
 }
 $sec = $data['secrets_status'] ?? [];
+$specCats = $data['specialty_categories'] ?? [];
 ?>
 
 <div class="page-header">
   <div>
     <h1>System Administrator Governance</h1>
-    <p class="muted">Manage PostgreSQL staff accounts, RBAC permissions, avatar uploads, Gmail linkage, and security audit logs.</p>
+    <p class="muted">Manage PostgreSQL staff accounts, RBAC permissions, VA specialty categories, Gmail linkage, and security audit logs.</p>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <button type="button" class="btn btn-secondary" data-open-drawer="drawer-link-gmail">Link Staff Mailbox</button>
@@ -44,7 +45,6 @@ $sec = $data['secrets_status'] ?? [];
   <button type="button" class="tab-btn active" data-tab-group="admin-tabs" data-tab-btn="roster">Staff Governance Roster</button>
   <button type="button" class="tab-btn" data-tab-group="admin-tabs" data-tab-btn="audit">Security &amp; Audit Logs</button>
   <button type="button" class="tab-btn" data-tab-group="admin-tabs" data-tab-btn="security">Environment &amp; OAuth Status</button>
-  <button type="button" class="tab-btn" data-tab-group="admin-tabs" data-tab-btn="uploads">Media &amp; Avatar Manager</button>
 </div>
 
 <!-- Tab 1: Staff Governance Roster -->
@@ -52,7 +52,7 @@ $sec = $data['secrets_status'] ?? [];
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
     <div>
       <h3>Staff Account Governance</h3>
-      <p class="muted" style="font-size:12px;">Edit rates, PTO balances, Team Leader pods, suspend accounts, and download per-user logs.</p>
+      <p class="muted" style="font-size:12px;">Edit rates, PTO balances, Team Leader pods, profile photos, suspend/delete accounts, and export user logs.</p>
     </div>
   </div>
 
@@ -218,29 +218,7 @@ $sec = $data['secrets_status'] ?? [];
   </div>
 </div>
 
-<!-- Tab 4: Avatar Uploader -->
-<div class="card is-hidden" data-tab-group="admin-tabs" data-tab-panel="uploads">
-  <h3 style="margin-bottom:8px;">Upload Staff Avatar</h3>
-  <p class="muted" style="font-size:12px;margin-bottom:14px;">Re-encodes via PHP GD and strips EXIF metadata before storing in PostgreSQL.</p>
-
-  <form data-api-form="/api/v1/uploads/avatar" data-api-method="POST" enctype="multipart/form-data" style="max-width:460px;">
-    <div class="form-group">
-      <label class="form-label">Select Staff Account</label>
-      <select name="user_id" class="select" required>
-        <?php foreach (($data['all_users'] ?? []) as $u): ?>
-          <option value="<?= SecurityHelper::e($u['id']) ?>"><?= SecurityHelper::e($u['name']) ?> (<?= SecurityHelper::e($u['role']) ?>)</option>
-        <?php endforeach; ?>
-      </select>
-    </div>
-    <div class="form-group">
-      <label class="form-label">Image File (JPG, PNG, WEBP max 5MB)</label>
-      <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required>
-    </div>
-    <button type="submit" class="btn btn-primary">Upload Avatar</button>
-  </form>
-</div>
-
-<script type="application/json" id="admin-users-json"><?= json_encode($usersMap, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
+<script type="application/json" id="admin-users-json" data-current-user-id="<?= SecurityHelper::e($user['id']) ?>"><?= json_encode($usersMap, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
 
 <!-- Right-Side Drawer: Create Staff User -->
 <div id="drawer-create-user" class="drawer-backdrop is-hidden">
@@ -251,7 +229,7 @@ $sec = $data['secrets_status'] ?? [];
     </div>
 
     <div class="drawer-body">
-      <form data-api-form="/api/v1/users" data-api-method="POST">
+      <form data-api-form="/api/v1/users" data-api-method="POST" data-role-form="create">
         <div class="grid-2">
           <div class="form-group">
             <label class="form-label">Full Name</label>
@@ -266,7 +244,7 @@ $sec = $data['secrets_status'] ?? [];
         <div class="grid-3">
           <div class="form-group">
             <label class="form-label">Role</label>
-            <select class="select" name="role" required>
+            <select class="select" name="role" data-role-select required>
               <option value="va">Virtual Assistant (VA)</option>
               <option value="team_leader">Team Leader</option>
               <option value="hrm">HR Manager</option>
@@ -293,9 +271,20 @@ $sec = $data['secrets_status'] ?? [];
           <input class="input" type="password" name="password" minlength="8" required placeholder="Assign strong password">
         </div>
 
-        <div class="form-group">
-          <label class="form-label">VA Specialties (comma-separated)</label>
-          <input class="input" name="specialties_csv" placeholder="Executive Inbox, CRM Ops, Bookkeeping">
+        <div class="form-group va-specialties-wrap" data-va-specialties-wrap>
+          <label class="form-label">VA Specialties (Multiple Choice)</label>
+          <div class="choice-grid" data-spec-grid>
+            <?php foreach ($specCats as $cat): ?>
+              <label class="choice-pill">
+                <input type="checkbox" name="specialties[]" value="<?= SecurityHelper::e($cat) ?>">
+                <span><?= SecurityHelper::e($cat) ?></span>
+              </label>
+            <?php endforeach; ?>
+          </div>
+          <div class="spec-add-row">
+            <input class="input" type="text" data-new-spec-input placeholder="New VA specialty category...">
+            <button type="button" class="btn btn-secondary btn-sm" data-add-spec-btn>+ Add Category</button>
+          </div>
         </div>
 
         <div class="form-group">
@@ -312,7 +301,7 @@ $sec = $data['secrets_status'] ?? [];
   </aside>
 </div>
 
-<!-- Right-Side Drawer: Edit Staff User -->
+<!-- Right-Side Drawer: Edit Staff User (with Photo Preview/Delete + Specialties + Suspend/Delete) -->
 <div id="drawer-edit-user" class="drawer-backdrop is-hidden">
   <aside class="drawer-panel" role="dialog" aria-label="Edit Staff Account">
     <div class="drawer-head">
@@ -321,7 +310,25 @@ $sec = $data['secrets_status'] ?? [];
     </div>
 
     <div class="drawer-body">
-      <form id="form-edit-user" data-api-form="/api/v1/users" data-api-method="PUT">
+      <div class="photo-preview-box">
+        <div id="edit-user-avatar-preview" class="photo-preview-thumb">
+          <span class="avatar avatar-lg">US</span>
+        </div>
+        <div class="photo-preview-meta">
+          <h4>Staff Profile Photo</h4>
+          <p>Preview current photo, remove it, or upload a new JPG/PNG/WEBP file.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <form id="form-edit-user-avatar" data-api-form="/api/v1/uploads/avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+              <input type="hidden" name="user_id" id="edit-user-avatar-id">
+              <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="max-width:215px;padding:6px 10px;">
+              <button type="submit" class="btn btn-secondary btn-sm">Upload Photo</button>
+            </form>
+            <button type="button" id="btn-delete-user-avatar" class="btn btn-danger btn-sm">Delete Photo</button>
+          </div>
+        </div>
+      </div>
+
+      <form id="form-edit-user" data-api-form="/api/v1/users" data-api-method="PUT" data-role-form="edit">
         <div class="grid-2">
           <div class="form-group">
             <label class="form-label">Full Name</label>
@@ -336,7 +343,7 @@ $sec = $data['secrets_status'] ?? [];
         <div class="grid-3">
           <div class="form-group">
             <label class="form-label">Role</label>
-            <select class="select" name="role" required>
+            <select class="select" name="role" data-role-select required>
               <option value="va">Virtual Assistant (VA)</option>
               <option value="team_leader">Team Leader</option>
               <option value="hrm">HR Manager</option>
@@ -353,14 +360,41 @@ $sec = $data['secrets_status'] ?? [];
           </div>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Team Leader Pod Assignment</label>
-          <select class="select" name="team_leader_id">
-            <option value="">None</option>
-            <?php foreach (($data['team_leaders'] ?? []) as $tl): ?>
-              <option value="<?= SecurityHelper::e($tl['id']) ?>"><?= SecurityHelper::e($tl['name']) ?></option>
+        <div class="grid-2">
+          <div class="form-group">
+            <label class="form-label">Team Leader Pod Assignment</label>
+            <select class="select" name="team_leader_id">
+              <option value="">None</option>
+              <?php foreach (($data['team_leaders'] ?? []) as $tl): ?>
+                <option value="<?= SecurityHelper::e($tl['id']) ?>"><?= SecurityHelper::e($tl['name']) ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Phone</label>
+            <input class="input" name="phone" placeholder="+1 (555) 000-0000">
+          </div>
+        </div>
+
+        <div class="form-group va-specialties-wrap" data-va-specialties-wrap>
+          <label class="form-label">VA Specialties (Multiple Choice)</label>
+          <div class="choice-grid" data-spec-grid>
+            <?php foreach ($specCats as $cat): ?>
+              <label class="choice-pill">
+                <input type="checkbox" name="specialties[]" value="<?= SecurityHelper::e($cat) ?>">
+                <span><?= SecurityHelper::e($cat) ?></span>
+              </label>
             <?php endforeach; ?>
-          </select>
+          </div>
+          <div class="spec-add-row">
+            <input class="input" type="text" data-new-spec-input placeholder="New VA specialty category...">
+            <button type="button" class="btn btn-secondary btn-sm" data-add-spec-btn>+ Add Category</button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Bio / Role Notes</label>
+          <textarea class="textarea" name="bio" rows="2" placeholder="Operational summary..."></textarea>
         </div>
 
         <div class="form-group">
@@ -368,9 +402,16 @@ $sec = $data['secrets_status'] ?? [];
           <input class="input" type="password" name="password" minlength="8" placeholder="Optional new password">
         </div>
 
-        <div style="display:flex;justify-content:flex-end;gap:10px;">
-          <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
-          <button type="submit" class="btn btn-primary">Update Account</button>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--border);">
+          <div id="edit-user-danger-actions" style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" id="btn-edit-user-suspend" class="btn btn-secondary btn-sm">Suspend Account</button>
+            <button type="button" id="btn-edit-user-reactivate" class="btn btn-secondary btn-sm is-hidden">Reactivate Account</button>
+            <button type="button" id="btn-edit-user-delete" class="btn btn-danger btn-sm">Delete Account</button>
+          </div>
+          <div style="display:flex;gap:10px;">
+            <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
+            <button type="submit" class="btn btn-primary">Update Account</button>
+          </div>
         </div>
       </form>
     </div>

@@ -13,12 +13,15 @@ require_once __DIR__ . '/../../middleware/CsrfMiddleware.php';
 
 final class PerksApiController
 {
+    public const VALID_ICONS = ['Award', 'Medal', 'Trophy', 'Star', 'Shield', 'Crown', 'Zap', 'Heart'];
+
     public function __construct(private PDO $db) {}
 
     public function handle(string $method, string $uri): void
     {
         $user = AuthMiddleware::authenticateApi($this->db);
         CsrfMiddleware::validateApi($method);
+        $this->ensureIconColumn();
 
         $parts = explode('/', trim($uri, '/'));
         // /api/v1/perks/{seg1}/{seg2}
@@ -30,32 +33,32 @@ final class PerksApiController
             return;
         }
         if ($method === 'POST' && !$seg1) {
-            AuthMiddleware::requireRoles(['admin', 'hrm'], $user);
+            AuthMiddleware::requireRoles(['admin', 'team_leader', 'hrm'], $user);
             $this->createPerk($user);
             return;
         }
         if ($method === 'POST' && $seg1 && $seg1 !== 'badges' && $seg2 === 'grant') {
-            AuthMiddleware::requireRoles(['admin', 'hrm'], $user);
+            AuthMiddleware::requireRoles(['admin', 'team_leader', 'hrm'], $user);
             $this->grantPerk($seg1, $user);
             return;
         }
         if ($method === 'DELETE' && $seg1 && $seg1 !== 'badges' && $seg2 === 'grant') {
-            AuthMiddleware::requireRoles(['admin', 'hrm'], $user);
+            AuthMiddleware::requireRoles(['admin', 'team_leader', 'hrm'], $user);
             $this->revokePerk($seg1, $user);
             return;
         }
         if ($method === 'DELETE' && $seg1 && $seg1 !== 'badges' && !$seg2) {
-            AuthMiddleware::requireRoles(['admin', 'hrm'], $user);
+            AuthMiddleware::requireRoles(['admin', 'team_leader', 'hrm'], $user);
             $this->deletePerk($seg1, $user);
             return;
         }
         if ($method === 'POST' && $seg1 === 'badges' && !$seg2) {
-            AuthMiddleware::requireRoles(['admin', 'hrm', 'team_leader'], $user);
+            AuthMiddleware::requireRoles(['admin', 'team_leader', 'hrm'], $user);
             $this->createBadge($user);
             return;
         }
         if ($method === 'POST' && $seg1 === 'badges' && $seg2 && ($parts[5] ?? '') === 'award') {
-            AuthMiddleware::requireRoles(['admin', 'hrm', 'team_leader'], $user);
+            AuthMiddleware::requireRoles(['admin', 'team_leader', 'hrm'], $user);
             $this->awardBadge($seg2, $user);
             return;
         }
@@ -64,10 +67,36 @@ final class PerksApiController
         echo json_encode(['error' => 'Perks API route not found']);
     }
 
+    private function ensureIconColumn(): void
+    {
+        try {
+            $this->db->exec("ALTER TABLE perks ADD COLUMN IF NOT EXISTS icon_name VARCHAR(64) NOT NULL DEFAULT 'Award'");
+        } catch (Throwable) {
+        }
+    }
+
     private function invalidate(): void
     {
         CacheService::invalidatePrefix($this->db, 'perks:');
         CacheService::invalidatePrefix($this->db, 'users:');
+    }
+
+    private function extractTargetUserIds(array $input): array
+    {
+        $ids = [];
+        if (!empty($input['user_ids']) && is_array($input['user_ids'])) {
+            foreach ($input['user_ids'] as $id) {
+                $clean = SecurityHelper::sanitizePlainText((string) $id, 64);
+                if ($clean !== '') {
+                    $ids[] = $clean;
+                }
+            }
+        }
+        $single = SecurityHelper::sanitizePlainText($input['user_id'] ?? '', 64);
+        if ($single !== '') {
+            $ids[] = $single;
+        }
+        return array_values(array_unique($ids));
     }
 
     private function listAll(array $user): void
@@ -83,7 +112,7 @@ final class PerksApiController
             ")->fetchAll(PDO::FETCH_ASSOC);
             $badges = $this->db->query('SELECT * FROM badges ORDER BY created_at DESC')->fetchAll(PDO::FETCH_ASSOC);
             $awards = $this->db->query("
-                SELECT ub.badge_id, ub.user_id, u.name AS va_name, b.title AS badge_title, b.tier, ub.earned_at
+                SELECT ub.badge_id, ub.user_id, u.name AS va_name, b.title AS badge_title, b.tier, b.icon_name, ub.earned_at
                 FROM user_badges ub
                 JOIN users u ON ub.user_id = u.id
                 JOIN badges b ON ub.badge_id = b.id
@@ -117,6 +146,7 @@ final class PerksApiController
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
         $title = SecurityHelper::sanitizePlainText($input['title'] ?? '', 191);
         $category = SecurityHelper::sanitizePlainText($input['category'] ?? 'Equipment & Hardware', 64);
+        $icon = in_array($input['icon_name'] ?? '', self::VALID_ICONS, true) ? (string) $input['icon_name'] : 'Award';
         $value = max(0.0, (float) ($input['value'] ?? 0));
         $description = SecurityHelper::sanitizePlainText($input['description'] ?? '', 2000);
 
@@ -128,19 +158,20 @@ final class PerksApiController
 
         $id = 'perk-' . bin2hex(random_bytes(5));
         $stmt = $this->db->prepare("
-            INSERT INTO perks (id, title, category, value, description, active)
-            VALUES (:id, :title, :cat, :val, :desc, TRUE)
+            INSERT INTO perks (id, title, category, icon_name, value, description, active)
+            VALUES (:id, :title, :cat, :icon, :val, :desc, TRUE)
         ");
         $stmt->execute([
             ':id'    => $id,
             ':title' => $title,
             ':cat'   => $category,
+            ':icon'  => $icon,
             ':val'   => $value,
             ':desc'  => $description,
         ]);
 
         $this->invalidate();
-        AuditLogger::log('PERK_CREATED', 'success', "Created benefit {$title}", $user['id'], $user['role'], $this->db);
+        AuditLogger::log('PERK_CREATED', 'success', "Created benefit {$title} ({$icon})", $user['id'], $user['role'], $this->db);
         http_response_code(201);
         echo json_encode(['success' => true, 'id' => $id]);
     }
@@ -156,19 +187,21 @@ final class PerksApiController
     private function grantPerk(string $perkId, array $user): void
     {
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
-        $vaId = SecurityHelper::sanitizePlainText($input['user_id'] ?? '', 64);
-        if ($vaId === '') {
+        $userIds = $this->extractTargetUserIds($input);
+        if (empty($userIds)) {
             http_response_code(422);
-            echo json_encode(['error' => 'Target user_id is required']);
+            echo json_encode(['error' => 'Select at least one VA recipient']);
             return;
         }
 
         $stmt = $this->db->prepare('INSERT INTO user_perks (perk_id, user_id) VALUES (:pid, :uid) ON CONFLICT DO NOTHING');
-        $stmt->execute([':pid' => $perkId, ':uid' => $vaId]);
+        foreach ($userIds as $vaId) {
+            $stmt->execute([':pid' => $perkId, ':uid' => $vaId]);
+        }
 
         $this->invalidate();
-        AuditLogger::log('PERK_GRANTED', 'success', "Granted perk {$perkId} to {$vaId}", $user['id'], $user['role'], $this->db);
-        echo json_encode(['success' => true]);
+        AuditLogger::log('PERK_GRANTED', 'success', "Granted perk {$perkId} to " . count($userIds) . ' VA(s)', $user['id'], $user['role'], $this->db);
+        echo json_encode(['success' => true, 'count' => count($userIds)]);
     }
 
     private function revokePerk(string $perkId, array $user): void
@@ -195,6 +228,7 @@ final class PerksApiController
         $title = SecurityHelper::sanitizePlainText($input['title'] ?? '', 191);
         $description = SecurityHelper::sanitizePlainText($input['description'] ?? '', 1000);
         $tier = in_array($input['tier'] ?? '', ['bronze', 'silver', 'gold', 'diamond'], true) ? $input['tier'] : 'silver';
+        $icon = in_array($input['icon_name'] ?? '', self::VALID_ICONS, true) ? (string) $input['icon_name'] : 'Medal';
         $trigger = in_array($input['trigger_type'] ?? '', ['tenure_months', 'tasks_completed', 'on_time_streak', 'client_praise', 'sop_authored', 'custom'], true)
             ? $input['trigger_type']
             : 'custom';
@@ -209,19 +243,20 @@ final class PerksApiController
         $id = 'bdg-' . bin2hex(random_bytes(5));
         $stmt = $this->db->prepare("
             INSERT INTO badges (id, title, description, icon_name, tier, trigger_type, required_threshold)
-            VALUES (:id, :title, :desc, 'Award', :tier, :trig, :thresh)
+            VALUES (:id, :title, :desc, :icon, :tier, :trig, :thresh)
         ");
         $stmt->execute([
             ':id'     => $id,
             ':title'  => $title,
             ':desc'   => $description,
+            ':icon'   => $icon,
             ':tier'   => $tier,
             ':trig'   => $trigger,
             ':thresh' => $threshold,
         ]);
 
         $this->invalidate();
-        AuditLogger::log('BADGE_CREATED', 'success', "Created badge {$title} ({$tier})", $user['id'], $user['role'], $this->db);
+        AuditLogger::log('BADGE_CREATED', 'success', "Created badge {$title} ({$tier}, {$icon})", $user['id'], $user['role'], $this->db);
         http_response_code(201);
         echo json_encode(['success' => true, 'id' => $id]);
     }
@@ -229,23 +264,28 @@ final class PerksApiController
     private function awardBadge(string $badgeId, array $user): void
     {
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
-        $vaId = SecurityHelper::sanitizePlainText($input['user_id'] ?? '', 64);
-        if ($vaId === '') {
+        $userIds = $this->extractTargetUserIds($input);
+        if (empty($userIds)) {
             http_response_code(422);
-            echo json_encode(['error' => 'Target VA user_id is required']);
+            echo json_encode(['error' => 'Select at least one VA recipient']);
             return;
         }
 
-        $id = 'ubdg-' . bin2hex(random_bytes(5));
         $stmt = $this->db->prepare("
             INSERT INTO user_badges (id, user_id, badge_id, earned_at)
             VALUES (:id, :uid, :bid, CURRENT_DATE)
             ON CONFLICT (user_id, badge_id) DO NOTHING
         ");
-        $stmt->execute([':id' => $id, ':uid' => $vaId, ':bid' => $badgeId]);
+        foreach ($userIds as $vaId) {
+            $stmt->execute([
+                ':id'  => 'ubdg-' . bin2hex(random_bytes(5)),
+                ':uid' => $vaId,
+                ':bid' => $badgeId,
+            ]);
+        }
 
         $this->invalidate();
-        AuditLogger::log('BADGE_AWARDED', 'success', "Awarded badge {$badgeId} to {$vaId}", $user['id'], $user['role'], $this->db);
-        echo json_encode(['success' => true]);
+        AuditLogger::log('BADGE_AWARDED', 'success', "Awarded badge {$badgeId} to " . count($userIds) . ' VA(s)', $user['id'], $user['role'], $this->db);
+        echo json_encode(['success' => true, 'count' => count($userIds)]);
     }
 }

@@ -1,15 +1,16 @@
 /* ==========================================================================
    Workly Platform — Production Client Orchestrator (Vanilla JS, Zero TS)
-   Global Skeleton & Progress Coordinator, Hardened JSON Fetch, Swimlanes +
-   Kanban Drag & Drop, Intelligent Calendar Scheduler, Right-Side Drawers,
-   Command Palette, Interactive SVG Charts, CSV Exports & SVG CAPTCHA.
+   Global Skeleton & Progress Coordinator, Portal Drawers/Modals, Header Bell
+   & Profile Popovers, Hardened JSON Fetch, Swimlanes + Kanban Board, Client
+   CRM Availability Slots, Unified Calendar Slot Scanner, Knowledge Base
+   WYSIWYG/PDF, Perks Icon Picker, Command Palette & SVG Charts.
    ========================================================================== */
 
 (function () {
   'use strict';
 
   const csrfMeta = document.querySelector('meta[name="workly-csrf"]');
-  const CSRF_TOKEN = csrfMeta ? csrfMeta.getAttribute('content') || '' : '';
+  const CSRF_TOKEN = csrfMeta ? (csrfMeta.getAttribute('content') || '') : '';
   const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   const EYE_OPEN_SVG = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>';
@@ -76,10 +77,12 @@
   })();
 
   window.addEventListener('DOMContentLoaded', () => {
+    portalOverlaysToBody();
     initSkeletonStaging();
     initAuthControls();
     initMobileDrawer();
-    initDrawers();
+    initHeaderPopovers();
+    initDrawersAndModals();
     initTabs();
     initCommandPalette();
     initChartTooltipsAndToggles();
@@ -87,6 +90,9 @@
     initCalendarScheduler();
     initClientDossiers();
     initAdminEditDrawers();
+    initVaDirectory();
+    initKnowledgeBase();
+    initPerksControls();
     initHrmPtoRejection();
     initCsvExports();
     initForms();
@@ -101,8 +107,25 @@
     }
   });
 
+  // Portal fixed drawers, modals & floating menus to document.body so parent
+  // animations/transforms never clip or offset fixed right-side panels.
+  function portalOverlaysToBody() {
+    document.querySelectorAll('.drawer-backdrop, .modal-backdrop, #kanban-context-menu').forEach((el) => {
+      if (el.parentElement !== document.body) {
+        document.body.appendChild(el);
+      }
+    });
+
+    const viewContent = document.getElementById('workly-view-content');
+    if (viewContent) {
+      viewContent.addEventListener('animationend', () => {
+        viewContent.classList.remove('view-animate');
+      }, { once: true });
+    }
+  }
+
   // ------------------------------------------------------------------------
-  // Staged Skeleton Loader (Visible Before Section Content Reveal & Navigation)
+  // Staged Skeleton Loader
   // ------------------------------------------------------------------------
   function initSkeletonStaging() {
     const skel = document.getElementById('workly-skeleton');
@@ -113,17 +136,15 @@
         WorklyLoader.revealContent();
       }, settleMs);
 
-      // Show matching skeleton immediately when navigating across workspace sections
-      document.querySelectorAll('.sidebar-nav a.nav-link, .topbar a.user-pill').forEach((link) => {
+      document.querySelectorAll('.sidebar-nav a.nav-link, .header-popover a, .notif-item').forEach((link) => {
         link.addEventListener('click', (e) => {
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
           const href = link.getAttribute('href');
-          if (!href || href.startsWith('#')) return;
+          if (!href || href.startsWith('#') || href === '/logout') return;
           WorklyLoader.showSkeleton();
         });
       });
 
-      // Trigger skeleton before GET filter submissions inside the workspace
       document.querySelectorAll('.page-content form[method="GET"]').forEach((form) => {
         form.addEventListener('submit', () => {
           WorklyLoader.showSkeleton();
@@ -133,7 +154,7 @@
   }
 
   // ------------------------------------------------------------------------
-  // Auth Screen Helpers (CAPTCHA Refresh + Minimalist SVG Password Eye Icon)
+  // Auth Screen Helpers
   // ------------------------------------------------------------------------
   function initAuthControls() {
     const refreshBtn = document.getElementById('btn-refresh-captcha');
@@ -159,7 +180,7 @@
   }
 
   // ------------------------------------------------------------------------
-  // Toast (Entry + Exit Choreography) & Hardened CSRF API Fetch Helper
+  // Toast & Hardened CSRF API Fetch Helper
   // ------------------------------------------------------------------------
   function showToast(message, type) {
     const existing = document.querySelector('.toast');
@@ -173,6 +194,7 @@
       window.setTimeout(() => el.remove(), reducedMotion ? 0 : 210);
     }, 3400);
   }
+  window.worklyShowToast = showToast;
 
   async function apiFetch(url, options) {
     const opts = options || {};
@@ -219,6 +241,17 @@
     return d.innerHTML;
   }
 
+  function renderAvatarMarkup(url, name) {
+    if (url) {
+      return '<img src="' + escapeHtml(url) + '" alt="Avatar">';
+    }
+    const parts = String(name || 'WK').trim().split(/\s+/).filter(Boolean);
+    const init = parts.length >= 2
+      ? (parts[0][0] + parts[1][0]).toUpperCase()
+      : String(name || 'WK').slice(0, 2).toUpperCase();
+    return '<span class="avatar avatar-lg">' + escapeHtml(init) + '</span>';
+  }
+
   // ------------------------------------------------------------------------
   // Mobile Navigation Drawer
   // ------------------------------------------------------------------------
@@ -237,12 +270,87 @@
   }
 
   // ------------------------------------------------------------------------
-  // Right-Side Slide-Over Drawer System (With Pose-to-Pose Exit Transitions)
+  // Header Notifications Bell & Profile Dropdown Popovers
+  // ------------------------------------------------------------------------
+  function closeHeaderPopovers() {
+    const notifPop = document.getElementById('notif-popover');
+    const profPop = document.getElementById('profile-popover');
+    const notifBtn = document.getElementById('btn-notif-bell');
+    const profBtn = document.getElementById('btn-profile-menu');
+    if (notifPop) notifPop.classList.add('is-hidden');
+    if (profPop) profPop.classList.add('is-hidden');
+    if (notifBtn) notifBtn.setAttribute('aria-expanded', 'false');
+    if (profBtn) profBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function initHeaderPopovers() {
+    const notifBtn = document.getElementById('btn-notif-bell');
+    const notifPop = document.getElementById('notif-popover');
+    const profBtn = document.getElementById('btn-profile-menu');
+    const profPop = document.getElementById('profile-popover');
+    const markReadBtn = document.getElementById('btn-mark-notifs-read');
+
+    if (notifBtn && notifPop) {
+      notifBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const willOpen = notifPop.classList.contains('is-hidden');
+        closeHeaderPopovers();
+        if (willOpen) {
+          notifPop.classList.remove('is-hidden');
+          notifBtn.setAttribute('aria-expanded', 'true');
+        }
+      });
+      notifPop.addEventListener('click', (e) => e.stopPropagation());
+    }
+
+    if (profBtn && profPop) {
+      profBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const willOpen = profPop.classList.contains('is-hidden');
+        closeHeaderPopovers();
+        if (willOpen) {
+          profPop.classList.remove('is-hidden');
+          profBtn.setAttribute('aria-expanded', 'true');
+        }
+      });
+      profPop.addEventListener('click', (e) => e.stopPropagation());
+    }
+
+    if (markReadBtn) {
+      markReadBtn.addEventListener('click', async () => {
+        try {
+          markReadBtn.disabled = true;
+          await apiFetch('/api/v1/notifications/read', { method: 'PATCH' });
+          const badge = document.getElementById('notif-badge-count');
+          if (badge) badge.remove();
+          document.querySelectorAll('#notif-popover .notif-item.is-unread').forEach((item) => {
+            item.classList.remove('is-unread');
+          });
+          const sub = notifPop ? notifPop.querySelector('.popover-head .muted') : null;
+          if (sub) sub.textContent = '0 unread alert(s)';
+          markReadBtn.classList.add('is-hidden');
+          showToast('All notifications marked read', 'success');
+        } catch (err) {
+          showToast(err.message, 'error');
+          markReadBtn.disabled = false;
+        }
+      });
+    }
+
+    document.addEventListener('click', () => {
+      closeHeaderPopovers();
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // Right-Side Slide-Over Drawer & Centered Modal Popup System
   // ------------------------------------------------------------------------
   function openDrawer(id) {
     closeAllDrawers(true);
+    closeAllModals(true);
     const el = document.getElementById(id);
     if (el) {
+      if (el.parentElement !== document.body) document.body.appendChild(el);
       el.classList.remove('is-closing', 'is-hidden');
     }
   }
@@ -262,7 +370,32 @@
     });
   }
 
-  function initDrawers() {
+  function openModal(id) {
+    closeAllDrawers(true);
+    closeAllModals(true);
+    const el = document.getElementById(id);
+    if (el) {
+      if (el.parentElement !== document.body) document.body.appendChild(el);
+      el.classList.remove('is-closing', 'is-hidden');
+    }
+  }
+
+  function closeAllModals(immediate) {
+    document.querySelectorAll('.modal-backdrop:not(.is-hidden)').forEach((m) => {
+      if (immediate || reducedMotion) {
+        m.classList.remove('is-closing');
+        m.classList.add('is-hidden');
+        return;
+      }
+      m.classList.add('is-closing');
+      window.setTimeout(() => {
+        m.classList.remove('is-closing');
+        m.classList.add('is-hidden');
+      }, 155);
+    });
+  }
+
+  function initDrawersAndModals() {
     document.querySelectorAll('[data-open-drawer]').forEach((btn) => {
       btn.addEventListener('click', () => openDrawer(btn.getAttribute('data-open-drawer')));
     });
@@ -274,11 +407,23 @@
         if (e.target === backdrop) closeAllDrawers(false);
       });
     });
+
+    document.querySelectorAll('[data-close-modal]').forEach((btn) => {
+      btn.addEventListener('click', () => closeAllModals(false));
+    });
+    document.querySelectorAll('.modal-backdrop').forEach((backdrop) => {
+      backdrop.addEventListener('click', (e) => {
+        if (e.target === backdrop) closeAllModals(false);
+      });
+    });
+
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeAllDrawers(false);
+        closeAllModals(false);
         hideContextMenu();
         closeCommandPalette();
+        closeHeaderPopovers();
       }
     });
   }
@@ -418,7 +563,7 @@
   }
 
   // ------------------------------------------------------------------------
-  // Kanban Horizontal Swimlanes + 5-Column Board + Context Menu + Drawer
+  // Kanban Swimlanes + 5-Column Board + Cursor Context Menu + Split Windows
   // ------------------------------------------------------------------------
   let contextTaskId = null;
 
@@ -453,6 +598,144 @@
       if (laneBadge) laneBadge.textContent = visibleCount + (visibleCount === 1 ? ' task' : ' tasks');
       lane.style.display = (hasFilter && visibleCount === 0) ? 'none' : '';
     });
+  }
+
+  function getTaskDataset() {
+    const store = document.getElementById('task-details-json');
+    if (!store) return null;
+    try {
+      return JSON.parse(store.textContent || '{}');
+    } catch (_e) {
+      return null;
+    }
+  }
+
+  function openTaskEditModal(taskId) {
+    const allData = getTaskDataset();
+    const task = allData && allData.tasks ? allData.tasks[taskId] : null;
+    const modal = document.getElementById('modal-task-edit');
+    if (!task || !modal) return;
+
+    const tEl = modal.querySelector('#modal-edit-task-title');
+    const mEl = modal.querySelector('#modal-edit-task-meta');
+    if (tEl) tEl.textContent = task.title || 'Edit Deliverable Details';
+    if (mEl) mEl.textContent = (task.client_name || '') + ' · ' + (task.va_name || '') + ' · Due ' + (task.deadline || '');
+
+    const editForm = modal.querySelector('#form-edit-task');
+    if (editForm) {
+      editForm.setAttribute('data-api-form', '/api/v1/tasks/' + encodeURIComponent(taskId));
+      const setVal = (sel, val) => {
+        const inp = editForm.querySelector(sel);
+        if (inp) inp.value = val != null ? val : '';
+      };
+      setVal('[name="title"]', task.title || '');
+      setVal('[name="status"]', task.status || 'todo');
+      setVal('[name="priority"]', task.priority || 'medium');
+      if (task.client_id) setVal('[name="client_id"]', task.client_id);
+      setVal('[name="deadline"]', task.deadline || '');
+      setVal('[name="estimated_hours"]', task.estimated_hours || 4);
+      setVal('[name="description"]', task.description || '');
+    }
+
+    openModal('modal-task-edit');
+  }
+
+  function openTaskCollabDrawer(taskId, initialTab) {
+    const allData = getTaskDataset();
+    const task = allData && allData.tasks ? allData.tasks[taskId] : null;
+    const drawer = document.getElementById('drawer-task-collab');
+    if (!task || !drawer) return;
+
+    const tEl = drawer.querySelector('#collab-task-title');
+    const mEl = drawer.querySelector('#collab-task-meta');
+    if (tEl) tEl.textContent = task.title || 'Deliverable Conversation';
+    if (mEl) mEl.textContent = (task.client_name || '') + ' · ' + (task.va_name || '') + ' · Due ' + (task.deadline || '');
+
+    const notesList = drawer.querySelector('#detail-notes-list');
+    if (notesList) {
+      notesList.innerHTML = '';
+      const notes = (allData.notes || {})[taskId] || [];
+      if (notes.length === 0) {
+        notesList.innerHTML = '<p class="muted">No execution notes added yet.</p>';
+      } else {
+        notes.forEach((n) => {
+          const div = document.createElement('div');
+          div.className = 'va-note-card';
+          div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;"><strong>' +
+            escapeHtml(n.author_name) + '</strong><span class="badge badge-brand">SLA Note</span></div>' +
+            '<p style="margin-top:6px;">' + escapeHtml(n.content) + '</p>';
+          notesList.appendChild(div);
+        });
+      }
+    }
+
+    const commentsList = drawer.querySelector('#detail-comments-list');
+    if (commentsList) {
+      commentsList.innerHTML = '';
+      const comments = (allData.comments || {})[taskId] || [];
+      if (comments.length === 0) {
+        commentsList.innerHTML = '<p class="muted">No discussion comments yet.</p>';
+      } else {
+        comments.forEach((c) => {
+          const div = document.createElement('div');
+          div.className = 'comment-card';
+          div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;"><strong>' +
+            escapeHtml(c.author_name) + '</strong><span class="badge badge-neutral">' + escapeHtml(c.author_role) + '</span></div>' +
+            '<p style="margin-top:6px;">' + escapeHtml(c.message) + '</p>';
+          commentsList.appendChild(div);
+        });
+      }
+    }
+
+    drawer.querySelectorAll('input[name="task_id"]').forEach((inp) => { inp.value = taskId; });
+    openDrawer('drawer-task-collab');
+    activateTab('task-collab', initialTab === 'comments' ? 'comments' : 'notes');
+  }
+
+  function openTaskOvertimeModal(taskId) {
+    const allData = getTaskDataset();
+    const task = allData && allData.tasks ? allData.tasks[taskId] : null;
+    const modal = document.getElementById('modal-task-overtime');
+    if (!task || !modal) return;
+
+    const tEl = modal.querySelector('#overtime-task-title');
+    const mEl = modal.querySelector('#overtime-task-meta');
+    if (tEl) tEl.textContent = (task.title || 'Overtime & Extra Hours');
+    if (mEl) mEl.textContent = (task.client_name || '') + ' · Est ' + (task.estimated_hours || 0) + 'h';
+
+    const ehList = modal.querySelector('#detail-extrahours-list');
+    if (ehList) {
+      ehList.innerHTML = '';
+      const logs = (allData.extra_hours || {})[taskId] || [];
+      if (logs.length === 0) {
+        ehList.innerHTML = '<p class="muted">No overtime hours logged on this deliverable yet.</p>';
+      } else {
+        logs.forEach((eh) => {
+          const div = document.createElement('div');
+          div.className = 'comment-card';
+          div.innerHTML = '<strong>+' + escapeHtml(eh.extra_hours) + 'h</strong> <span class="muted">(' +
+            escapeHtml(eh.date) + ')</span><p style="margin-top:4px;">' + escapeHtml(eh.justification) + '</p>';
+          ehList.appendChild(div);
+        });
+      }
+    }
+
+    modal.querySelectorAll('input[name="task_id"]').forEach((inp) => { inp.value = taskId; });
+    openModal('modal-task-overtime');
+  }
+
+  function showContextMenuAt(taskId, clientX, clientY) {
+    const cm = document.getElementById('kanban-context-menu');
+    if (!cm) return;
+    contextTaskId = taskId;
+    cm.classList.remove('is-closing', 'is-hidden');
+
+    const menuW = cm.offsetWidth || 205;
+    const menuH = cm.offsetHeight || 310;
+    const left = Math.max(8, Math.min(clientX, window.innerWidth - menuW - 8));
+    const top = Math.max(8, Math.min(clientY, window.innerHeight - menuH - 8));
+    cm.style.left = left + 'px';
+    cm.style.top = top + 'px';
   }
 
   function initKanbanBoard() {
@@ -502,7 +785,7 @@
       });
     }
 
-    // Bind DnD and right-click context menu on every card across surfaces
+    // Drag & drop + right-click menu + split windows click delegation
     surfaces.forEach((surface) => {
       surface.querySelectorAll('.task-card').forEach((card) => {
         card.addEventListener('dragstart', (e) => {
@@ -529,8 +812,7 @@
         card.addEventListener('contextmenu', (e) => {
           e.preventDefault();
           const tid = card.getAttribute('data-task-id');
-          if (!tid) return;
-          showContextMenuAt(tid, e.clientX, e.clientY);
+          if (tid) showContextMenuAt(tid, e.clientX, e.clientY);
         });
       });
 
@@ -578,11 +860,8 @@
           container.appendChild(dropped);
           dropped.classList.add('just-dropped');
           window.setTimeout(() => dropped.classList.remove('just-dropped'), 360);
-          if (clientChanged) {
-            dropped.setAttribute('data-client-id', newClientId);
-          }
+          if (clientChanged) dropped.setAttribute('data-client-id', newClientId);
 
-          // Mirror card across sibling view container when status changes so tab switches stay synchronized
           document.querySelectorAll('.task-card[data-task-id="' + taskId + '"]').forEach((twin) => {
             if (twin === dropped) return;
             const twinColParent = twin.closest('.kanban-surface');
@@ -623,27 +902,38 @@
         });
       });
 
-      // Click delegation for 3-dot card menu and opening right-side detail drawer tabs
       surface.addEventListener('click', (e) => {
         const menuBtn = e.target.closest('.task-menu-btn');
         if (menuBtn) {
           e.stopPropagation();
           const tid = menuBtn.getAttribute('data-task-id');
-          const rect = menuBtn.getBoundingClientRect();
-          if (tid) showContextMenuAt(tid, rect.left - 165, rect.bottom + 6);
+          if (tid) showContextMenuAt(tid, e.clientX, e.clientY);
           return;
         }
 
-        const tabTrigger = e.target.closest('[data-open-task]');
-        if (tabTrigger) {
-          const tid = tabTrigger.getAttribute('data-open-task');
-          const initialTab = tabTrigger.getAttribute('data-task-tab') || 'details';
-          openTaskDetailDrawer(tid, initialTab);
+        const editBtn = e.target.closest('[data-open-task-edit]');
+        if (editBtn) {
+          openTaskEditModal(editBtn.getAttribute('data-open-task-edit'));
+          return;
+        }
+
+        const collabBtn = e.target.closest('[data-open-task-collab]');
+        if (collabBtn) {
+          openTaskCollabDrawer(
+            collabBtn.getAttribute('data-open-task-collab'),
+            collabBtn.getAttribute('data-task-tab') || 'notes'
+          );
+          return;
+        }
+
+        const overtimeBtn = e.target.closest('[data-open-task-overtime]');
+        if (overtimeBtn) {
+          openTaskOvertimeModal(overtimeBtn.getAttribute('data-open-task-overtime'));
         }
       });
     });
 
-    // Context Menu Actions
+    // Context Menu Action Handlers
     const cm = document.getElementById('kanban-context-menu');
     if (cm) {
       cm.addEventListener('click', async (e) => {
@@ -653,8 +943,8 @@
         const action = btn.getAttribute('data-cm-action');
         hideContextMenu();
 
-        if (action === 'open') {
-          openTaskDetailDrawer(tid, btn.getAttribute('data-cm-tab') || 'details');
+        if (action === 'open-edit') {
+          openTaskEditModal(tid);
         } else if (action === 'status') {
           const status = btn.getAttribute('data-status');
           try {
@@ -694,157 +984,53 @@
     document.addEventListener('click', (e) => {
       if (cm && !cm.contains(e.target)) hideContextMenu();
     });
-  }
 
-  function showContextMenuAt(taskId, x, y) {
-    const cm = document.getElementById('kanban-context-menu');
-    if (!cm) return;
-    contextTaskId = taskId;
-    cm.classList.remove('is-closing', 'is-hidden');
-    const maxLeft = window.innerWidth - 235;
-    const maxTop = window.innerHeight - 395;
-    cm.style.left = Math.max(10, Math.min(x, maxLeft)) + 'px';
-    cm.style.top = Math.max(10, Math.min(y, maxTop)) + 'px';
-  }
-
-  function openTaskDetailDrawer(taskId, initialTab) {
-    const store = document.getElementById('task-details-json');
-    if (!store) return;
-    const allData = JSON.parse(store.textContent || '{}');
-    const task = (allData.tasks || {})[taskId];
-    if (!task) return;
-
-    const drawer = document.getElementById('drawer-task-detail');
-    if (!drawer) return;
-
-    drawer.querySelector('#detail-task-title').textContent = task.title;
-    drawer.querySelector('#detail-task-meta').textContent =
-      task.client_name + ' · ' + task.va_name + ' · Due ' + task.deadline + ' · Est ' + task.estimated_hours + 'h';
-
-    const editForm = drawer.querySelector('#form-edit-task');
-    if (editForm) {
-      editForm.setAttribute('data-api-form', '/api/v1/tasks/' + encodeURIComponent(taskId));
-      editForm.querySelector('[name="title"]').value = task.title || '';
-      editForm.querySelector('[name="description"]').value = task.description || '';
-      editForm.querySelector('[name="priority"]').value = task.priority || 'medium';
-      const stSelect = editForm.querySelector('[name="status"]');
-      if (stSelect) stSelect.value = task.status || 'todo';
-      const clSelect = editForm.querySelector('[name="client_id"]');
-      if (clSelect && task.client_id) clSelect.value = task.client_id;
-      editForm.querySelector('[name="deadline"]').value = task.deadline || '';
-      editForm.querySelector('[name="estimated_hours"]').value = task.estimated_hours || 4;
+    // Deep link from Notification Bell (e.g. /tasks?open_task=task-1&tab=comments)
+    const params = new URLSearchParams(window.location.search);
+    const openTaskId = params.get('open_task');
+    if (openTaskId) {
+      const requestedTab = params.get('tab') || 'comments';
+      window.setTimeout(() => {
+        openTaskCollabDrawer(openTaskId, requestedTab);
+        params.delete('open_task');
+        params.delete('tab');
+        const nextQs = params.toString();
+        const cleanUrl = window.location.pathname + (nextQs ? '?' + nextQs : '');
+        window.history.replaceState({}, '', cleanUrl);
+      }, 240);
     }
-
-    const notesList = drawer.querySelector('#detail-notes-list');
-    notesList.innerHTML = '';
-    const notes = (allData.notes || {})[taskId] || [];
-    if (notes.length === 0) {
-      notesList.innerHTML = '<p class="muted">No execution notes added yet.</p>';
-    } else {
-      notes.forEach((n) => {
-        const div = document.createElement('div');
-        div.className = 'va-note-card';
-        div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;"><strong>' +
-          escapeHtml(n.author_name) + '</strong><span class="badge badge-brand">SLA Note</span></div>' +
-          '<p style="margin-top:6px;">' + escapeHtml(n.content) + '</p>';
-        notesList.appendChild(div);
-      });
-    }
-
-    const commentsList = drawer.querySelector('#detail-comments-list');
-    commentsList.innerHTML = '';
-    const comments = (allData.comments || {})[taskId] || [];
-    if (comments.length === 0) {
-      commentsList.innerHTML = '<p class="muted">No discussion comments yet.</p>';
-    } else {
-      comments.forEach((c) => {
-        const div = document.createElement('div');
-        div.className = 'comment-card';
-        div.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;"><strong>' +
-          escapeHtml(c.author_name) + '</strong><span class="badge badge-neutral">' + escapeHtml(c.author_role) + '</span></div>' +
-          '<p style="margin-top:6px;">' + escapeHtml(c.message) + '</p>';
-        commentsList.appendChild(div);
-      });
-    }
-
-    const ehList = drawer.querySelector('#detail-extrahours-list');
-    if (ehList) {
-      ehList.innerHTML = '';
-      const logs = (allData.extra_hours || {})[taskId] || [];
-      if (logs.length === 0) {
-        ehList.innerHTML = '<p class="muted">No overtime hours logged on this task.</p>';
-      } else {
-        logs.forEach((eh) => {
-          const div = document.createElement('div');
-          div.className = 'comment-card';
-          div.innerHTML = '<strong>+' + escapeHtml(eh.extra_hours) + 'h</strong> <span class="muted">(' +
-            escapeHtml(eh.date) + ')</span><p style="margin-top:4px;">' + escapeHtml(eh.justification) + '</p>';
-          ehList.appendChild(div);
-        });
-      }
-    }
-
-    drawer.querySelectorAll('input[name="task_id"]').forEach((inp) => { inp.value = taskId; });
-    openDrawer('drawer-task-detail');
-    activateTab('task-drawer', initialTab || 'details');
   }
 
   // ------------------------------------------------------------------------
-  // Intelligent Drag-and-Drop Calendar Focus Scheduler & CRM Sync
+  // Unified Calendar Scheduler & Client-Synced Open Slot Scanner
   // ------------------------------------------------------------------------
   function initCalendarScheduler() {
     const grid = document.querySelector('.calendar-grid');
     if (!grid) return;
 
-    let dragState = null;
+    let dragEventId = null;
 
-    // 1. Draggable Quick-Block Focus / Client Availability Templates
-    document.querySelectorAll('[data-focus-template][draggable="true"]').forEach((chip) => {
-      chip.addEventListener('dragstart', (e) => {
-        dragState = {
-          kind: 'template',
-          title: chip.getAttribute('data-title') || 'Deep Focus Block',
-          meeting_type: chip.getAttribute('data-type') || 'focus_block',
-          duration_minutes: parseInt(chip.getAttribute('data-duration') || '60', 10) || 60
-        };
-        if (e.dataTransfer) {
-          e.dataTransfer.effectAllowed = 'copy';
-          e.dataTransfer.setData('text/plain', dragState.title);
-        }
-      });
-
-      chip.addEventListener('dragend', () => {
-        dragState = null;
-        grid.querySelectorAll('.cal-cell').forEach((c) => c.classList.remove('cal-drag-over'));
-      });
-    });
-
-    // 2. Draggable Scheduled Meetings / Focus Blocks for Date Rescheduling
     grid.querySelectorAll('.cal-event-chip[draggable="true"][data-meeting-id]').forEach((chip) => {
       chip.addEventListener('dragstart', (e) => {
         e.stopPropagation();
-        dragState = {
-          kind: 'event',
-          id: chip.getAttribute('data-meeting-id') || ''
-        };
+        dragEventId = chip.getAttribute('data-meeting-id') || '';
         if (e.dataTransfer) {
           e.dataTransfer.effectAllowed = 'move';
-          e.dataTransfer.setData('text/plain', dragState.id);
+          e.dataTransfer.setData('text/plain', dragEventId);
         }
       });
 
       chip.addEventListener('dragend', () => {
-        dragState = null;
+        dragEventId = null;
         grid.querySelectorAll('.cal-cell').forEach((c) => c.classList.remove('cal-drag-over'));
       });
     });
 
-    // 3. Calendar Cell Drop Targets & Quick Slot Inspection
     grid.querySelectorAll('.cal-cell[data-cal-date]').forEach((cell) => {
       const targetDate = cell.getAttribute('data-cal-date');
 
       cell.addEventListener('dragover', (e) => {
-        if (!dragState) return;
+        if (!dragEventId) return;
         e.preventDefault();
         cell.classList.add('cal-drag-over');
       });
@@ -858,38 +1044,17 @@
       cell.addEventListener('drop', async (e) => {
         e.preventDefault();
         cell.classList.remove('cal-drag-over');
-        if (!dragState || !targetDate) return;
-
-        const payload = dragState;
-        dragState = null;
+        if (!dragEventId || !targetDate) return;
+        const movingId = dragEventId;
+        dragEventId = null;
 
         try {
-          if (payload.kind === 'template') {
-            const vaInput = document.getElementById('focus-va-id');
-            const body = {
-              title: payload.title,
-              meeting_type: payload.meeting_type,
-              duration_minutes: payload.duration_minutes,
-              target_date: targetDate,
-              auto_slot: true
-            };
-            if (vaInput && vaInput.value) {
-              body.va_id = vaInput.value;
-            }
-            const res = await apiFetch('/api/v1/meetings', {
-              method: 'POST',
-              body: JSON.stringify(body)
-            });
-            showToast('Scheduled ' + payload.title + ' on ' + (res.start_time || targetDate), 'success');
-            window.setTimeout(() => window.location.reload(), 320);
-          } else if (payload.kind === 'event' && payload.id) {
-            const res = await apiFetch('/api/v1/meetings/' + encodeURIComponent(payload.id) + '/reschedule', {
-              method: 'PATCH',
-              body: JSON.stringify({ target_date: targetDate })
-            });
-            showToast('Rescheduled to ' + (res.start_time || targetDate), 'success');
-            window.setTimeout(() => window.location.reload(), 320);
-          }
+          const res = await apiFetch('/api/v1/meetings/' + encodeURIComponent(movingId) + '/reschedule', {
+            method: 'PATCH',
+            body: JSON.stringify({ target_date: targetDate })
+          });
+          showToast('Rescheduled to ' + (res.start_time || targetDate), 'success');
+          window.setTimeout(() => window.location.reload(), 320);
         } catch (err) {
           showToast(err.message, 'error');
         }
@@ -897,18 +1062,17 @@
 
       cell.addEventListener('click', (e) => {
         if (e.target.closest('.cal-event-chip') || e.target.closest('.cal-chip-del')) return;
-        const focusDrawer = document.getElementById('drawer-focus-block');
-        if (!focusDrawer || !targetDate) return;
-        const sInp = document.getElementById('focus-start-time');
-        const eInp = document.getElementById('focus-end-time');
+        const schedDrawer = document.getElementById('drawer-schedule-meeting');
+        if (!schedDrawer || !targetDate) return;
+        const sInp = document.getElementById('sched-start-time');
+        const eInp = document.getElementById('sched-end-time');
         if (sInp) sInp.value = targetDate + 'T09:00';
-        if (eInp) eInp.value = targetDate + 'T11:00';
-        openDrawer('drawer-focus-block');
+        if (eInp) eInp.value = targetDate + 'T10:00';
+        openDrawer('drawer-schedule-meeting');
         loadOpenSlots(targetDate);
       });
     });
 
-    // 4. Delete Focus Block / Scheduled Event Chips
     grid.addEventListener('click', async (e) => {
       const delBtn = e.target.closest('.cal-chip-del[data-delete-meeting]');
       if (!delBtn) return;
@@ -918,7 +1082,7 @@
       try {
         delBtn.disabled = true;
         await apiFetch('/api/v1/meetings/' + encodeURIComponent(mid), { method: 'DELETE' });
-        showToast('Removed calendar block', 'success');
+        showToast('Removed scheduled block', 'success');
         window.setTimeout(() => window.location.reload(), 260);
       } catch (err) {
         showToast(err.message, 'error');
@@ -926,51 +1090,33 @@
       }
     });
 
-    // 5. CRM Client Sync Strip Buttons
-    document.querySelectorAll('[data-sync-client]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const cid = btn.getAttribute('data-sync-client') || '';
-        const cname = btn.getAttribute('data-sync-client-name') || 'Client';
-        const typeSel = document.getElementById('focus-meeting-type');
-        const clSel = document.getElementById('focus-client-id');
-        const titleInp = document.getElementById('focus-title');
-        const sInp = document.getElementById('focus-start-time');
-        const eInp = document.getElementById('focus-end-time');
-
-        if (typeSel) typeSel.value = 'availability_window';
-        if (clSel && cid) clSel.value = cid;
-        if (titleInp) titleInp.value = 'Client Sync Availability — ' + cname;
-
-        const baseDate = sInp && sInp.value ? sInp.value.slice(0, 10) : new Date().toISOString().slice(0, 10);
-        if (sInp) sInp.value = baseDate + 'T10:00';
-        if (eInp) eInp.value = baseDate + 'T11:00';
-
-        openDrawer('drawer-focus-block');
-        loadOpenSlots(baseDate);
-      });
-    });
-
-    // 6. Live PostgreSQL Open Slot Scanner
     const checkBtn = document.getElementById('btn-check-slots');
-    if (checkBtn) {
-      checkBtn.addEventListener('click', () => {
-        const sInp = document.getElementById('focus-start-time');
-        const dStr = sInp && sInp.value ? sInp.value.slice(0, 10) : new Date().toISOString().slice(0, 10);
-        loadOpenSlots(dStr);
-      });
-    }
+    const clientSel = document.getElementById('sched-client-id');
+    const vaSel = document.getElementById('sched-va-id');
+
+    const triggerScan = () => {
+      const sInp = document.getElementById('sched-start-time');
+      const dStr = sInp && sInp.value ? sInp.value.slice(0, 10) : new Date().toISOString().slice(0, 10);
+      loadOpenSlots(dStr);
+    };
+
+    if (checkBtn) checkBtn.addEventListener('click', triggerScan);
+    if (clientSel) clientSel.addEventListener('change', triggerScan);
+    if (vaSel) vaSel.addEventListener('change', triggerScan);
 
     async function loadOpenSlots(dateStr) {
       const box = document.getElementById('focus-slots-preview');
       if (!box) return;
-      const vaInput = document.getElementById('focus-va-id');
-      const vaQuery = vaInput && vaInput.value ? '&va_id=' + encodeURIComponent(vaInput.value) : '';
-      box.textContent = 'Scanning PostgreSQL calendar conflicts for ' + dateStr + '...';
+      const vaInput = document.getElementById('sched-va-id');
+      const clInput = document.getElementById('sched-client-id');
+      const params = new URLSearchParams({ date: dateStr });
+      if (vaInput && vaInput.value) params.set('va_id', vaInput.value);
+      if (clInput && clInput.value) params.set('client_id', clInput.value);
+
+      box.textContent = 'Scanning PostgreSQL schedule & client hours for ' + dateStr + '...';
 
       try {
-        const res = await apiFetch('/api/v1/meetings/availability?date=' + encodeURIComponent(dateStr) + vaQuery, {
-          method: 'GET'
-        });
+        const res = await apiFetch('/api/v1/meetings/availability?' + params.toString(), { method: 'GET' });
         box.innerHTML = '';
 
         if (res.on_pto) {
@@ -983,8 +1129,19 @@
 
         const slots = Array.isArray(res.open_slots) ? res.open_slots : [];
         if (slots.length === 0) {
-          box.textContent = 'No open 1-hour windows remain on ' + dateStr + '.';
+          box.textContent = res.client_filtered
+            ? 'No open client-available windows remain on ' + dateStr + '. Edit client availability slots in Clients CRM.'
+            : 'No open 1-hour windows remain on ' + dateStr + '.';
           return;
+        }
+
+        if (res.client_filtered) {
+          const hint = document.createElement('div');
+          hint.className = 'muted';
+          hint.style.fontSize = '11px';
+          hint.style.marginBottom = '6px';
+          hint.textContent = 'Filtered by selected CRM client available schedule (' + (res.day_of_week || '') + '):';
+          box.appendChild(hint);
         }
 
         const wrap = document.createElement('div');
@@ -999,11 +1156,11 @@
           btn.className = 'btn btn-secondary btn-sm';
           btn.textContent = slotLabel;
           btn.addEventListener('click', () => {
-            const sInp = document.getElementById('focus-start-time');
-            const eInp = document.getElementById('focus-end-time');
+            const sInp = document.getElementById('sched-start-time');
+            const eInp = document.getElementById('sched-end-time');
             if (sInp && parts[0]) sInp.value = dateStr + 'T' + parts[0];
             if (eInp && parts[1]) eInp.value = dateStr + 'T' + parts[1];
-            showToast('Applied slot ' + slotLabel, 'success');
+            showToast('Applied open slot ' + slotLabel, 'success');
           });
           wrap.appendChild(btn);
         });
@@ -1015,9 +1172,135 @@
   }
 
   // ------------------------------------------------------------------------
-  // Client CRM Right Dossier Drawer & CSV Bulk Importer
+  // Client CRM Right Dossier (2+ Char Live Search, Secondary Contact, Color
+  // Status Pills, Availability Slots Builder, Top Photo Preview/Delete)
   // ------------------------------------------------------------------------
+  function renderSlotRow(day, start, end) {
+    const row = document.createElement('div');
+    row.className = 'schedule-slot-row';
+    row.setAttribute('data-slot-row', '1');
+
+    const sel = document.createElement('select');
+    sel.className = 'select';
+    sel.setAttribute('data-slot-day', '1');
+    ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach((d) => {
+      const opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = d;
+      if (d === (day || 'Mon')) opt.selected = true;
+      sel.appendChild(opt);
+    });
+
+    const startInp = document.createElement('input');
+    startInp.className = 'input';
+    startInp.type = 'time';
+    startInp.setAttribute('data-slot-start', '1');
+    startInp.value = start || '09:00';
+
+    const endInp = document.createElement('input');
+    endInp.className = 'input';
+    endInp.type = 'time';
+    endInp.setAttribute('data-slot-end', '1');
+    endInp.value = end || '17:00';
+
+    const remBtn = document.createElement('button');
+    remBtn.type = 'button';
+    remBtn.className = 'btn btn-danger btn-sm';
+    remBtn.setAttribute('data-remove-slot', '1');
+    remBtn.innerHTML = '&times;';
+
+    row.appendChild(sel);
+    row.appendChild(startInp);
+    row.appendChild(endInp);
+    row.appendChild(remBtn);
+    return row;
+  }
+
+  function syncStatusRadioGrid(gridEl) {
+    if (!gridEl) return;
+    gridEl.querySelectorAll('.status-pill').forEach((pill) => {
+      const radio = pill.querySelector('input[type="radio"]');
+      pill.classList.toggle('is-selected', Boolean(radio && radio.checked));
+    });
+  }
+
   function initClientDossiers() {
+    // Live text filter starting from 2nd character typed
+    const searchInput = document.getElementById('client-live-search');
+    if (searchInput) {
+      const applyFilter = () => {
+        const q = searchInput.value.trim().toLowerCase();
+        document.querySelectorAll('.client-card-item').forEach((card) => {
+          if (q.length < 2) {
+            card.style.display = '';
+            return;
+          }
+          const hay = (card.getAttribute('data-client-search') || '').toLowerCase();
+          card.style.display = hay.includes(q) ? '' : 'none';
+        });
+      };
+      searchInput.addEventListener('input', applyFilter);
+    }
+
+    // "+ Secondary Email / Phone" reveal toggles
+    document.querySelectorAll('[data-toggle-extra]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const targetPrefix = btn.getAttribute('data-toggle-extra');
+        const wrap = targetPrefix ? document.getElementById(targetPrefix + '-wrap') : null;
+        if (!wrap) return;
+        wrap.classList.toggle('is-hidden');
+        if (!wrap.classList.contains('is-hidden')) {
+          const inp = wrap.querySelector('input');
+          if (inp) inp.focus();
+        }
+      });
+    });
+
+    // Color-coded Contract Status Radio Pills
+    document.querySelectorAll('.status-radio-grid').forEach((grid) => {
+      syncStatusRadioGrid(grid);
+      grid.addEventListener('change', () => syncStatusRadioGrid(grid));
+    });
+
+    // Weekly Availability Slot Builder buttons
+    document.querySelectorAll('[data-add-slot-btn]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const containerId = btn.getAttribute('data-add-slot-btn');
+        const container = containerId ? document.getElementById(containerId) : null;
+        if (container) container.appendChild(renderSlotRow('Mon', '09:00', '17:00'));
+      });
+    });
+
+    document.addEventListener('click', (e) => {
+      const rem = e.target.closest('[data-remove-slot]');
+      if (rem) {
+        const row = rem.closest('[data-slot-row]');
+        if (row) row.remove();
+      }
+    });
+
+    // Delete Client Avatar Button
+    const delClientAvatarBtn = document.getElementById('btn-delete-client-avatar');
+    if (delClientAvatarBtn) {
+      delClientAvatarBtn.addEventListener('click', async () => {
+        const cid = delClientAvatarBtn.getAttribute('data-client-id') || '';
+        if (!cid) return;
+        try {
+          delClientAvatarBtn.disabled = true;
+          await apiFetch('/api/v1/uploads/client-avatar', {
+            method: 'DELETE',
+            body: JSON.stringify({ client_id: cid })
+          });
+          showToast('Client photo removed', 'success');
+          window.setTimeout(() => window.location.reload(), 300);
+        } catch (err) {
+          showToast(err.message, 'error');
+          delClientAvatarBtn.disabled = false;
+        }
+      });
+    }
+
+    // Open Client Dossier Drawer
     document.querySelectorAll('[data-open-client]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const cid = btn.getAttribute('data-open-client');
@@ -1030,32 +1313,90 @@
         const drawer = document.getElementById('drawer-client-dossier');
         if (!drawer) return;
 
-        drawer.querySelector('#dossier-agency').textContent = cl.agency_name;
-        drawer.querySelector('#dossier-contact').textContent = cl.name + ' · ' + cl.email;
+        const agencyEl = drawer.querySelector('#dossier-agency');
+        const contactEl = drawer.querySelector('#dossier-contact');
+        if (agencyEl) agencyEl.textContent = cl.agency_name;
+        if (contactEl) contactEl.textContent = cl.name + ' · ' + cl.email;
+
+        const previewEl = drawer.querySelector('#dossier-avatar-preview');
+        if (previewEl) previewEl.innerHTML = renderAvatarMarkup(cl.avatar_url, cl.agency_name);
+
+        if (delClientAvatarBtn) {
+          delClientAvatarBtn.setAttribute('data-client-id', cid);
+          delClientAvatarBtn.classList.toggle('is-hidden', !cl.avatar_url);
+        }
 
         const editForm = drawer.querySelector('#form-edit-client');
         if (editForm) {
           editForm.setAttribute('data-api-form', '/api/v1/clients/' + encodeURIComponent(cid));
-          editForm.querySelector('[name="agency_name"]').value = cl.agency_name || '';
-          editForm.querySelector('[name="name"]').value = cl.name || '';
-          editForm.querySelector('[name="email"]').value = cl.email || '';
-          editForm.querySelector('[name="phone"]').value = cl.phone || '';
-          editForm.querySelector('[name="contract_status"]').value = cl.contract_status || 'active';
-          editForm.querySelector('[name="contracted_hours_per_month"]').value = cl.contracted_hours_per_month || 40;
-          editForm.querySelector('[name="consumed_hours_month"]').value = cl.consumed_hours_month || 0;
-          const vaSel = editForm.querySelector('[name="focus_va_id"]');
-          if (vaSel && cl.focus_va_id) vaSel.value = cl.focus_va_id;
-          editForm.querySelector('[name="internal_notes"]').value = cl.internal_notes || '';
+          const setVal = (sel, val) => {
+            const inp = editForm.querySelector(sel);
+            if (inp) inp.value = val != null ? val : '';
+          };
+          setVal('[name="agency_name"]', cl.agency_name || '');
+          setVal('[name="name"]', cl.name || '');
+          setVal('[name="email"]', cl.email || '');
+          setVal('[name="additional_email"]', cl.additional_email || '');
+          setVal('[name="phone"]', cl.phone || '');
+          setVal('[name="additional_phone"]', cl.additional_phone || '');
+          setVal('[name="website"]', cl.website || '');
+          setVal('[name="contracted_hours_per_month"]', cl.contracted_hours_per_month || 40);
+          setVal('[name="consumed_hours_month"]', cl.consumed_hours_month || 0);
+          if (cl.focus_va_id) setVal('[name="focus_va_id"]', cl.focus_va_id);
+          setVal('[name="internal_notes"]', cl.internal_notes || '');
+
+          const addEmWrap = document.getElementById('edit-add-email-wrap');
+          const addPhWrap = document.getElementById('edit-add-phone-wrap');
+          if (addEmWrap) addEmWrap.classList.toggle('is-hidden', !cl.additional_email);
+          if (addPhWrap) addPhWrap.classList.toggle('is-hidden', !cl.additional_phone);
+
+          const stVal = cl.contract_status || 'active';
+          editForm.querySelectorAll('input[name="contract_status"]').forEach((r) => {
+            r.checked = (r.value === stVal);
+          });
+          syncStatusRadioGrid(editForm.querySelector('.status-radio-grid'));
+
+          const slotsBox = document.getElementById('edit-client-slots-list');
+          if (slotsBox) {
+            slotsBox.innerHTML = '';
+            const slots = Array.isArray(cl.availability_slots_list) ? cl.availability_slots_list : [];
+            if (slots.length === 0) {
+              slotsBox.appendChild(renderSlotRow('Mon', '09:00', '17:00'));
+            } else {
+              slots.forEach((s) => {
+                slotsBox.appendChild(renderSlotRow(s.day || 'Mon', s.start || '09:00', s.end || '17:00'));
+              });
+            }
+          }
+        }
+
+        // VA Strictly Read-Only Overview
+        const roBox = drawer.querySelector('#dossier-va-readonly');
+        if (roBox) {
+          const slotsText = Array.isArray(cl.availability_slots_list) && cl.availability_slots_list.length > 0
+            ? cl.availability_slots_list.map((s) => escapeHtml(s.day + ' ' + s.start + '-' + s.end)).join(' · ')
+            : 'No client hours configured';
+          roBox.innerHTML =
+            '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;">' +
+              '<div class="photo-preview-thumb">' + renderAvatarMarkup(cl.avatar_url, cl.agency_name) + '</div>' +
+              '<div><strong style="font-size:15px;">' + escapeHtml(cl.agency_name) + '</strong>' +
+              '<div class="muted" style="font-size:12px;">' + escapeHtml(cl.name) + ' · ' + escapeHtml(cl.contract_status || 'active') + '</div></div>' +
+            '</div>' +
+            '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12.5px;">' +
+              '<div><strong>Email:</strong> ' + escapeHtml(cl.email) + (cl.additional_email ? '<br>' + escapeHtml(cl.additional_email) : '') + '</div>' +
+              '<div><strong>Phone:</strong> ' + escapeHtml(cl.phone || '—') + (cl.additional_phone ? '<br>' + escapeHtml(cl.additional_phone) : '') + '</div>' +
+              '<div><strong>Website:</strong> ' + escapeHtml(cl.website || '—') + '</div>' +
+              '<div><strong>Retainer:</strong> ' + escapeHtml(cl.consumed_hours_month || 0) + ' / ' + escapeHtml(cl.contracted_hours_per_month || 0) + ' hrs</div>' +
+              '<div style="grid-column:1 / -1;"><strong>Available Hours:</strong> ' + slotsText + '</div>' +
+              '<div style="grid-column:1 / -1;"><strong>Account Notes:</strong> ' + escapeHtml(cl.internal_notes || 'No notes recorded.') + '</div>' +
+            '</div>';
         }
 
         const pdfForm = drawer.querySelector('#form-upload-contract');
-        if (pdfForm) {
-          pdfForm.querySelector('[name="client_id"]').value = cid;
-        }
+        if (pdfForm) pdfForm.querySelector('[name="client_id"]').value = cid;
         const avatarForm = drawer.querySelector('#form-upload-client-avatar');
-        if (avatarForm) {
-          avatarForm.querySelector('[name="client_id"]').value = cid;
-        }
+        if (avatarForm) avatarForm.querySelector('[name="client_id"]').value = cid;
+
         const pdfLink = drawer.querySelector('#dossier-pdf-link');
         if (pdfLink) {
           if (cl.contract_pdf_url) {
@@ -1135,30 +1476,445 @@
   }
 
   // ------------------------------------------------------------------------
-  // Admin Right-Side Edit User Drawer
+  // Admin Right-Side User Drawer (Photo Preview/Delete, VA Specialties,
+  // Dynamic Specialty Category Creation & Suspend/Reactivate/Delete)
   // ------------------------------------------------------------------------
+  function toggleVaSpecialtiesSection(formEl) {
+    if (!formEl) return;
+    const roleSel = formEl.querySelector('[data-role-select]');
+    const specWrap = formEl.querySelector('[data-va-specialties-wrap]');
+    if (roleSel && specWrap) {
+      specWrap.classList.toggle('is-hidden', roleSel.value !== 'va');
+    }
+  }
+
   function initAdminEditDrawers() {
+    document.querySelectorAll('form[data-role-form]').forEach((f) => {
+      const roleSel = f.querySelector('[data-role-select]');
+      if (roleSel) {
+        roleSel.addEventListener('change', () => toggleVaSpecialtiesSection(f));
+        toggleVaSpecialtiesSection(f);
+      }
+    });
+
+    // Dynamic VA Specialty Category Creation (persisted in va_specialty_categories)
+    document.querySelectorAll('[data-add-spec-btn]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const wrap = btn.closest('.spec-add-row');
+        const input = wrap ? wrap.querySelector('[data-new-spec-input]') : null;
+        const name = input ? input.value.trim() : '';
+        if (!name) {
+          showToast('Enter a VA specialty category name', 'error');
+          return;
+        }
+
+        try {
+          btn.disabled = true;
+          const res = await apiFetch('/api/v1/users/specialties', {
+            method: 'POST',
+            body: JSON.stringify({ name })
+          });
+          const createdName = res.name || name;
+          const parentGroup = btn.closest('.form-group');
+          const ownGrid = parentGroup ? parentGroup.querySelector('[data-spec-grid]') : null;
+
+          document.querySelectorAll('[data-spec-grid]').forEach((grid) => {
+            const exists = Array.from(grid.querySelectorAll('input[name="specialties[]"]')).some(
+              (cb) => cb.value.toLowerCase() === createdName.toLowerCase()
+            );
+            if (!exists) {
+              const label = document.createElement('label');
+              label.className = 'choice-pill';
+              const cb = document.createElement('input');
+              cb.type = 'checkbox';
+              cb.name = 'specialties[]';
+              cb.value = createdName;
+              cb.checked = (grid === ownGrid);
+              const span = document.createElement('span');
+              span.textContent = createdName;
+              label.appendChild(cb);
+              label.appendChild(span);
+              grid.appendChild(label);
+            }
+          });
+
+          if (input) input.value = '';
+          showToast('Added VA specialty "' + createdName + '"', 'success');
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+
+    const delUserAvatarBtn = document.getElementById('btn-delete-user-avatar');
+    if (delUserAvatarBtn) {
+      delUserAvatarBtn.addEventListener('click', async () => {
+        const uid = delUserAvatarBtn.getAttribute('data-user-id') || '';
+        if (!uid) return;
+        try {
+          delUserAvatarBtn.disabled = true;
+          await apiFetch('/api/v1/uploads/avatar', {
+            method: 'DELETE',
+            body: JSON.stringify({ user_id: uid })
+          });
+          showToast('Staff photo removed', 'success');
+          window.setTimeout(() => window.location.reload(), 300);
+        } catch (err) {
+          showToast(err.message, 'error');
+          delUserAvatarBtn.disabled = false;
+        }
+      });
+    }
+
+    const suspendBtn = document.getElementById('btn-edit-user-suspend');
+    const reactivateBtn = document.getElementById('btn-edit-user-reactivate');
+    const deleteUserBtn = document.getElementById('btn-edit-user-delete');
+
+    if (suspendBtn) {
+      suspendBtn.addEventListener('click', async () => {
+        const uid = suspendBtn.getAttribute('data-user-id') || '';
+        if (!uid) return;
+        try {
+          suspendBtn.disabled = true;
+          await apiFetch('/api/v1/users/' + encodeURIComponent(uid) + '/suspend', {
+            method: 'PATCH',
+            body: JSON.stringify({ reason: 'Administrative hold' })
+          });
+          showToast('Account suspended', 'success');
+          window.setTimeout(() => window.location.reload(), 320);
+        } catch (err) {
+          showToast(err.message, 'error');
+          suspendBtn.disabled = false;
+        }
+      });
+    }
+
+    if (reactivateBtn) {
+      reactivateBtn.addEventListener('click', async () => {
+        const uid = reactivateBtn.getAttribute('data-user-id') || '';
+        if (!uid) return;
+        try {
+          reactivateBtn.disabled = true;
+          await apiFetch('/api/v1/users/' + encodeURIComponent(uid) + '/reactivate', { method: 'PATCH' });
+          showToast('Account reactivated', 'success');
+          window.setTimeout(() => window.location.reload(), 320);
+        } catch (err) {
+          showToast(err.message, 'error');
+          reactivateBtn.disabled = false;
+        }
+      });
+    }
+
+    if (deleteUserBtn) {
+      deleteUserBtn.addEventListener('click', async () => {
+        const uid = deleteUserBtn.getAttribute('data-user-id') || '';
+        if (!uid) return;
+        try {
+          deleteUserBtn.disabled = true;
+          await apiFetch('/api/v1/users/' + encodeURIComponent(uid), { method: 'DELETE' });
+          showToast('Account permanently deleted', 'success');
+          window.setTimeout(() => window.location.reload(), 320);
+        } catch (err) {
+          showToast(err.message, 'error');
+          deleteUserBtn.disabled = false;
+        }
+      });
+    }
+
     document.querySelectorAll('[data-edit-user]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const uid = btn.getAttribute('data-edit-user');
         const store = document.getElementById('admin-users-json');
         if (!store || !uid) return;
         const usersMap = JSON.parse(store.textContent || '{}');
+        const currentUserId = store.getAttribute('data-current-user-id') || '';
         const u = usersMap[uid];
         if (!u) return;
 
         const drawer = document.getElementById('drawer-edit-user');
         if (!drawer) return;
+
+        const avatarPreview = drawer.querySelector('#edit-user-avatar-preview');
+        if (avatarPreview) avatarPreview.innerHTML = renderAvatarMarkup(u.avatar_url, u.name);
+
+        const avatarUidInput = drawer.querySelector('#edit-user-avatar-id');
+        if (avatarUidInput) avatarUidInput.value = uid;
+
+        if (delUserAvatarBtn) {
+          delUserAvatarBtn.setAttribute('data-user-id', uid);
+          delUserAvatarBtn.classList.toggle('is-hidden', !u.avatar_url);
+        }
+
+        const dangerBar = drawer.querySelector('#edit-user-danger-actions');
+        if (dangerBar) {
+          const isSelf = (uid === currentUserId);
+          dangerBar.classList.toggle('is-hidden', isSelf);
+          const isSuspended = Boolean(u.is_suspended) || !Boolean(u.is_active);
+          if (suspendBtn) {
+            suspendBtn.setAttribute('data-user-id', uid);
+            suspendBtn.classList.toggle('is-hidden', isSuspended);
+          }
+          if (reactivateBtn) {
+            reactivateBtn.setAttribute('data-user-id', uid);
+            reactivateBtn.classList.toggle('is-hidden', !isSuspended);
+          }
+          if (deleteUserBtn) {
+            deleteUserBtn.setAttribute('data-user-id', uid);
+          }
+        }
+
         const form = drawer.querySelector('#form-edit-user');
-        form.setAttribute('data-api-form', '/api/v1/users/' + encodeURIComponent(uid));
-        form.querySelector('[name="name"]').value = u.name || '';
-        form.querySelector('[name="email"]').value = u.email || '';
-        form.querySelector('[name="role"]').value = u.role || 'va';
-        form.querySelector('[name="hourly_rate"]').value = u.hourly_rate || 0;
-        form.querySelector('[name="pto_balance_days"]').value = u.pto_balance_days || 15;
-        const tlSel = form.querySelector('[name="team_leader_id"]');
-        if (tlSel) tlSel.value = u.team_leader_id || '';
+        if (form) {
+          form.setAttribute('data-api-form', '/api/v1/users/' + encodeURIComponent(uid));
+          form.querySelector('[name="name"]').value = u.name || '';
+          form.querySelector('[name="email"]').value = u.email || '';
+          form.querySelector('[name="role"]').value = u.role || 'va';
+          form.querySelector('[name="hourly_rate"]').value = u.hourly_rate || 0;
+          form.querySelector('[name="pto_balance_days"]').value = u.pto_balance_days || 15;
+          const tlSel = form.querySelector('[name="team_leader_id"]');
+          if (tlSel) tlSel.value = u.team_leader_id || '';
+          const phoneInp = form.querySelector('[name="phone"]');
+          if (phoneInp) phoneInp.value = u.phone || '';
+          const bioInp = form.querySelector('[name="bio"]');
+          if (bioInp) bioInp.value = u.bio || '';
+
+          const specs = Array.isArray(u.specialties) ? u.specialties : [];
+          form.querySelectorAll('input[name="specialties[]"]').forEach((cb) => {
+            cb.checked = specs.includes(cb.value);
+          });
+          toggleVaSpecialtiesSection(form);
+        }
+
         openDrawer('drawer-edit-user');
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // VA Directory Admin Edit VA Drawer
+  // ------------------------------------------------------------------------
+  function initVaDirectory() {
+    const store = document.getElementById('va-dir-json');
+    if (!store) return;
+
+    const delDirAvatarBtn = document.getElementById('btn-dir-delete-avatar');
+    if (delDirAvatarBtn) {
+      delDirAvatarBtn.addEventListener('click', async () => {
+        const uid = delDirAvatarBtn.getAttribute('data-user-id') || '';
+        if (!uid) return;
+        try {
+          delDirAvatarBtn.disabled = true;
+          await apiFetch('/api/v1/uploads/avatar', {
+            method: 'DELETE',
+            body: JSON.stringify({ user_id: uid })
+          });
+          showToast('VA profile photo deleted', 'success');
+          window.setTimeout(() => window.location.reload(), 300);
+        } catch (err) {
+          showToast(err.message, 'error');
+          delDirAvatarBtn.disabled = false;
+        }
+      });
+    }
+
+    document.querySelectorAll('[data-dir-edit-va]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const vaId = btn.getAttribute('data-dir-edit-va');
+        const map = JSON.parse(store.textContent || '{}');
+        const va = map[vaId];
+        const drawer = document.getElementById('drawer-dir-edit-va');
+        if (!va || !drawer) return;
+
+        const previewEl = drawer.querySelector('#dir-va-avatar-preview');
+        if (previewEl) previewEl.innerHTML = renderAvatarMarkup(va.avatar_url, va.va_name);
+
+        const uidInput = drawer.querySelector('#dir-va-avatar-id');
+        if (uidInput) uidInput.value = vaId;
+
+        if (delDirAvatarBtn) {
+          delDirAvatarBtn.setAttribute('data-user-id', vaId);
+          delDirAvatarBtn.classList.toggle('is-hidden', !va.avatar_url);
+        }
+
+        const form = drawer.querySelector('#form-dir-edit-va');
+        if (form) {
+          form.setAttribute('data-api-form', '/api/v1/users/' + encodeURIComponent(vaId));
+          form.querySelector('[name="name"]').value = va.va_name || '';
+          form.querySelector('[name="email"]').value = va.va_email || '';
+          form.querySelector('[name="hourly_rate"]').value = va.hourly_rate || 0;
+          const tlSel = form.querySelector('[name="team_leader_id"]');
+          if (tlSel) tlSel.value = va.team_leader_id || '';
+          const phoneInp = form.querySelector('[name="phone"]');
+          if (phoneInp) phoneInp.value = va.phone || '';
+          const bioInp = form.querySelector('[name="bio"]');
+          if (bioInp) bioInp.value = va.bio || '';
+
+          const specs = String(va.specialties_csv || '')
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean);
+          form.querySelectorAll('input[name="specialties[]"]').forEach((cb) => {
+            cb.checked = specs.includes(cb.value);
+          });
+        }
+
+        openDrawer('drawer-dir-edit-va');
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // Knowledge Base: Live Search, Category Filter Tags, WYSIWYG, Single PDF
+  // ------------------------------------------------------------------------
+  function initKnowledgeBase() {
+    const searchInp = document.getElementById('kb-search');
+    const catContainer = document.getElementById('kb-category-pills');
+    const docCards = Array.from(document.querySelectorAll('.kb-doc-card'));
+    let activeCat = '';
+
+    function filterDocs() {
+      const q = searchInp ? searchInp.value.trim().toLowerCase() : '';
+      docCards.forEach((card) => {
+        const cardCat = (card.getAttribute('data-kb-cat') || '').toLowerCase();
+        const hay = (card.getAttribute('data-kb-search') || '').toLowerCase();
+        const matchCat = (activeCat === '' || cardCat === activeCat.toLowerCase());
+        const matchSearch = (q === '' || hay.includes(q));
+        card.style.display = (matchCat && matchSearch) ? '' : 'none';
+      });
+    }
+
+    if (searchInp) searchInp.addEventListener('input', filterDocs);
+    if (catContainer) {
+      catContainer.addEventListener('click', (e) => {
+        const pill = e.target.closest('[data-kb-cat]');
+        if (!pill) return;
+        activeCat = pill.getAttribute('data-kb-cat') || '';
+        catContainer.querySelectorAll('[data-kb-cat]').forEach((b) => {
+          b.classList.toggle('active', b === pill);
+        });
+        filterDocs();
+      });
+    }
+
+    // CSP-safe WYSIWYG Editor Toolbar
+    document.querySelectorAll('[data-wysiwyg]').forEach((wrap) => {
+      const editor = wrap.querySelector('[data-wysiwyg-editor]');
+      const form = wrap.closest('[data-wysiwyg-form]');
+      const hiddenInp = form ? form.querySelector('[data-wysiwyg-input]') : null;
+
+      const syncHidden = () => {
+        if (editor && hiddenInp) {
+          hiddenInp.value = editor.innerHTML.trim();
+        }
+      };
+
+      if (editor) {
+        editor.addEventListener('input', syncHidden);
+        editor.addEventListener('blur', syncHidden);
+      }
+
+      wrap.querySelectorAll('[data-wysiwyg-cmd]').forEach((btn) => {
+        btn.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+        });
+        btn.addEventListener('click', () => {
+          if (!editor) return;
+          editor.focus();
+          const cmd = btn.getAttribute('data-wysiwyg-cmd');
+          const val = btn.getAttribute('data-wysiwyg-val') || null;
+          if (cmd) document.execCommand(cmd, false, val);
+          syncHidden();
+        });
+      });
+    });
+
+    // Edit Existing SOP
+    document.querySelectorAll('[data-kb-edit]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const docId = btn.getAttribute('data-kb-edit');
+        const store = document.getElementById('kb-docs-json');
+        if (!store || !docId) return;
+        const docsMap = JSON.parse(store.textContent || '{}');
+        const doc = docsMap[docId];
+        const drawer = document.getElementById('drawer-edit-sop');
+        const form = document.getElementById('form-edit-sop');
+        if (!doc || !drawer || !form) return;
+
+        form.setAttribute('data-api-form', '/api/v1/knowledge/' + encodeURIComponent(docId));
+        form.querySelector('[name="title"]').value = doc.title || '';
+
+        const catSel = form.querySelector('[name="category"]');
+        if (catSel && doc.category) {
+          const hasOpt = Array.from(catSel.options).some((o) => o.value === doc.category);
+          if (!hasOpt) {
+            const opt = document.createElement('option');
+            opt.value = doc.category;
+            opt.textContent = doc.category;
+            catSel.appendChild(opt);
+          }
+          catSel.value = doc.category;
+        }
+
+        const clSel = form.querySelector('[name="client_id"]');
+        if (clSel) clSel.value = doc.client_id || '';
+
+        const editor = form.querySelector('[data-wysiwyg-editor]');
+        const hiddenInp = form.querySelector('[data-wysiwyg-input]');
+        if (editor) editor.innerHTML = doc.content || '';
+        if (hiddenInp) hiddenInp.value = doc.content || '';
+
+        openDrawer('drawer-edit-sop');
+      });
+    });
+
+    // Single-SOP PDF Print Export
+    document.querySelectorAll('[data-kb-print]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const card = btn.closest('.kb-doc-card');
+        if (!card) return;
+        document.querySelectorAll('.kb-doc-card.kb-print-target').forEach((c) => c.classList.remove('kb-print-target'));
+        card.classList.add('kb-print-target');
+        document.body.classList.add('workly-print-sop');
+
+        const cleanup = () => {
+          document.body.classList.remove('workly-print-sop');
+          card.classList.remove('kb-print-target');
+        };
+        window.addEventListener('afterprint', cleanup, { once: true });
+        window.setTimeout(() => {
+          window.print();
+          window.setTimeout(cleanup, 1000);
+        }, 60);
+      });
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // Perks & Badges Controls (Select All VAs + Minimalist Icon Picker)
+  // ------------------------------------------------------------------------
+  function initPerksControls() {
+    document.querySelectorAll('[data-select-all-vas]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const form = btn.closest('form');
+        if (!form) return;
+        const boxes = Array.from(form.querySelectorAll('input[type="checkbox"][name="user_ids[]"]'));
+        const allChecked = boxes.length > 0 && boxes.every((cb) => cb.checked);
+        boxes.forEach((cb) => { cb.checked = !allChecked; });
+      });
+    });
+
+    document.querySelectorAll('[data-icon-picker]').forEach((picker) => {
+      const hidden = picker.querySelector('[data-icon-value]');
+      picker.addEventListener('click', (e) => {
+        const opt = e.target.closest('[data-icon-option]');
+        if (!opt) return;
+        const iconName = opt.getAttribute('data-icon-option') || 'Medal';
+        if (hidden) hidden.value = iconName;
+        picker.querySelectorAll('[data-icon-option]').forEach((b) => {
+          b.classList.toggle('is-selected', b === opt);
+        });
       });
     });
   }
@@ -1239,6 +1995,20 @@
         const method = (form.getAttribute('data-api-method') || 'POST').toUpperCase();
         const isMultipart = form.enctype === 'multipart/form-data';
         const submitBtn = form.querySelector('button[type="submit"]');
+
+        // Sync WYSIWYG editor before serializing
+        if (form.hasAttribute('data-wysiwyg-form')) {
+          const editor = form.querySelector('[data-wysiwyg-editor]');
+          const hiddenInp = form.querySelector('[data-wysiwyg-input]');
+          if (editor && hiddenInp) {
+            hiddenInp.value = editor.innerHTML.trim();
+            if (editor.textContent.trim() === '' && hiddenInp.value === '') {
+              showToast('Please enter SOP document content', 'error');
+              return;
+            }
+          }
+        }
+
         if (submitBtn) submitBtn.disabled = true;
 
         try {
@@ -1248,13 +2018,46 @@
           } else {
             const fd = new FormData(form);
             const payload = {};
+
             fd.forEach((val, key) => {
               if (key === 'task_id') return;
-              payload[key] = val;
+              if (key.endsWith('[]')) {
+                const cleanKey = key.slice(0, -2);
+                if (!Array.isArray(payload[cleanKey])) payload[cleanKey] = [];
+                payload[cleanKey].push(val);
+              } else {
+                payload[key] = val;
+              }
             });
+
+            // Handle checkboxes (arrays keep array format; single checkboxes map boolean)
+            const arrayCheckboxKeys = new Set();
             form.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-              if (cb.name) payload[cb.name] = cb.checked;
+              if (!cb.name) return;
+              if (cb.name.endsWith('[]')) {
+                arrayCheckboxKeys.add(cb.name.slice(0, -2));
+              } else {
+                payload[cb.name] = cb.checked;
+              }
             });
+            arrayCheckboxKeys.forEach((k) => {
+              if (!Array.isArray(payload[k])) payload[k] = [];
+            });
+
+            // Collect weekly client availability slots when present in form
+            const slotsContainer = form.querySelector('[data-slots-container]');
+            if (slotsContainer) {
+              const collectedSlots = [];
+              slotsContainer.querySelectorAll('[data-slot-row]').forEach((row) => {
+                const d = (row.querySelector('[data-slot-day]') || {}).value || '';
+                const s = (row.querySelector('[data-slot-start]') || {}).value || '';
+                const en = (row.querySelector('[data-slot-end]') || {}).value || '';
+                if (d && s && en) {
+                  collectedSlots.push({ day: d, start: s, end: en });
+                }
+              });
+              payload.availability_slots = collectedSlots;
+            }
 
             if (typeof payload.specialties_csv === 'string') {
               payload.specialties = payload.specialties_csv.split(',').map((s) => s.trim()).filter(Boolean);
@@ -1271,10 +2074,24 @@
               targetUrl = targetUrl.replace('{task_id}', encodeURIComponent(tidInput ? tidInput.value : ''));
             }
 
-            await apiFetch(targetUrl, {
+            const res = await apiFetch(targetUrl, {
               method,
               body: JSON.stringify(payload)
             });
+
+            // Upload optional client logo selected on Create Client form
+            if (form.id === 'form-create-client' && res && res.id) {
+              const logoInp = document.getElementById('create-client-avatar-file');
+              if (logoInp && logoInp.files && logoInp.files[0]) {
+                const logoFd = new FormData();
+                logoFd.append('client_id', res.id);
+                logoFd.append('avatar', logoInp.files[0]);
+                await apiFetch('/api/v1/uploads/client-avatar', {
+                  method: 'POST',
+                  body: logoFd
+                });
+              }
+            }
           }
 
           showToast('Saved to PostgreSQL database', 'success');
@@ -1373,8 +2190,8 @@
 
     const steps = [
       { sel: '#workly-sidebar', title: 'Role-Scoped Workspace', text: 'Navigate modules tailored to your role with live PostgreSQL review & PTO alerts.' },
-      { sel: '#workly-view-content', title: 'Full-Width Operations', text: 'Organize Kanban tasks by Client Swimlanes, drag Focus blocks onto the Calendar, press Ctrl+K for Quick Jump, and use right-side drawers.' },
-      { sel: '#sidebar-profile-anchor', title: 'Profile & Performance', text: 'Click your profile anchor at any time to edit your bio/specialties, review compensation, badges, and upload photos.' }
+      { sel: '#workly-view-content', title: 'Clean Operations Hub', text: 'Organize Kanban tasks by Client Swimlanes, scan client-synced open slots, press Ctrl+K for Quick Jump, and use right-side drawers.' },
+      { sel: '#btn-profile-menu', title: 'Header Notifications & Profile', text: 'Use the header bell for incoming alerts and click your profile pill to open My Profile or Sign Out.' }
     ];
 
     let idx = 0;

@@ -72,6 +72,49 @@ final class MeetingApiController
         }
     }
 
+    private function parseClientWindowsForDate(?string $clientId, string $date): ?array
+    {
+        if ($clientId === null || $clientId === '') {
+            return null;
+        }
+        try {
+            $cStmt = $this->db->prepare('SELECT availability_slots FROM clients WHERE id = :cid LIMIT 1');
+            $cStmt->execute([':cid' => $clientId]);
+            $raw = $cStmt->fetchColumn();
+            if (!$raw) {
+                return null;
+            }
+            $decoded = json_decode((string) $raw, true);
+            if (!is_array($decoded) || empty($decoded)) {
+                return null;
+            }
+            $dayName = (new DateTimeImmutable($date))->format('D'); // Mon..Sun
+            $hours = [];
+            foreach ($decoded as $slot) {
+                if (!is_array($slot)) {
+                    continue;
+                }
+                if (strcasecmp((string) ($slot['day'] ?? ''), $dayName) !== 0) {
+                    continue;
+                }
+                $sHour = (int) substr((string) ($slot['start'] ?? '09:00'), 0, 2);
+                $eHour = (int) substr((string) ($slot['end'] ?? '17:00'), 0, 2);
+                $eMin = (int) substr((string) ($slot['end'] ?? '17:00'), 3, 2);
+                if ($eMin > 0) {
+                    $eHour++;
+                }
+                for ($h = max(0, $sHour); $h < min(23, $eHour); $h++) {
+                    $hours[] = $h;
+                }
+            }
+            $hours = array_values(array_unique($hours));
+            sort($hours);
+            return $hours;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
     private function getAvailability(array $user): void
     {
         $vaId = SecurityHelper::sanitizePlainText($_GET['va_id'] ?? $user['id'], 64);
@@ -82,6 +125,7 @@ final class MeetingApiController
         if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) {
             $date = date('Y-m-d');
         }
+        $clientId = SecurityHelper::sanitizePlainText($_GET['client_id'] ?? '', 64);
 
         $stmt = $this->db->prepare("
             SELECT id, title, meeting_type, start_time, end_time, client_id
@@ -101,9 +145,11 @@ final class MeetingApiController
         $ptoStmt->execute([':va' => $vaId, ':dt' => $date]);
         $pto = $ptoStmt->fetch(PDO::FETCH_ASSOC);
 
-        // Compute open 1h candidate windows between 09:00 and 17:00
+        $clientHours = $this->parseClientWindowsForDate($clientId !== '' ? $clientId : null, $date);
+        $candidateHours = $clientHours !== null ? $clientHours : range(9, 16);
+
         $openSlots = [];
-        for ($h = 9; $h <= 16; $h++) {
+        foreach ($candidateHours as $h) {
             $slotStart = sprintf('%sT%02d:00:00', $date, $h);
             $slotEnd = sprintf('%sT%02d:00:00', $date, $h + 1);
             if ($pto) {
@@ -115,11 +161,13 @@ final class MeetingApiController
         }
 
         echo json_encode([
-            'va_id'      => $vaId,
-            'date'       => $date,
-            'on_pto'     => (bool) $pto,
-            'events'     => $events,
-            'open_slots' => $openSlots,
+            'va_id'         => $vaId,
+            'client_id'     => $clientId !== '' ? $clientId : null,
+            'client_synced' => $clientHours !== null,
+            'date'          => $date,
+            'on_pto'        => (bool) $pto,
+            'events'        => $events,
+            'open_slots'    => $openSlots,
         ]);
     }
 
@@ -147,10 +195,12 @@ final class MeetingApiController
         return (int) $stmt->fetchColumn() > 0;
     }
 
-    private function findSmartSlotOnDate(string $vaId, string $date, int $durationMinutes = 60): array
+    private function findSmartSlotOnDate(string $vaId, string $date, int $durationMinutes = 60, ?string $clientId = null): array
     {
         $durMin = max(30, min(480, $durationMinutes));
-        foreach ([9, 10, 11, 13, 14, 15, 16, 8, 12] as $startHour) {
+        $clientHours = $this->parseClientWindowsForDate($clientId, $date);
+        $hours = (!empty($clientHours)) ? $clientHours : [9, 10, 11, 13, 14, 15, 16, 8, 12];
+        foreach ($hours as $startHour) {
             try {
                 $s = new DateTimeImmutable("{$date} " . sprintf('%02d:00:00', $startHour));
                 $e = $s->modify("+{$durMin} minutes");
@@ -164,7 +214,8 @@ final class MeetingApiController
                 // Skip invalid
             }
         }
-        $s = new DateTimeImmutable("{$date} 09:00:00");
+        $fallbackHour = !empty($hours) ? $hours[0] : 9;
+        $s = new DateTimeImmutable("{$date} " . sprintf('%02d:00:00', $fallbackHour));
         $e = $s->modify("+{$durMin} minutes");
         return [$s->format('Y-m-d\TH:i:s'), $e->format('Y-m-d\TH:i:s')];
     }
@@ -200,8 +251,8 @@ final class MeetingApiController
 
         if ($autoSlot && !empty($input['target_date'])) {
             $targetDate = SecurityHelper::sanitizePlainText($input['target_date'], 16);
-            $dur = max(30, min(360, (int) ($input['duration_minutes'] ?? 120)));
-            [$start, $end] = $this->findSmartSlotOnDate($vaId, $targetDate, $dur);
+            $dur = max(30, min(360, (int) ($input['duration_minutes'] ?? 60)));
+            [$start, $end] = $this->findSmartSlotOnDate($vaId, $targetDate, $dur, $clientId);
         }
 
         $link = in_array($type, ['focus_block', 'availability_window'], true)

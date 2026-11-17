@@ -11,6 +11,9 @@ require_once __DIR__ . '/../services/SecurityHelper.php';
 require_once __DIR__ . '/../services/CacheService.php';
 require_once __DIR__ . '/../services/AuditLogger.php';
 require_once __DIR__ . '/../middleware/AuthMiddleware.php';
+require_once __DIR__ . '/api/NotificationApiController.php';
+require_once __DIR__ . '/api/UserApiController.php';
+require_once __DIR__ . '/api/PerksApiController.php';
 
 final class PageController
 {
@@ -32,8 +35,15 @@ final class PageController
             header('Location: /profile');
             exit;
         }
+        if ($section === 'perks' && !in_array($role, ['admin', 'team_leader'], true)) {
+            header('Location: ' . ($role === 'va' ? '/tasks' : '/dashboard'));
+            exit;
+        }
 
         $alerts = $this->loadSidebarAlerts($user);
+        $headerNotifications = NotificationApiController::fetchForUser($this->db, $user);
+        $unreadNotifCount = count(array_filter($headerNotifications, static fn(array $n): bool => !empty($n['unread'])));
+
         $data = match ($section) {
             'tasks'            => $this->loadTasksData($user),
             'dashboard'        => $this->loadDashboardData($user),
@@ -51,14 +61,14 @@ final class PageController
         $pageTitle = match ($section) {
             'tasks'            => 'Weekly Task Organizer',
             'dashboard'        => 'Operations Overview',
-            'va_directory'     => 'VA & Client Directory',
-            'profile'          => 'VA Profile & Performance',
+            'va_directory'     => 'VA Directory',
+            'profile'          => 'Staff Profile & Performance',
             'clients'          => 'Client CRM',
             'calendar_reports' => 'Calendar & SLA Reports',
             'pto'              => 'PTO & Leave Requests',
             'email'            => 'Email Communications',
             'knowledge'        => 'SOP Knowledge Base',
-            'perks'            => 'Perks & Achievements',
+            'perks'            => 'Perks & Badges',
             default            => 'Workly Platform',
         };
 
@@ -329,14 +339,27 @@ final class PageController
             ];
 
             if ($role === 'admin') {
-                $res['all_users'] = $this->db->query("
-                    SELECT u.id, u.name, u.email, u.role, u.avatar_url, u.hourly_rate, u.team_leader_id,
+                $res['specialty_categories'] = UserApiController::listSpecialtyCategories($this->db);
+                $allUsers = $this->db->query("
+                    SELECT u.id, u.name, u.email, u.role, u.avatar_url, u.phone, u.bio, u.hourly_rate, u.team_leader_id,
                            u.is_active, u.is_suspended, u.suspended_reason, u.pto_balance_days,
-                           mb.email AS connected_gmail, mb.oauth_status AS gmail_status, mb.last_synced_at
+                           mb.email AS connected_gmail, mb.oauth_status AS gmail_status, mb.last_synced_at,
+                           COALESCE(STRING_AGG(DISTINCT sp.specialty, '||'), '') AS specialties_joined
                     FROM users u
                     LEFT JOIN staff_connected_mailboxes mb ON u.id = mb.user_id
+                    LEFT JOIN va_specialties sp ON u.id = sp.va_id
+                    GROUP BY u.id, mb.email, mb.oauth_status, mb.last_synced_at
                     ORDER BY u.role ASC, u.name ASC
                 ")->fetchAll(PDO::FETCH_ASSOC);
+
+                foreach ($allUsers as &$au) {
+                    $au['specialties'] = ($au['role'] === 'va' && $au['specialties_joined'] !== '')
+                        ? explode('||', (string) $au['specialties_joined'])
+                        : [];
+                    unset($au['specialties_joined']);
+                }
+                unset($au);
+                $res['all_users'] = $allUsers;
 
                 $res['team_leaders'] = array_values(array_filter(
                     $res['all_users'],
@@ -367,6 +390,7 @@ final class PageController
                 ");
                 $podStmt->execute([':tl' => $uid]);
                 $res['pod_vas'] = $podStmt->fetchAll(PDO::FETCH_ASSOC);
+                $res['all_vas'] = $this->db->query("SELECT id, name, email, team_leader_id FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
                 $clStmt = $this->db->prepare("
                     SELECT c.*, u.name AS focus_va_name
@@ -504,6 +528,7 @@ final class PageController
 
         $sql = "
             SELECT v.*, u.avatar_url, u.phone, u.bio, u.hire_date, u.team_leader_id,
+                   COALESCE(STRING_AGG(DISTINCT s.specialty, '||'), '') AS specialties_joined,
                    COALESCE(STRING_AGG(DISTINCT s.specialty, ', '), '') AS specialties_csv
             FROM v_va_performance_summary v
             JOIN users u ON v.va_id = u.id
@@ -520,21 +545,18 @@ final class PageController
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
         $vas = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-        $cSql = 'SELECT * FROM v_client_capacity_overview WHERE 1=1';
-        $cParams = [];
-        if ($role === 'team_leader') {
-            $cSql = 'SELECT c.id AS client_id, c.agency_name, c.name AS executive_contact, c.contract_status, c.contracted_hours_per_month, c.consumed_hours_month, ROUND((c.consumed_hours_month / NULLIF(c.contracted_hours_per_month, 0)) * 100, 1) AS utilization_pct, c.focus_va_id, u.name AS focus_va_name, 0::INTEGER AS linked_tasks_count FROM clients c LEFT JOIN users u ON c.focus_va_id = u.id WHERE c.team_leader_id = :tl ORDER BY c.agency_name ASC';
-            $cParams[':tl'] = $uid;
-        } else {
-            $cSql .= ' ORDER BY agency_name ASC';
+        foreach ($vas as &$v) {
+            $v['specialties'] = $v['specialties_joined'] !== '' ? explode('||', (string) $v['specialties_joined']) : [];
+            unset($v['specialties_joined']);
         }
-        $cStmt = $this->db->prepare($cSql);
-        $cStmt->execute($cParams);
+        unset($v);
+
+        $tls = $this->db->query("SELECT id, name FROM users WHERE role = 'team_leader' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
         return [
-            'vas'     => $vas,
-            'clients' => $cStmt->fetchAll(PDO::FETCH_ASSOC),
+            'vas'                  => $vas,
+            'specialty_categories' => UserApiController::listSpecialtyCategories($this->db),
+            'team_leaders'         => $tls,
         ];
     }
 
@@ -544,13 +566,16 @@ final class PageController
             ? $user['id']
             : SecurityHelper::sanitizePlainText($_GET['va_id'] ?? $user['id'], 64);
 
-        $uStmt = $this->db->prepare('SELECT id, name, email, role, avatar_url, phone, bio, hire_date, hourly_rate, total_earnings, pto_balance_days, pto_taken_days FROM users WHERE id = :id LIMIT 1');
+        $uStmt = $this->db->prepare('SELECT id, name, email, role, avatar_url, phone, bio, hire_date, hourly_rate, total_earnings, pto_balance_days, pto_taken_days, team_leader_id FROM users WHERE id = :id LIMIT 1');
         $uStmt->execute([':id' => $targetId]);
         $profile = $uStmt->fetch(PDO::FETCH_ASSOC) ?: $user;
 
-        $spStmt = $this->db->prepare('SELECT specialty FROM va_specialties WHERE va_id = :va ORDER BY specialty ASC');
-        $spStmt->execute([':va' => $profile['id']]);
-        $specialties = $spStmt->fetchAll(PDO::FETCH_COLUMN);
+        $specialties = [];
+        if ($profile['role'] === 'va') {
+            $spStmt = $this->db->prepare('SELECT specialty FROM va_specialties WHERE va_id = :va ORDER BY specialty ASC');
+            $spStmt->execute([':va' => $profile['id']]);
+            $specialties = $spStmt->fetchAll(PDO::FETCH_COLUMN);
+        }
 
         $rStmt = $this->db->prepare('SELECT responsibility FROM va_responsibilities WHERE va_id = :va');
         $rStmt->execute([':va' => $profile['id']]);
@@ -561,7 +586,7 @@ final class PageController
         $earnings = $eStmt->fetchAll(PDO::FETCH_ASSOC);
 
         $bStmt = $this->db->prepare("
-            SELECT b.title, b.description, b.tier, ub.earned_at
+            SELECT b.title, b.description, b.tier, COALESCE(b.icon_name, 'Medal') AS icon_name, ub.earned_at
             FROM user_badges ub
             JOIN badges b ON ub.badge_id = b.id
             WHERE ub.user_id = :va
@@ -571,7 +596,7 @@ final class PageController
         $badges = $bStmt->fetchAll(PDO::FETCH_ASSOC);
 
         $pStmt = $this->db->prepare("
-            SELECT p.title, p.category, p.value, p.description, up.granted_at
+            SELECT p.title, p.category, COALESCE(p.icon_name, 'Award') AS icon_name, p.value, p.description, up.granted_at
             FROM user_perks up
             JOIN perks p ON up.perk_id = p.id
             WHERE up.user_id = :va
@@ -590,14 +615,85 @@ final class PageController
         $tStmt->execute([':va' => $profile['id']]);
         $taskStats = $tStmt->fetch(PDO::FETCH_ASSOC) ?: ['total_tasks' => 0, 'completed_tasks' => 0, 'extra_hours' => 0];
 
+        // Daily tasks Created vs Updated over the last 14 days (for VA & Team Leader profiles)
+        $dailyMap = [];
+        for ($d = 13; $d >= 0; $d--) {
+            $dt = (new DateTimeImmutable())->modify("-{$d} days")->format('Y-m-d');
+            $dailyMap[$dt] = ['date' => $dt, 'label' => date('M j', strtotime($dt)), 'created' => 0, 'updated' => 0];
+        }
+        try {
+            if ($profile['role'] === 'va') {
+                $dcStmt = $this->db->prepare("
+                    SELECT created_at::DATE AS d, COUNT(*)::INTEGER AS cnt
+                    FROM tasks
+                    WHERE assigned_va_id = :va AND created_at::DATE >= CURRENT_DATE - INTERVAL '13 days'
+                    GROUP BY created_at::DATE
+                ");
+                $dcStmt->execute([':va' => $profile['id']]);
+                $duStmt = $this->db->prepare("
+                    SELECT updated_at::DATE AS d, COUNT(*)::INTEGER AS cnt
+                    FROM tasks
+                    WHERE assigned_va_id = :va AND updated_at::DATE >= CURRENT_DATE - INTERVAL '13 days'
+                    GROUP BY updated_at::DATE
+                ");
+                $duStmt->execute([':va' => $profile['id']]);
+            } elseif ($profile['role'] === 'team_leader') {
+                $dcStmt = $this->db->prepare("
+                    SELECT t.created_at::DATE AS d, COUNT(*)::INTEGER AS cnt
+                    FROM tasks t
+                    LEFT JOIN users u ON t.assigned_va_id = u.id
+                    WHERE (u.team_leader_id = :tl1 OR t.created_by_id = :tl2)
+                      AND t.created_at::DATE >= CURRENT_DATE - INTERVAL '13 days'
+                    GROUP BY t.created_at::DATE
+                ");
+                $dcStmt->execute([':tl1' => $profile['id'], ':tl2' => $profile['id']]);
+                $duStmt = $this->db->prepare("
+                    SELECT t.updated_at::DATE AS d, COUNT(*)::INTEGER AS cnt
+                    FROM tasks t
+                    LEFT JOIN users u ON t.assigned_va_id = u.id
+                    WHERE (u.team_leader_id = :tl1 OR t.created_by_id = :tl2)
+                      AND t.updated_at::DATE >= CURRENT_DATE - INTERVAL '13 days'
+                    GROUP BY t.updated_at::DATE
+                ");
+                $duStmt->execute([':tl1' => $profile['id'], ':tl2' => $profile['id']]);
+            } else {
+                $dcStmt = $this->db->query("SELECT created_at::DATE AS d, COUNT(*)::INTEGER AS cnt FROM tasks WHERE created_at::DATE >= CURRENT_DATE - INTERVAL '13 days' GROUP BY created_at::DATE");
+                $duStmt = $this->db->query("SELECT updated_at::DATE AS d, COUNT(*)::INTEGER AS cnt FROM tasks WHERE updated_at::DATE >= CURRENT_DATE - INTERVAL '13 days' GROUP BY updated_at::DATE");
+            }
+            foreach ($dcStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                if (isset($dailyMap[$r['d']])) {
+                    $dailyMap[$r['d']]['created'] = (int) $r['cnt'];
+                }
+            }
+            foreach ($duStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                if (isset($dailyMap[$r['d']])) {
+                    $dailyMap[$r['d']]['updated'] = (int) $r['cnt'];
+                }
+            }
+        } catch (Throwable) {
+        }
+
+        $allStaff = in_array($user['role'], ['admin', 'team_leader', 'hrm'], true)
+            ? $this->db->query("SELECT id, name, role FROM users WHERE is_active = TRUE ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC)
+            : [];
+        $allVas = in_array($user['role'], ['admin', 'team_leader'], true)
+            ? $this->db->query("SELECT id, name, email, team_leader_id FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC)
+            : [];
+        $tls = $this->db->query("SELECT id, name FROM users WHERE role = 'team_leader' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
+
         return [
-            'profile'          => $profile,
-            'specialties'      => $specialties,
-            'responsibilities' => $responsibilities,
-            'earnings'         => $earnings,
-            'badges'           => $badges,
-            'perks'            => $perks,
-            'task_stats'       => $taskStats,
+            'profile'              => $profile,
+            'specialties'          => $specialties,
+            'specialty_categories' => UserApiController::listSpecialtyCategories($this->db),
+            'responsibilities'     => $responsibilities,
+            'earnings'             => $earnings,
+            'badges'               => $badges,
+            'perks'                => $perks,
+            'task_stats'           => $taskStats,
+            'daily_task_activity'  => array_values($dailyMap),
+            'all_staff'            => $allStaff,
+            'all_vas'              => $allVas,
+            'team_leaders'         => $tls,
         ];
     }
 
@@ -808,20 +904,24 @@ final class PageController
         $vas = [];
         $clients = [];
         $staffDirectory = [];
+        try {
+            $this->db->exec('ALTER TABLE clients ADD COLUMN IF NOT EXISTS availability_slots TEXT DEFAULT NULL');
+        } catch (Throwable) {
+        }
         if ($role === 'va') {
-            $cs = $this->db->prepare('SELECT id, agency_name, name, contracted_hours_per_month, consumed_hours_month, contract_status FROM clients WHERE focus_va_id = :va ORDER BY agency_name ASC');
+            $cs = $this->db->prepare('SELECT id, agency_name, name, contracted_hours_per_month, consumed_hours_month, contract_status, availability_slots FROM clients WHERE focus_va_id = :va ORDER BY agency_name ASC');
             $cs->execute([':va' => $uid]);
             $clients = $cs->fetchAll(PDO::FETCH_ASSOC);
         } elseif ($role === 'team_leader') {
             $vs = $this->db->prepare("SELECT id, name, email FROM users WHERE role = 'va' AND is_active = TRUE AND team_leader_id = :tl ORDER BY name ASC");
             $vs->execute([':tl' => $uid]);
             $vas = $vs->fetchAll(PDO::FETCH_ASSOC);
-            $cs = $this->db->prepare('SELECT id, agency_name, name, contracted_hours_per_month, consumed_hours_month, contract_status FROM clients WHERE team_leader_id = :tl ORDER BY agency_name ASC');
+            $cs = $this->db->prepare('SELECT id, agency_name, name, contracted_hours_per_month, consumed_hours_month, contract_status, availability_slots FROM clients WHERE team_leader_id = :tl ORDER BY agency_name ASC');
             $cs->execute([':tl' => $uid]);
             $clients = $cs->fetchAll(PDO::FETCH_ASSOC);
         } else {
             $vas = $this->db->query("SELECT id, name, email FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
-            $clients = $this->db->query('SELECT id, agency_name, name, contracted_hours_per_month, consumed_hours_month, contract_status FROM clients ORDER BY agency_name ASC')->fetchAll(PDO::FETCH_ASSOC);
+            $clients = $this->db->query('SELECT id, agency_name, name, contracted_hours_per_month, consumed_hours_month, contract_status, availability_slots FROM clients ORDER BY agency_name ASC')->fetchAll(PDO::FETCH_ASSOC);
             if ($role === 'admin') {
                 $staffDirectory = $this->db->query("SELECT id, name, role FROM users WHERE is_active = TRUE ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
             }
@@ -945,29 +1045,68 @@ final class PageController
 
     private function loadEmailData(array $user): array
     {
-        $email = $user['email'];
-        $selectedThread = SecurityHelper::sanitizePlainText($_GET['thread'] ?? '', 64);
+        try {
+            $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS snippet TEXT DEFAULT NULL');
+            $this->db->exec("
+                CREATE TABLE IF NOT EXISTS email_attachments (
+                    id VARCHAR(64) PRIMARY KEY,
+                    email_id VARCHAR(64) NOT NULL REFERENCES email_messages(id) ON DELETE CASCADE,
+                    filename VARCHAR(255) NOT NULL,
+                    mime_type VARCHAR(128) NOT NULL DEFAULT 'application/octet-stream',
+                    size_bytes INTEGER NOT NULL DEFAULT 0,
+                    data_base64 TEXT DEFAULT NULL,
+                    gmail_attachment_id VARCHAR(255) DEFAULT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            ");
+        } catch (Throwable) {
+        }
 
-        if ($user['role'] === 'admin') {
+        $mbStmt = $this->db->prepare('SELECT * FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1');
+        $mbStmt->execute([':uid' => $user['id']]);
+        $mailbox = $mbStmt->fetch(PDO::FETCH_ASSOC);
+
+        $email = (string) $user['email'];
+        $linkedEmail = $mailbox ? (string) $mailbox['email'] : $email;
+        $selectedThread = SecurityHelper::sanitizePlainText($_GET['thread'] ?? '', 64);
+        $folder = SecurityHelper::sanitizePlainText($_GET['folder'] ?? 'all', 16);
+
+        $folderClause = match ($folder) {
+            'inbox' => " AND folder = 'inbox' ",
+            'sent'  => " AND folder = 'sent' ",
+            default => '',
+        };
+
+        if ($user['role'] === 'admin' && empty($mailbox)) {
             $stmt = $this->db->query("
                 SELECT DISTINCT ON (thread_id)
-                       thread_id, subject, sender_name, sender_email, recipient_email, body, is_read, created_at
+                       thread_id, subject, sender_name, sender_email, recipient_email, cc_email, body, snippet, folder, is_read, created_at
                 FROM email_messages
+                WHERE 1=1 {$folderClause}
                 ORDER BY thread_id, created_at DESC
             ");
         } else {
             $stmt = $this->db->prepare("
                 SELECT DISTINCT ON (thread_id)
-                       thread_id, subject, sender_name, sender_email, recipient_email, body, is_read, created_at
+                       thread_id, subject, sender_name, sender_email, recipient_email, cc_email, body, snippet, folder, is_read, created_at
                 FROM email_messages
-                WHERE sender_email = :e1 OR recipient_email = :e2 OR cc_email = :e3
+                WHERE (
+                    LOWER(sender_email) IN (LOWER(:e1), LOWER(:l1))
+                    OR LOWER(recipient_email) IN (LOWER(:e2), LOWER(:l2))
+                    OR LOWER(COALESCE(cc_email, '')) LIKE LOWER(:c1)
+                ) {$folderClause}
                 ORDER BY thread_id, created_at DESC
             ");
-            $stmt->execute([':e1' => $email, ':e2' => $email, ':e3' => $email]);
+            $stmt->execute([
+                ':e1' => $email,
+                ':l1' => $linkedEmail,
+                ':e2' => $email,
+                ':l2' => $linkedEmail,
+                ':c1' => '%' . $linkedEmail . '%',
+            ]);
         }
         $threads = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Sort threads newest first
         usort($threads, static fn(array $a, array $b) => strcmp((string) $b['created_at'], (string) $a['created_at']));
 
         if ($selectedThread === '' && !empty($threads)) {
@@ -975,27 +1114,52 @@ final class PageController
         }
 
         $threadMessages = [];
+        $attachmentsByMsg = [];
         if ($selectedThread !== '') {
             $mStmt = $this->db->prepare('SELECT * FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC');
             $mStmt->execute([':tid' => $selectedThread]);
             $threadMessages = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 
-            $markStmt = $this->db->prepare('UPDATE email_messages SET is_read = TRUE WHERE thread_id = :tid AND recipient_email = :email');
-            $markStmt->execute([':tid' => $selectedThread, ':email' => $email]);
-        }
+            $markStmt = $this->db->prepare('UPDATE email_messages SET is_read = TRUE WHERE thread_id = :tid AND (LOWER(recipient_email) = LOWER(:email) OR LOWER(recipient_email) = LOWER(:lemail))');
+            $markStmt->execute([':tid' => $selectedThread, ':email' => $email, ':lemail' => $linkedEmail]);
 
-        $mbStmt = $this->db->prepare('SELECT * FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1');
-        $mbStmt->execute([':uid' => $user['id']]);
-        $mailbox = $mbStmt->fetch(PDO::FETCH_ASSOC);
+            $msgIds = array_column($threadMessages, 'id');
+            if (!empty($msgIds)) {
+                $ph = implode(',', array_fill(0, count($msgIds), '?'));
+                $aStmt = $this->db->prepare("SELECT id, email_id, filename, mime_type, size_bytes FROM email_attachments WHERE email_id IN ({$ph}) ORDER BY created_at ASC");
+                $aStmt->execute($msgIds);
+                foreach ($aStmt->fetchAll(PDO::FETCH_ASSOC) as $att) {
+                    $attachmentsByMsg[$att['email_id']][] = $att;
+                }
+            }
+        }
 
         $contacts = $this->db->query("SELECT name, email, role FROM users WHERE is_active = TRUE ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
+        $firebaseCfg = null;
+        $cfgPath = __DIR__ . '/../firebase-applet-config.json';
+        if (is_file($cfgPath)) {
+            $decoded = json_decode((string) @file_get_contents($cfgPath), true);
+            if (is_array($decoded)) {
+                $firebaseCfg = [
+                    'apiKey'            => $decoded['apiKey'] ?? '',
+                    'authDomain'        => $decoded['authDomain'] ?? '',
+                    'projectId'         => $decoded['projectId'] ?? '',
+                    'appId'             => $decoded['appId'] ?? '',
+                    'messagingSenderId' => $decoded['messagingSenderId'] ?? '',
+                ];
+            }
+        }
+
         return [
-            'threads'         => $threads,
-            'selected_thread' => $selectedThread,
-            'messages'        => $threadMessages,
-            'mailbox'         => $mailbox,
-            'contacts'        => $contacts,
+            'threads'          => $threads,
+            'selected_thread'  => $selectedThread,
+            'selected_folder'  => $folder,
+            'messages'         => $threadMessages,
+            'attachments'      => $attachmentsByMsg,
+            'mailbox'          => $mailbox,
+            'contacts'         => $contacts,
+            'firebase_config'  => $firebaseCfg,
         ];
     }
 
@@ -1033,7 +1197,12 @@ final class PageController
 
     private function loadPerksData(array $user): array
     {
-        $perks = $this->db->query('SELECT * FROM perks ORDER BY created_at DESC')->fetchAll(PDO::FETCH_ASSOC);
+        try {
+            $this->db->exec("ALTER TABLE perks ADD COLUMN IF NOT EXISTS icon_name VARCHAR(64) NOT NULL DEFAULT 'Award'");
+        } catch (Throwable) {
+        }
+
+        $perks = $this->db->query("SELECT id, title, category, COALESCE(icon_name, 'Award') AS icon_name, value, description, active, created_at FROM perks ORDER BY created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
         $grants = $this->db->query("
             SELECT up.perk_id, up.user_id, u.name AS va_name, up.granted_at
             FROM user_perks up
@@ -1041,9 +1210,9 @@ final class PageController
             ORDER BY up.granted_at DESC
         ")->fetchAll(PDO::FETCH_ASSOC);
 
-        $badges = $this->db->query('SELECT * FROM badges ORDER BY created_at DESC')->fetchAll(PDO::FETCH_ASSOC);
+        $badges = $this->db->query("SELECT id, title, description, COALESCE(icon_name, 'Medal') AS icon_name, tier, trigger_type, required_threshold, created_at FROM badges ORDER BY created_at DESC")->fetchAll(PDO::FETCH_ASSOC);
         $awards = $this->db->query("
-            SELECT ub.badge_id, ub.user_id, u.name AS va_name, b.title AS badge_title, b.tier, ub.earned_at
+            SELECT ub.badge_id, ub.user_id, u.name AS va_name, b.title AS badge_title, b.tier, COALESCE(b.icon_name, 'Medal') AS icon_name, ub.earned_at
             FROM user_badges ub
             JOIN users u ON ub.user_id = u.id
             JOIN badges b ON ub.badge_id = b.id
@@ -1053,11 +1222,12 @@ final class PageController
         $vas = $this->db->query("SELECT id, name, email FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
         return [
-            'perks'  => $perks,
-            'grants' => $grants,
-            'badges' => $badges,
-            'awards' => $awards,
-            'vas'    => $vas,
+            'perks'           => $perks,
+            'grants'          => $grants,
+            'badges'          => $badges,
+            'awards'          => $awards,
+            'vas'             => $vas,
+            'available_icons' => PerksApiController::VALID_ICONS,
         ];
     }
 }

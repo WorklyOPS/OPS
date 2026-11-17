@@ -1,16 +1,22 @@
+<?php
+require_once __DIR__ . '/../partials/icons.php';
+
+$canManagePerks = in_array($role, ['admin', 'team_leader'], true);
+$vas = $data['vas'] ?? [];
+$availableIcons = $data['available_icons'] ?? ['Award', 'Medal', 'Trophy', 'Star', 'Shield', 'Crown', 'Zap', 'Heart'];
+?>
+
 <div class="page-header">
   <div>
     <h1>Perks, Benefits &amp; Recognition Badges</h1>
-    <p class="muted">Company benefit allocations and milestone achievements managed in PostgreSQL.</p>
+    <p class="muted">Tiered minimalist medal badges, benefit programs, and multi-select VA recognition managed by Admins &amp; Team Leaders.</p>
   </div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap;">
-    <?php if (in_array($role, ['admin', 'hrm'], true)): ?>
+  <?php if ($canManagePerks): ?>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
       <button type="button" class="btn btn-secondary" data-open-drawer="drawer-create-perk">+ Add Perk</button>
-    <?php endif; ?>
-    <?php if (in_array($role, ['admin', 'hrm', 'team_leader'], true)): ?>
       <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-badge">+ Create Badge</button>
-    <?php endif; ?>
-  </div>
+    </div>
+  <?php endif; ?>
 </div>
 
 <div class="grid-2">
@@ -22,20 +28,35 @@
       <div style="display:grid;gap:12px;">
         <?php foreach ($data['perks'] as $pk): ?>
           <div class="message-bubble" style="margin-bottom:0;">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <strong><?= SecurityHelper::e($pk['title']) ?></strong>
-              <span class="badge badge-success">$<?= number_format((float) $pk['value'], 0) ?> • <?= SecurityHelper::e($pk['category']) ?></span>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+              <div style="display:flex;align-items:center;gap:10px;">
+                <span class="tier-icon-wrap tier-gold">
+                  <?= workly_icon_svg((string) ($pk['icon_name'] ?? 'Award'), 19) ?>
+                </span>
+                <div>
+                  <strong><?= SecurityHelper::e($pk['title']) ?></strong>
+                  <div class="muted" style="font-size:11.5px;"><?= SecurityHelper::e($pk['category']) ?></div>
+                </div>
+              </div>
+              <span class="badge badge-success">$<?= number_format((float) $pk['value'], 0) ?></span>
             </div>
-            <p class="muted" style="font-size:12.5px;margin:6px 0 10px;"><?= SecurityHelper::e($pk['description']) ?></p>
+            <p class="muted" style="font-size:12.5px;margin:8px 0 12px;"><?= SecurityHelper::e($pk['description']) ?></p>
 
-            <?php if (in_array($role, ['admin', 'hrm'], true) && !empty($data['vas'])): ?>
-              <form data-api-form="/api/v1/perks/<?= SecurityHelper::e($pk['id']) ?>/grant" data-api-method="POST" style="display:flex;gap:8px;align-items:center;">
-                <select name="user_id" class="select" required style="flex:1;">
-                  <?php foreach ($data['vas'] as $v): ?>
-                    <option value="<?= SecurityHelper::e($v['id']) ?>"><?= SecurityHelper::e($v['name']) ?></option>
+            <?php if ($canManagePerks && !empty($vas)): ?>
+              <form data-api-form="/api/v1/perks/<?= SecurityHelper::e($pk['id']) ?>/grant" data-api-method="POST">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                  <span class="form-label">Select VA Recipients (Multi-Choice)</span>
+                  <button type="button" class="icon-chip-btn" data-select-all-vas>Toggle All VAs</button>
+                </div>
+                <div class="choice-grid" style="max-height:130px;overflow-y:auto;margin-bottom:10px;">
+                  <?php foreach ($vas as $v): ?>
+                    <label class="choice-pill">
+                      <input type="checkbox" name="user_ids[]" value="<?= SecurityHelper::e($v['id']) ?>">
+                      <span><?= SecurityHelper::e($v['name']) ?></span>
+                    </label>
                   <?php endforeach; ?>
-                </select>
-                <button type="submit" class="btn btn-secondary btn-sm">Grant to VA</button>
+                </div>
+                <button type="submit" class="btn btn-secondary btn-sm">Grant Perk to Selected</button>
               </form>
             <?php endif; ?>
           </div>
@@ -52,9 +73,9 @@
             <?php foreach ($data['grants'] as $g): ?>
               <tr>
                 <td><?= SecurityHelper::e($g['va_name']) ?></td>
-                <td><?= SecurityHelper::e($g['perk_id']) ?></td>
+                <td class="mono" style="font-size:11.5px;"><?= SecurityHelper::e($g['perk_id']) ?></td>
                 <td>
-                  <?php if (in_array($role, ['admin', 'hrm'], true)): ?>
+                  <?php if ($canManagePerks): ?>
                     <button type="button"
                             class="btn btn-danger btn-sm"
                             data-action-url="/api/v1/perks/<?= SecurityHelper::e($g['perk_id']) ?>/grant?user_id=<?= urlencode((string) $g['user_id']) ?>"
@@ -76,21 +97,37 @@
     <?php else: ?>
       <div style="display:grid;gap:12px;">
         <?php foreach ($data['badges'] as $bdg): ?>
+          <?php $tierSlug = strtolower(preg_replace('/[^a-z]/', '', (string) ($bdg['tier'] ?? 'silver')) ?: 'silver'); ?>
           <div class="message-bubble" style="margin-bottom:0;">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-              <strong><?= SecurityHelper::e($bdg['title']) ?></strong>
-              <span class="badge badge-brand"><?= SecurityHelper::e(ucfirst($bdg['tier'])) ?></span>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;">
+              <div style="display:flex;align-items:center;gap:10px;">
+                <span class="tier-icon-wrap tier-<?= SecurityHelper::e($tierSlug) ?>">
+                  <?= workly_icon_svg((string) ($bdg['icon_name'] ?? 'Medal'), 19) ?>
+                </span>
+                <div>
+                  <strong><?= SecurityHelper::e($bdg['title']) ?></strong>
+                  <div class="muted" style="font-size:11.5px;"><?= SecurityHelper::e(ucfirst($tierSlug)) ?> Tier Medal</div>
+                </div>
+              </div>
+              <span class="badge tier-<?= SecurityHelper::e($tierSlug) ?>"><?= SecurityHelper::e(ucfirst($tierSlug)) ?></span>
             </div>
-            <p class="muted" style="font-size:12.5px;margin:6px 0 10px;"><?= SecurityHelper::e($bdg['description']) ?></p>
+            <p class="muted" style="font-size:12.5px;margin:8px 0 12px;"><?= SecurityHelper::e($bdg['description']) ?></p>
 
-            <?php if (in_array($role, ['admin', 'hrm', 'team_leader'], true) && !empty($data['vas'])): ?>
-              <form data-api-form="/api/v1/perks/badges/<?= SecurityHelper::e($bdg['id']) ?>/award" data-api-method="POST" style="display:flex;gap:8px;">
-                <select name="user_id" class="select" required style="flex:1;">
-                  <?php foreach ($data['vas'] as $v): ?>
-                    <option value="<?= SecurityHelper::e($v['id']) ?>"><?= SecurityHelper::e($v['name']) ?></option>
+            <?php if ($canManagePerks && !empty($vas)): ?>
+              <form data-api-form="/api/v1/perks/badges/<?= SecurityHelper::e($bdg['id']) ?>/award" data-api-method="POST">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+                  <span class="form-label">Select VA Recipients (Multi-Choice)</span>
+                  <button type="button" class="icon-chip-btn" data-select-all-vas>Toggle All VAs</button>
+                </div>
+                <div class="choice-grid" style="max-height:130px;overflow-y:auto;margin-bottom:10px;">
+                  <?php foreach ($vas as $v): ?>
+                    <label class="choice-pill">
+                      <input type="checkbox" name="user_ids[]" value="<?= SecurityHelper::e($v['id']) ?>">
+                      <span><?= SecurityHelper::e($v['name']) ?></span>
+                    </label>
                   <?php endforeach; ?>
-                </select>
-                <button type="submit" class="btn btn-primary btn-sm">Award Badge</button>
+                </div>
+                <button type="submit" class="btn btn-primary btn-sm">Award Badge to Selected</button>
               </form>
             <?php endif; ?>
           </div>
@@ -101,15 +138,23 @@
     <?php if (!empty($data['awards'])): ?>
       <h4 style="margin:18px 0 8px;">Recent Badge Awards</h4>
       <?php foreach ($data['awards'] as $aw): ?>
-        <div style="font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--border);">
-          <strong><?= SecurityHelper::e($aw['va_name']) ?></strong> earned <span class="badge badge-brand"><?= SecurityHelper::e($aw['badge_title']) ?></span> on <?= SecurityHelper::e($aw['earned_at']) ?>
+        <?php $awTier = strtolower(preg_replace('/[^a-z]/', '', (string) ($aw['tier'] ?? 'silver')) ?: 'silver'); ?>
+        <div style="font-size:12.5px;padding:7px 0;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+          <span>
+            <strong><?= SecurityHelper::e($aw['va_name']) ?></strong> earned
+            <span class="badge tier-<?= SecurityHelper::e($awTier) ?>">
+              <?= workly_icon_svg((string) ($aw['icon_name'] ?? 'Medal'), 12) ?>
+              <?= SecurityHelper::e($aw['badge_title']) ?>
+            </span>
+          </span>
+          <span class="muted mono" style="font-size:11px;"><?= SecurityHelper::e($aw['earned_at']) ?></span>
         </div>
       <?php endforeach; ?>
     <?php endif; ?>
   </div>
 </div>
 
-<?php if (in_array($role, ['admin', 'hrm'], true)): ?>
+<?php if ($canManagePerks): ?>
   <div id="drawer-create-perk" class="drawer-backdrop is-hidden">
     <aside class="drawer-panel" role="dialog" aria-label="Create Benefit or Perk">
       <div class="drawer-head">
@@ -132,6 +177,22 @@
               <input class="input" type="number" step="10" min="0" name="value" value="250">
             </div>
           </div>
+
+          <div class="form-group" data-icon-picker>
+            <label class="form-label">Minimalist Medal / Icon</label>
+            <input type="hidden" name="icon_name" value="Award" data-icon-value>
+            <div class="icon-picker-grid">
+              <?php foreach ($availableIcons as $ic): ?>
+                <button type="button"
+                        class="icon-picker-btn <?= $ic === 'Award' ? 'is-selected' : '' ?>"
+                        data-icon-option="<?= SecurityHelper::e($ic) ?>">
+                  <?= workly_icon_svg($ic, 18) ?>
+                  <span><?= SecurityHelper::e($ic) ?></span>
+                </button>
+              <?php endforeach; ?>
+            </div>
+          </div>
+
           <div class="form-group">
             <label class="form-label">Description</label>
             <textarea class="textarea" name="description" rows="4" required placeholder="Eligibility rules and stipend details..."></textarea>
@@ -144,9 +205,7 @@
       </div>
     </aside>
   </div>
-<?php endif; ?>
 
-<?php if (in_array($role, ['admin', 'hrm', 'team_leader'], true)): ?>
   <div id="drawer-create-badge" class="drawer-backdrop is-hidden">
     <aside class="drawer-panel" role="dialog" aria-label="Create Recognition Badge">
       <div class="drawer-head">
@@ -161,7 +220,7 @@
               <input class="input" name="title" required placeholder="Zero-Miss SLA Streak">
             </div>
             <div class="form-group">
-              <label class="form-label">Tier</label>
+              <label class="form-label">Tier (Controls Medal Color)</label>
               <select class="select" name="tier">
                 <option value="bronze">Bronze</option>
                 <option value="silver" selected>Silver</option>
@@ -170,6 +229,22 @@
               </select>
             </div>
           </div>
+
+          <div class="form-group" data-icon-picker>
+            <label class="form-label">Minimalist Medal / Icon</label>
+            <input type="hidden" name="icon_name" value="Medal" data-icon-value>
+            <div class="icon-picker-grid">
+              <?php foreach ($availableIcons as $ic): ?>
+                <button type="button"
+                        class="icon-picker-btn <?= $ic === 'Medal' ? 'is-selected' : '' ?>"
+                        data-icon-option="<?= SecurityHelper::e($ic) ?>">
+                  <?= workly_icon_svg($ic, 18) ?>
+                  <span><?= SecurityHelper::e($ic) ?></span>
+                </button>
+              <?php endforeach; ?>
+            </div>
+          </div>
+
           <div class="form-group">
             <label class="form-label">Criteria Description</label>
             <textarea class="textarea" name="description" rows="4" required placeholder="Awarded for 100% on-time deliverables..."></textarea>

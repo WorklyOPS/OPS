@@ -146,15 +146,18 @@ final class ClientApiController
             exit;
         }
 
+        $this->ensureAvailabilityColumn();
+        $availabilitySlots = self::normalizeAvailabilitySlots($input['availability_slots'] ?? null);
+
         $stmt = $this->db->prepare("
             INSERT INTO clients (
                 id, name, agency_name, email, phone, state, country, website, linkedin,
                 additional_email, additional_phone, description, focus_va_id, team_leader_id,
-                contract_status, contracted_hours_per_month, internal_notes
+                contract_status, contracted_hours_per_month, availability_slots, internal_notes
             ) VALUES (
                 :id, :name, :agency, :email, :phone, :state, :country, :website, :linkedin,
                 :add_email, :add_phone, :description, :va_id, :tl_id,
-                :status, :hours, :notes
+                :status, :hours, :avail, :notes
             )
         ");
         $stmt->execute([
@@ -174,6 +177,7 @@ final class ClientApiController
             ':tl_id'       => $tlId,
             ':status'      => in_array($input['contract_status'] ?? '', ['active', 'pending', 'cancelled'], true) ? $input['contract_status'] : 'active',
             ':hours'       => max(1.0, (float) ($input['contracted_hours_per_month'] ?? 40)),
+            ':avail'       => $availabilitySlots,
             ':notes'       => SecurityHelper::sanitizePlainText($input['internal_notes'] ?? '', 2000),
         ]);
 
@@ -192,23 +196,70 @@ final class ClientApiController
         return $id;
     }
 
+    private function ensureAvailabilityColumn(): void
+    {
+        try {
+            $this->db->exec('ALTER TABLE clients ADD COLUMN IF NOT EXISTS availability_slots TEXT DEFAULT NULL');
+        } catch (Throwable) {
+        }
+    }
+
+    public static function normalizeAvailabilitySlots(mixed $raw): ?string
+    {
+        if ($raw === null || $raw === '') {
+            return null;
+        }
+        $arr = is_string($raw) ? json_decode($raw, true) : $raw;
+        if (!is_array($arr)) {
+            return null;
+        }
+        $validDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        $cleaned = [];
+        foreach ($arr as $slot) {
+            if (!is_array($slot)) {
+                continue;
+            }
+            $day = ucfirst(strtolower(substr((string) ($slot['day'] ?? 'Mon'), 0, 3)));
+            if (!in_array($day, $validDays, true)) {
+                $day = 'Mon';
+            }
+            $start = (string) ($slot['start'] ?? '');
+            $end = (string) ($slot['end'] ?? '');
+            if (!preg_match('/^\d{2}:\d{2}$/', $start) || !preg_match('/^\d{2}:\d{2}$/', $end) || $end <= $start) {
+                continue;
+            }
+            $cleaned[] = ['day' => $day, 'start' => $start, 'end' => $end];
+        }
+        return empty($cleaned) ? null : json_encode($cleaned);
+    }
+
     private function updateClient(string $clientId, array $user): void
     {
+        $this->ensureAvailabilityColumn();
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
         $allowed = [
             'agency_name', 'name', 'email', 'phone', 'state', 'country', 'website', 'linkedin',
             'additional_email', 'additional_phone', 'description', 'focus_va_id', 'team_leader_id',
-            'contract_status', 'contracted_hours_per_month', 'consumed_hours_month', 'internal_notes'
+            'contract_status', 'contracted_hours_per_month', 'consumed_hours_month', 'availability_slots', 'internal_notes'
         ];
         $fields = [];
         $params = [':id' => $clientId];
 
         foreach ($allowed as $col) {
-            if (array_key_exists($col, $input)) {
-                $fields[] = "{$col} = :{$col}";
-                $params[":{$col}"] = is_string($input[$col])
-                    ? SecurityHelper::sanitizePlainText($input[$col])
-                    : $input[$col];
+            if (!array_key_exists($col, $input)) {
+                continue;
+            }
+            $fields[] = "{$col} = :{$col}";
+            if ($col === 'availability_slots') {
+                $params[':availability_slots'] = self::normalizeAvailabilitySlots($input[$col]);
+            } elseif ($col === 'website' || $col === 'linkedin') {
+                $params[":{$col}"] = SecurityHelper::sanitizeUrl((string) $input[$col]);
+            } elseif ($col === 'contract_status') {
+                $params[':contract_status'] = in_array($input[$col], ['active', 'pending', 'cancelled'], true) ? $input[$col] : 'active';
+            } elseif (is_string($input[$col])) {
+                $params[":{$col}"] = SecurityHelper::sanitizePlainText($input[$col]);
+            } else {
+                $params[":{$col}"] = $input[$col];
             }
         }
 

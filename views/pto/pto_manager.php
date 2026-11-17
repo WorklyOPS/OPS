@@ -1,6 +1,6 @@
 <div class="page-header">
   <div>
-    <h1>PTO & Leave Requests</h1>
+    <h1>PTO &amp; Leave Requests</h1>
     <p class="muted">Paid Time Off tracker enforcing Monday–Friday business days (maximum 5 days per request).</p>
   </div>
 </div>
@@ -75,7 +75,7 @@
 <?php endif; ?>
 
 <div class="card">
-  <h3 style="margin-bottom:12px;">PTO Request History & Status Tracking</h3>
+  <h3 style="margin-bottom:12px;">PTO Request History</h3>
   <?php if (empty($data['requests'])): ?>
     <p class="muted">No PTO requests recorded yet.</p>
   <?php else: ?>
@@ -87,13 +87,12 @@
             <th>Date Range</th>
             <th>Business Days</th>
             <th>Reason</th>
-            <th>Status & Trail</th>
+            <th>Status</th>
             <th>Action</th>
           </tr>
         </thead>
         <tbody>
           <?php foreach ($data['requests'] as $req): ?>
-            <?php $trail = $data['tracking'][$req['id']] ?? []; ?>
             <tr>
               <td><strong><?= SecurityHelper::e($req['va_name']) ?></strong></td>
               <td><?= SecurityHelper::e($req['start_date']) ?> → <?= SecurityHelper::e($req['end_date']) ?></td>
@@ -103,14 +102,6 @@
                 <span class="badge <?= $req['status'] === 'approved' ? 'badge-success' : ($req['status'] === 'rejected' || $req['status'] === 'cancelled' ? 'badge-danger' : 'badge-warn') ?>">
                   <?= SecurityHelper::e(ucfirst($req['status'])) ?>
                 </span>
-                <?php if (!empty($trail)): ?>
-                  <div class="muted" style="font-size:11px;margin-top:4px;">
-                    <?php
-                      $labels = array_map(static fn(array $t) => (string) $t['current_status'], $trail);
-                      echo SecurityHelper::e(implode(' → ', $labels));
-                    ?>
-                  </div>
-                <?php endif; ?>
               </td>
               <td>
                 <?php if ($req['status'] === 'pending' && in_array($role, ['hrm', 'admin'], true)): ?>

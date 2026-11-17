@@ -1,4 +1,6 @@
 <?php
+require_once __DIR__ . '/../partials/icons.php';
+
 $roleLabel = match ($role) {
     'admin'       => 'System Admin',
     'team_leader' => 'Team Leader',
@@ -13,6 +15,9 @@ foreach (explode(' ', trim((string) $user['name'])) as $part) {
     }
 }
 $initials = substr($initials ?: 'W', 0, 2);
+
+$headerNotifications = $headerNotifications ?? [];
+$unreadNotifCount = (int) ($unreadNotifCount ?? 0);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -112,23 +117,18 @@ $initials = substr($initials ?: 'W', 0, 2);
           </span>
         </a>
 
-        <a href="/perks" class="nav-link <?= $activeSection === 'perks' ? 'active' : '' ?>">
-          <span class="nav-link-inner">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6 6 .9-4.5 4.4 1 6.2L12 16.5 6.5 19.5l1-6.2L3 8.9 9 8z"/></svg>
-            <span>Perks &amp; Badges</span>
-          </span>
-        </a>
-
-        <a href="/profile" class="nav-link <?= $activeSection === 'profile' ? 'active' : '' ?>">
-          <span class="nav-link-inner">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v2"/></svg>
-            <span>My Profile</span>
-          </span>
-        </a>
+        <?php if (in_array($role, ['admin', 'team_leader'], true)): ?>
+          <a href="/perks" class="nav-link <?= $activeSection === 'perks' ? 'active' : '' ?>">
+            <span class="nav-link-inner">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3 6 6 .9-4.5 4.4 1 6.2L12 16.5 6.5 19.5l1-6.2L3 8.9 9 8z"/></svg>
+              <span>Perks &amp; Badges</span>
+            </span>
+          </a>
+        <?php endif; ?>
       </nav>
 
-      <div class="sidebar-foot">
-        <?php if ($role === 'team_leader' && (($alerts['review_tasks'] ?? 0) > 0 || ($alerts['pending_pto'] ?? 0) > 0 || ($alerts['unread_tl_notifications'] ?? 0) > 0)): ?>
+      <?php if ($role === 'team_leader' && (($alerts['review_tasks'] ?? 0) > 0 || ($alerts['pending_pto'] ?? 0) > 0 || ($alerts['unread_tl_notifications'] ?? 0) > 0)): ?>
+        <div class="sidebar-foot">
           <div class="sidebar-alert-box">
             <strong style="display:block;margin-bottom:4px;color:var(--brand);">Team Leader Alerts</strong>
             <?php if (($alerts['review_tasks'] ?? 0) > 0): ?>
@@ -141,20 +141,8 @@ $initials = substr($initials ?: 'W', 0, 2);
               <div><a href="/pto"><?= (int) $alerts['unread_tl_notifications'] ?> unread PTO alert(s)</a></div>
             <?php endif; ?>
           </div>
-        <?php endif; ?>
-
-        <a href="/profile" id="sidebar-profile-anchor" class="sidebar-profile-card">
-          <?php if (!empty($user['avatar_url'])): ?>
-            <img src="<?= SecurityHelper::e($user['avatar_url']) ?>" alt="Profile" class="avatar">
-          <?php else: ?>
-            <span class="avatar"><?= SecurityHelper::e($initials) ?></span>
-          <?php endif; ?>
-          <div style="min-width:0;flex:1;">
-            <div style="font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= SecurityHelper::e($user['name']) ?></div>
-            <div class="muted" style="font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= SecurityHelper::e($roleLabel) ?></div>
-          </div>
-        </a>
-      </div>
+        </div>
+      <?php endif; ?>
     </aside>
 
     <div class="main-wrap">
@@ -179,19 +167,91 @@ $initials = substr($initials ?: 'W', 0, 2);
 
           <button type="button" id="btn-start-tour" class="btn btn-secondary btn-sm no-print">Guide</button>
 
-          <a href="/profile" id="topbar-user-pill" class="user-pill" style="text-decoration:none;">
-            <?php if (!empty($user['avatar_url'])): ?>
-              <img src="<?= SecurityHelper::e($user['avatar_url']) ?>" alt="Avatar" class="avatar">
-            <?php else: ?>
-              <span class="avatar"><?= SecurityHelper::e($initials) ?></span>
-            <?php endif; ?>
-            <div style="line-height:1.25;">
-              <div style="font-size:12.5px;font-weight:600;color:var(--ink);"><?= SecurityHelper::e($user['name']) ?></div>
-              <div class="muted" style="font-size:11px;"><?= SecurityHelper::e($user['email']) ?></div>
-            </div>
-          </a>
+          <!-- Minimalist Notification Bell & Dropdown Popover -->
+          <div class="header-menu-wrap no-print">
+            <button type="button" id="btn-notif-bell" class="notif-btn" aria-label="Notifications" aria-expanded="false">
+              <?= workly_icon_svg('Bell', 18) ?>
+              <?php if ($unreadNotifCount > 0): ?>
+                <span class="notif-count-badge" id="notif-badge-count"><?= min(99, $unreadNotifCount) ?></span>
+              <?php endif; ?>
+            </button>
 
-          <a href="/logout" class="btn btn-secondary btn-sm no-print">Sign Out</a>
+            <div id="notif-popover" class="header-popover notif-popover is-hidden" role="region" aria-label="Incoming Notifications">
+              <div class="popover-head">
+                <div>
+                  <strong style="font-size:13.5px;">Notifications</strong>
+                  <div class="muted" style="font-size:11px;"><?= $unreadNotifCount ?> unread alert(s)</div>
+                </div>
+                <?php if ($unreadNotifCount > 0): ?>
+                  <button type="button" id="btn-mark-notifs-read" class="btn btn-secondary btn-sm">Mark all read</button>
+                <?php endif; ?>
+              </div>
+
+              <div class="popover-list">
+                <?php if (empty($headerNotifications)): ?>
+                  <div style="padding:20px 14px;text-align:center;" class="muted">You’re all caught up — no recent alerts.</div>
+                <?php else: ?>
+                  <?php foreach ($headerNotifications as $nf): ?>
+                    <?php
+                      $catBadge = match ($nf['category'] ?? '') {
+                          'message' => ['Mail', 'badge-info'],
+                          'pto'     => ['PTO', 'badge-warn'],
+                          'comment' => ['Task', 'badge-brand'],
+                          'perk'    => ['Reward', 'badge-success'],
+                          default   => ['Alert', 'badge-neutral'],
+                      };
+                    ?>
+                    <a href="<?= SecurityHelper::e($nf['href']) ?>" class="notif-item <?= !empty($nf['unread']) ? 'is-unread' : '' ?>">
+                      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:3px;">
+                        <span class="badge <?= $catBadge[1] ?>"><?= $catBadge[0] ?></span>
+                        <span class="muted mono" style="font-size:10.5px;"><?= SecurityHelper::e(substr((string) $nf['created_at'], 0, 16)) ?></span>
+                      </div>
+                      <strong style="font-size:12.5px;display:block;color:var(--ink);"><?= SecurityHelper::e($nf['title']) ?></strong>
+                      <?php if (!empty($nf['subtitle'])): ?>
+                        <div class="muted" style="font-size:11.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                          <?= SecurityHelper::e($nf['subtitle']) ?>
+                        </div>
+                      <?php endif; ?>
+                    </a>
+                  <?php endforeach; ?>
+                <?php endif; ?>
+              </div>
+            </div>
+          </div>
+
+          <!-- Header User Profile Popover (Contains Profile Link & Sign Out) -->
+          <div class="header-menu-wrap no-print">
+            <button type="button" id="btn-profile-menu" class="user-pill user-pill-btn" aria-label="Account Menu" aria-expanded="false">
+              <?php if (!empty($user['avatar_url'])): ?>
+                <img src="<?= SecurityHelper::e($user['avatar_url']) ?>" alt="Avatar" class="avatar">
+              <?php else: ?>
+                <span class="avatar"><?= SecurityHelper::e($initials) ?></span>
+              <?php endif; ?>
+              <div style="line-height:1.2;text-align:left;">
+                <div style="font-size:12.5px;font-weight:700;color:var(--ink);"><?= SecurityHelper::e($user['name']) ?></div>
+                <div class="muted" style="font-size:11px;"><?= SecurityHelper::e($roleLabel) ?></div>
+              </div>
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--muted);margin-left:2px;"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+
+            <div id="profile-popover" class="header-popover profile-popover is-hidden" role="menu">
+              <div class="popover-head" style="flex-direction:column;align-items:flex-start;gap:2px;">
+                <strong style="font-size:13.5px;"><?= SecurityHelper::e($user['name']) ?></strong>
+                <div class="muted" style="font-size:11.5px;word-break:break-all;"><?= SecurityHelper::e($user['email']) ?></div>
+                <span class="badge badge-brand" style="margin-top:4px;"><?= SecurityHelper::e($roleLabel) ?></span>
+              </div>
+              <div style="padding:6px;display:grid;gap:2px;">
+                <a href="/profile" class="popover-menu-link">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v2"/></svg>
+                  <span>My Profile</span>
+                </a>
+                <a href="/logout" class="popover-menu-link danger">
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                  <span>Sign Out</span>
+                </a>
+              </div>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -418,7 +478,7 @@ $initials = substr($initials ?: 'W', 0, 2);
           </button>
         <?php endif; ?>
         <button type="button" class="cmdk-item" data-cmdk-href="/tasks">
-          <span><strong>Weekly Task Kanban</strong> — Drag &amp; drop, right-click actions, VA notes</span>
+          <span><strong>Weekly Task Kanban</strong> — Swimlanes, right-click actions &amp; collaboration</span>
           <span class="kbd-hint">Kanban</span>
         </button>
         <?php if ($role !== 'va'): ?>
@@ -428,7 +488,7 @@ $initials = substr($initials ?: 'W', 0, 2);
           </button>
         <?php endif; ?>
         <button type="button" class="cmdk-item" data-cmdk-href="/clients">
-          <span><strong>Clients CRM</strong> — Accounts, hour utilization &amp; PDF contracts</span>
+          <span><strong>Clients CRM</strong> — Accounts, availability schedules &amp; PDF contracts</span>
           <span class="kbd-hint">CRM</span>
         </button>
         <button type="button" class="cmdk-item" data-cmdk-href="/calendar-reports">
@@ -444,19 +504,21 @@ $initials = substr($initials ?: 'W', 0, 2);
           <span class="kbd-hint">Leave</span>
         </button>
         <button type="button" class="cmdk-item" data-cmdk-href="/email">
-          <span><strong>Email Hub</strong> — Unified PostgreSQL inbox &amp; threads</span>
+          <span><strong>Email Hub</strong> — Gmail Workspace sync, CC &amp; attachments</span>
           <span class="kbd-hint">Inbox</span>
         </button>
         <button type="button" class="cmdk-item" data-cmdk-href="/knowledge">
-          <span><strong>Knowledge Base</strong> — SOP playbooks &amp; client runbooks</span>
+          <span><strong>Knowledge Base</strong> — SOP playbooks, WYSIWYG &amp; PDF export</span>
           <span class="kbd-hint">SOPs</span>
         </button>
-        <button type="button" class="cmdk-item" data-cmdk-href="/perks">
-          <span><strong>Perks &amp; Badges</strong> — Recognition tiers &amp; staff benefits</span>
-          <span class="kbd-hint">Perks</span>
-        </button>
+        <?php if (in_array($role, ['admin', 'team_leader'], true)): ?>
+          <button type="button" class="cmdk-item" data-cmdk-href="/perks">
+            <span><strong>Perks &amp; Badges</strong> — Recognition tiers &amp; staff benefits</span>
+            <span class="kbd-hint">Perks</span>
+          </button>
+        <?php endif; ?>
         <button type="button" class="cmdk-item" data-cmdk-href="/profile">
-          <span><strong>My Profile</strong> — Edit bio/specialties, earnings ledger &amp; photo</span>
+          <span><strong>My Profile</strong> — Compensation ledger, badges &amp; daily task velocity</span>
           <span class="kbd-hint">Profile</span>
         </button>
       </div>
@@ -476,5 +538,10 @@ $initials = substr($initials ?: 'W', 0, 2);
   </div>
 
   <script src="/assets/js/app.js"></script>
+  <?php if ($activeSection === 'email'): ?>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+    <script src="/assets/js/gmail-oauth.js"></script>
+  <?php endif; ?>
 </body>
 </html>
