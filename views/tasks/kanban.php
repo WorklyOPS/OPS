@@ -140,13 +140,17 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
             <?php endif; ?>
           </div>
 
+          <!-- Avatar task owner 
+           
           <span style="display:inline-flex;align-items:center;" title="Assigned VA: <?= SecurityHelper::e($task['va_name']) ?>">
             <?php if (!empty($task['va_avatar'])): ?>
               <img src="<?= SecurityHelper::e($task['va_avatar']) ?>" alt="<?= SecurityHelper::e($task['va_name']) ?>" class="avatar avatar-sm">
             <?php else: ?>
               <span class="avatar avatar-sm"><?= SecurityHelper::e($vaInitials) ?></span>
             <?php endif; ?>
-          </span>
+          </span> 
+
+          -->
         </div>
       </div>
     </article>

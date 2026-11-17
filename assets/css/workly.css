@@ -133,6 +133,14 @@
   border-color: rgba(174, 9, 233, 0.30);
 }
 
+:root[data-theme="dark"] .collab-note-item .collab-entry-author, :root[data-theme="dark"] .collab-note-item .collab-entry-text {
+  color: var(--ink);
+}
+
+:root[data-theme="dark"] .collab-note-item .collab-card-action {
+  color: var(--ink) !important;
+}
+
 :root[data-theme="dark"] .sidebar-alert-box {
   border-color: rgba(174, 9, 233, 0.25);
 }
@@ -146,7 +154,7 @@
   );
 }
 
-:root[data-theme="dark"] .auth-hero-pane {
+:root[data-theme="dark"] .auth-hero-pane, :root[data-theme="dark"] .skeleton-bar, :root[data-theme="dark"] .skeleton-card, :root[data-theme="dark"] .skeleton-circle, :root[data-theme="dark"] .skeleton-vbar, :root[data-theme="dark"] .skeleton-row, :root[data-theme="dark"] .swimlane-header, :root[data-theme="dark"] {
   background: linear-gradient(
     145deg,
     #292039 0%,
