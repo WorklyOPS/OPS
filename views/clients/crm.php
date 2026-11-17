@@ -249,9 +249,11 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
                   </div>
                 </div>
 
-                <div class="va-dir-actions">
-                  <a href="/profile?va_id=<?= urlencode((string) $av['id']) ?>" class="btn btn-secondary btn-sm">View Profile</a>
-                </div>
+                <?php if ($role === 'admin' || ($role === 'team_leader' && (string) ($av['team_leader_id'] ?? '') === (string) $user['id'])): ?>
+                  <div class="va-dir-actions">
+                    <a href="/profile?va_id=<?= urlencode((string) $av['id']) ?>" class="btn btn-secondary btn-sm">View Profile</a>
+                  </div>
+                <?php endif; ?>
               </article>
             <?php endforeach; ?>
           </div>

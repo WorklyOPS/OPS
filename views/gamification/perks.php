@@ -48,25 +48,49 @@ $availableIcons = $data['available_icons'] ?? ['Award', 'Medal', 'Trophy', 'Star
 
             <?php if ($canManagePerks && !empty($vas)): ?>
               <form data-api-form="/api/v1/perks/<?= SecurityHelper::e($pk['id']) ?>/grant" data-api-method="POST">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-                  <span class="form-label" style="margin-bottom:0;">Select VA Recipients</span>
-                  <button type="button" class="btn-select-all-vas" data-select-all-vas>
-                    <?= workly_icon_svg('Check', 13) ?>
-                    <span>Select All VAs</span>
-                  </button>
-                </div>
-                <div class="va-recipient-grid" style="margin-bottom:12px;">
-                  <?php foreach ($vas as $v): ?>
-                    <label class="va-recipient-pill">
-                      <input type="checkbox" name="user_ids[]" value="<?= SecurityHelper::e($v['id']) ?>">
-                      <?php if (!empty($v['avatar_url'])): ?>
-                        <img src="<?= SecurityHelper::e($v['avatar_url']) ?>" alt="<?= SecurityHelper::e($v['name']) ?>" class="avatar-xs">
-                      <?php else: ?>
-                        <span class="avatar-xs"><?= SecurityHelper::e(strtoupper(substr((string) $v['name'], 0, 2))) ?></span>
-                      <?php endif; ?>
-                      <span class="va-rec-name"><?= SecurityHelper::e($v['name']) ?></span>
-                    </label>
-                  <?php endforeach; ?>
+                <div class="va-ms" data-va-multiselect>
+                  <div class="va-ms-top">
+                    <span class="form-label" style="margin-bottom:0;">Select VA Recipients</span>
+                    <span class="muted tabular-nums" style="font-size:11.5px;" data-va-ms-counter>0 selected</span>
+                  </div>
+
+                  <div class="va-ms-avatars is-empty" data-va-ms-avatars aria-label="Selected Virtual Assistants">
+                    <span class="va-ms-empty-hint">No VAs selected</span>
+                  </div>
+
+                  <div class="va-ms-dropdown">
+                    <button type="button" class="select va-ms-trigger" data-va-ms-trigger aria-expanded="false">
+                      <span data-va-ms-trigger-text>Select Virtual Assistants...</span>
+                    </button>
+                    <div class="va-ms-menu is-hidden" data-va-ms-menu>
+                      <div class="va-ms-menu-head">
+                        <input type="search" class="input va-ms-search" data-va-ms-search placeholder="Search VAs...">
+                        <button type="button" class="btn-select-all-vas" data-select-all-vas>
+                          <?= workly_icon_svg('Check', 13) ?>
+                          <span>Select All</span>
+                        </button>
+                      </div>
+                      <div class="va-ms-list" data-va-ms-list>
+                        <?php foreach ($vas as $v): ?>
+                          <?php $vInit = strtoupper(substr((string) $v['name'], 0, 2)); ?>
+                          <label class="va-ms-option" data-va-option-name="<?= SecurityHelper::e(strtolower((string) $v['name'])) ?>">
+                            <input type="checkbox"
+                                   name="user_ids[]"
+                                   value="<?= SecurityHelper::e($v['id']) ?>"
+                                   data-va-name="<?= SecurityHelper::e($v['name']) ?>"
+                                   data-va-avatar="<?= SecurityHelper::e((string) ($v['avatar_url'] ?? '')) ?>"
+                                   data-va-initials="<?= SecurityHelper::e($vInit) ?>">
+                            <?php if (!empty($v['avatar_url'])): ?>
+                              <img src="<?= SecurityHelper::e($v['avatar_url']) ?>" alt="<?= SecurityHelper::e($v['name']) ?>" class="avatar-xs">
+                            <?php else: ?>
+                              <span class="avatar-xs"><?= SecurityHelper::e($vInit) ?></span>
+                            <?php endif; ?>
+                            <span class="va-ms-opt-name"><?= SecurityHelper::e($v['name']) ?></span>
+                          </label>
+                        <?php endforeach; ?>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <button type="submit" class="btn btn-secondary btn-sm">Grant Perk to Selected</button>
               </form>
@@ -106,25 +130,49 @@ $availableIcons = $data['available_icons'] ?? ['Award', 'Medal', 'Trophy', 'Star
 
             <?php if ($canManagePerks && !empty($vas)): ?>
               <form data-api-form="/api/v1/perks/badges/<?= SecurityHelper::e($bdg['id']) ?>/award" data-api-method="POST">
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-                  <span class="form-label" style="margin-bottom:0;">Select VA Recipients</span>
-                  <button type="button" class="btn-select-all-vas" data-select-all-vas>
-                    <?= workly_icon_svg('Check', 13) ?>
-                    <span>Select All VAs</span>
-                  </button>
-                </div>
-                <div class="va-recipient-grid" style="margin-bottom:12px;">
-                  <?php foreach ($vas as $v): ?>
-                    <label class="va-recipient-pill">
-                      <input type="checkbox" name="user_ids[]" value="<?= SecurityHelper::e($v['id']) ?>">
-                      <?php if (!empty($v['avatar_url'])): ?>
-                        <img src="<?= SecurityHelper::e($v['avatar_url']) ?>" alt="<?= SecurityHelper::e($v['name']) ?>" class="avatar-xs">
-                      <?php else: ?>
-                        <span class="avatar-xs"><?= SecurityHelper::e(strtoupper(substr((string) $v['name'], 0, 2))) ?></span>
-                      <?php endif; ?>
-                      <span class="va-rec-name"><?= SecurityHelper::e($v['name']) ?></span>
-                    </label>
-                  <?php endforeach; ?>
+                <div class="va-ms" data-va-multiselect>
+                  <div class="va-ms-top">
+                    <span class="form-label" style="margin-bottom:0;">Select VA Recipients</span>
+                    <span class="muted tabular-nums" style="font-size:11.5px;" data-va-ms-counter>0 selected</span>
+                  </div>
+
+                  <div class="va-ms-avatars is-empty" data-va-ms-avatars aria-label="Selected Virtual Assistants">
+                    <span class="va-ms-empty-hint">No VAs selected</span>
+                  </div>
+
+                  <div class="va-ms-dropdown">
+                    <button type="button" class="select va-ms-trigger" data-va-ms-trigger aria-expanded="false">
+                      <span data-va-ms-trigger-text>Select Virtual Assistants...</span>
+                    </button>
+                    <div class="va-ms-menu is-hidden" data-va-ms-menu>
+                      <div class="va-ms-menu-head">
+                        <input type="search" class="input va-ms-search" data-va-ms-search placeholder="Search VAs...">
+                        <button type="button" class="btn-select-all-vas" data-select-all-vas>
+                          <?= workly_icon_svg('Check', 13) ?>
+                          <span>Select All</span>
+                        </button>
+                      </div>
+                      <div class="va-ms-list" data-va-ms-list>
+                        <?php foreach ($vas as $v): ?>
+                          <?php $vInit = strtoupper(substr((string) $v['name'], 0, 2)); ?>
+                          <label class="va-ms-option" data-va-option-name="<?= SecurityHelper::e(strtolower((string) $v['name'])) ?>">
+                            <input type="checkbox"
+                                   name="user_ids[]"
+                                   value="<?= SecurityHelper::e($v['id']) ?>"
+                                   data-va-name="<?= SecurityHelper::e($v['name']) ?>"
+                                   data-va-avatar="<?= SecurityHelper::e((string) ($v['avatar_url'] ?? '')) ?>"
+                                   data-va-initials="<?= SecurityHelper::e($vInit) ?>">
+                            <?php if (!empty($v['avatar_url'])): ?>
+                              <img src="<?= SecurityHelper::e($v['avatar_url']) ?>" alt="<?= SecurityHelper::e($v['name']) ?>" class="avatar-xs">
+                            <?php else: ?>
+                              <span class="avatar-xs"><?= SecurityHelper::e($vInit) ?></span>
+                            <?php endif; ?>
+                            <span class="va-ms-opt-name"><?= SecurityHelper::e($v['name']) ?></span>
+                          </label>
+                        <?php endforeach; ?>
+                      </div>
+                    </div>
+                  </div>
                 </div>
                 <button type="submit" class="btn btn-primary btn-sm">Award Badge to Selected</button>
               </form>

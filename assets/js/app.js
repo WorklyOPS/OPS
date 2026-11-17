@@ -899,12 +899,16 @@
       allData.notes = allData.notes || {};
       allData.comments = allData.comments || {};
       allData.comment_authors = allData.comment_authors || {};
+      allData.mention_candidates = allData.mention_candidates || {};
 
       const prevN = (allData.notes[taskId] || []).length;
       const prevC = (allData.comments[taskId] || []).length;
       allData.notes[taskId] = Array.isArray(data.notes) ? data.notes : [];
       allData.comments[taskId] = Array.isArray(data.comments) ? data.comments : [];
       allData.comment_authors[taskId] = Array.isArray(data.comment_authors) ? data.comment_authors : [];
+      if (Array.isArray(data.mention_candidates)) {
+        allData.mention_candidates[taskId] = data.mention_candidates;
+      }
 
       saveTaskDataset(allData);
       if (allData.notes[taskId].length !== prevN || allData.comments[taskId].length !== prevC) {
@@ -1051,20 +1055,25 @@
       });
     });
 
-    // Real-time search filter across Swimlanes and 5-Column Board
+    // Real-time search & priority filter across Swimlanes and 4-Column Board
     const searchInput = document.getElementById('kanban-search');
-    if (searchInput) {
-      searchInput.addEventListener('input', () => {
-        const term = searchInput.value.trim().toLowerCase();
-        surfaces.forEach((surface) => {
-          surface.querySelectorAll('.task-card').forEach((card) => {
-            const text = (card.getAttribute('data-search') || '').toLowerCase();
-            card.style.display = text.includes(term) ? '' : 'none';
-          });
+    const priorityFilter = document.getElementById('kanban-priority-filter');
+    const applyKanbanFilters = () => {
+      const term = searchInput ? searchInput.value.trim().toLowerCase() : '';
+      const prio = priorityFilter ? priorityFilter.value : 'all';
+      surfaces.forEach((surface) => {
+        surface.querySelectorAll('.task-card').forEach((card) => {
+          const text = (card.getAttribute('data-search') || '').toLowerCase();
+          const cardPrio = (card.getAttribute('data-priority') || 'medium').toLowerCase();
+          const matchText = term === '' || text.includes(term);
+          const matchPrio = prio === 'all' || cardPrio === prio;
+          card.style.display = (matchText && matchPrio) ? '' : 'none';
         });
-        updateBoardCounters(term);
       });
-    }
+      updateBoardCounters(term || (prio !== 'all' ? prio : ''));
+    };
+    if (searchInput) searchInput.addEventListener('input', applyKanbanFilters);
+    if (priorityFilter) priorityFilter.addEventListener('change', applyKanbanFilters);
 
     // Drag & drop + right-click menu + split windows click delegation
     surfaces.forEach((surface) => {
@@ -1325,6 +1334,135 @@
       });
     }
 
+    // @Mention Autocomplete Popover Controller for Task Comments & Notes
+    if (collabDrawer) {
+      const closeAllMentionMenus = () => {
+        collabDrawer.querySelectorAll('.mention-popover').forEach((pop) => {
+          pop.classList.add('is-hidden');
+          pop.innerHTML = '';
+        });
+      };
+
+      collabDrawer.querySelectorAll('.mention-field-wrap').forEach((wrap) => {
+        const ta = wrap.querySelector('textarea');
+        const pop = wrap.querySelector('.mention-popover');
+        if (!ta || !pop) return;
+
+        let activeIdx = 0;
+        let currentMatch = null; // { start, end, items }
+
+        const insertMention = (candidate) => {
+          if (!currentMatch || !candidate) return;
+          const val = ta.value;
+          const before = val.slice(0, currentMatch.start);
+          const after = val.slice(currentMatch.end);
+          const tag = '@' + candidate.name + ' ';
+          ta.value = before + tag + after;
+          const nextPos = before.length + tag.length;
+          ta.focus();
+          if (typeof ta.setSelectionRange === 'function') {
+            ta.setSelectionRange(nextPos, nextPos);
+          }
+          currentMatch = null;
+          pop.classList.add('is-hidden');
+          pop.innerHTML = '';
+        };
+
+        const renderMenu = () => {
+          const pos = ta.selectionStart || 0;
+          const beforeCursor = ta.value.slice(0, pos);
+          const m = beforeCursor.match(/(?:^|[\s(])@([^\s@\n]{0,24})$/);
+          if (!m) {
+            currentMatch = null;
+            pop.classList.add('is-hidden');
+            return;
+          }
+
+          const query = m[1].toLowerCase();
+          const atStart = beforeCursor.lastIndexOf('@');
+          const allData = getTaskDataset() || {};
+          const rawList = (allData.mention_candidates && activeCollabTaskId)
+            ? (allData.mention_candidates[activeCollabTaskId] || [])
+            : [];
+          const filtered = rawList.filter((c) => String(c.name || '').toLowerCase().includes(query)).slice(0, 8);
+
+          currentMatch = { start: atStart, end: pos, items: filtered };
+          activeIdx = 0;
+          pop.innerHTML = '';
+
+          if (filtered.length === 0) {
+            pop.innerHTML = '<div class="mention-empty">No eligible client teammates or Team Leader available to mention.</div>';
+            pop.classList.remove('is-hidden');
+            return;
+          }
+
+          filtered.forEach((cand, idx) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'mention-item' + (idx === 0 ? ' is-active' : '');
+            btn.setAttribute('role', 'option');
+            const roleText = cand.role === 'team_leader' ? 'Team Leader' : (cand.role === 'admin' ? 'Admin' : 'VA');
+            btn.innerHTML =
+              '<span class="mention-item-meta">' +
+                renderSmallAvatarHtml(cand.avatar_url, cand.name) +
+                '<strong>' + escapeHtml(cand.name) + '</strong>' +
+              '</span>' +
+              '<span class="mention-role">' + escapeHtml(roleText) + '</span>';
+            btn.addEventListener('mousedown', (e) => {
+              e.preventDefault();
+              insertMention(cand);
+            });
+            pop.appendChild(btn);
+          });
+          pop.classList.remove('is-hidden');
+        };
+
+        ta.addEventListener('input', renderMenu);
+        ta.addEventListener('click', renderMenu);
+        ta.addEventListener('blur', () => {
+          window.setTimeout(() => {
+            currentMatch = null;
+            pop.classList.add('is-hidden');
+          }, 140);
+        });
+
+        ta.addEventListener('keydown', (e) => {
+          const isOpen = !pop.classList.contains('is-hidden') && currentMatch && currentMatch.items.length > 0;
+          if (isOpen) {
+            if (e.key === 'ArrowDown') {
+              e.preventDefault();
+              activeIdx = (activeIdx + 1) % currentMatch.items.length;
+              pop.querySelectorAll('.mention-item').forEach((el, idx) => el.classList.toggle('is-active', idx === activeIdx));
+              return;
+            }
+            if (e.key === 'ArrowUp') {
+              e.preventDefault();
+              activeIdx = (activeIdx - 1 + currentMatch.items.length) % currentMatch.items.length;
+              pop.querySelectorAll('.mention-item').forEach((el, idx) => el.classList.toggle('is-active', idx === activeIdx));
+              return;
+            }
+            if ((e.key === 'Enter' && !e.ctrlKey && !e.metaKey) || e.key === 'Tab') {
+              e.preventDefault();
+              insertMention(currentMatch.items[activeIdx]);
+              return;
+            }
+            if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopPropagation();
+              closeAllMentionMenus();
+              currentMatch = null;
+              return;
+            }
+          }
+
+          if (ta.closest('#form-task-combined') && (e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            ta.closest('#form-task-combined').requestSubmit();
+          }
+        });
+      });
+    }
+
     const combinedForm = document.getElementById('form-task-combined');
     if (combinedForm) {
       const modeOpts = combinedForm.querySelectorAll('.collab-mode-opt');
@@ -1344,7 +1482,7 @@
         }
         if (bodyTa) {
           bodyTa.placeholder = mode === 'note'
-            ? 'Highlight key execution instruction or handover note...'
+            ? 'Highlight key execution instruction or @mention teammate...'
             : 'Write a comment or @mention a teammate...';
         }
       };
@@ -1353,15 +1491,6 @@
         radio.addEventListener('change', syncModeUi);
       });
       syncModeUi();
-
-      if (bodyTa) {
-        bodyTa.addEventListener('keydown', (e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-            e.preventDefault();
-            combinedForm.requestSubmit();
-          }
-        });
-      }
 
       combinedForm.addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -2566,33 +2695,143 @@
   }
 
   // ------------------------------------------------------------------------
-  // Perks & Badges Controls (Vibrant VA Recipient Pills + Icon Picker)
+  // Perks & Badges Controls (Multi-Choice VA Select + Photo-Only Avatar Strip)
   // ------------------------------------------------------------------------
   function initPerksControls() {
-    document.querySelectorAll('.va-recipient-pill').forEach((pill) => {
-      const cb = pill.querySelector('input[type="checkbox"]');
-      if (!cb) return;
-      pill.classList.toggle('is-checked', cb.checked);
-      cb.addEventListener('change', () => {
-        pill.classList.toggle('is-checked', cb.checked);
+    const allSelects = Array.from(document.querySelectorAll('[data-va-multiselect]'));
+
+    const closeAllMenus = (except) => {
+      allSelects.forEach((ms) => {
+        if (ms === except) return;
+        const menu = ms.querySelector('[data-va-ms-menu]');
+        const trig = ms.querySelector('[data-va-ms-trigger]');
+        if (menu) menu.classList.add('is-hidden');
+        if (trig) trig.setAttribute('aria-expanded', 'false');
       });
+    };
+
+    allSelects.forEach((ms) => {
+      const trigger = ms.querySelector('[data-va-ms-trigger]');
+      const triggerText = ms.querySelector('[data-va-ms-trigger-text]');
+      const menu = ms.querySelector('[data-va-ms-menu]');
+      const searchInp = ms.querySelector('[data-va-ms-search]');
+      const avatarsTray = ms.querySelector('[data-va-ms-avatars]');
+      const counter = ms.querySelector('[data-va-ms-counter]');
+      const selectAllBtn = ms.querySelector('[data-select-all-vas]');
+      const checkboxes = Array.from(ms.querySelectorAll('input[type="checkbox"][name="user_ids[]"]'));
+
+      const syncMultiselectUi = () => {
+        const checkedBoxes = checkboxes.filter((cb) => cb.checked);
+        const count = checkedBoxes.length;
+
+        if (counter) counter.textContent = count + ' selected';
+        if (triggerText) {
+          triggerText.textContent = count === 0
+            ? 'Select Virtual Assistants...'
+            : (count === 1 ? '1 Virtual Assistant selected' : count + ' Virtual Assistants selected');
+        }
+
+        if (avatarsTray) {
+          avatarsTray.innerHTML = '';
+          if (count === 0) {
+            avatarsTray.classList.add('is-empty');
+            const hint = document.createElement('span');
+            hint.className = 'va-ms-empty-hint';
+            hint.textContent = 'No VAs selected';
+            avatarsTray.appendChild(hint);
+          } else {
+            avatarsTray.classList.remove('is-empty');
+            checkedBoxes.forEach((cb) => {
+              const name = cb.getAttribute('data-va-name') || 'VA';
+              const avatarUrl = cb.getAttribute('data-va-avatar') || '';
+              const initials = cb.getAttribute('data-va-initials') || name.slice(0, 2).toUpperCase();
+
+              const chip = document.createElement('button');
+              chip.type = 'button';
+              chip.className = 'va-avatar-chip';
+              chip.title = name + ' (click to remove)';
+              chip.setAttribute('aria-label', 'Remove ' + name);
+
+              if (avatarUrl) {
+                const img = document.createElement('img');
+                img.src = avatarUrl;
+                img.alt = name;
+                img.className = 'avatar';
+                chip.appendChild(img);
+              } else {
+                const sp = document.createElement('span');
+                sp.className = 'avatar';
+                sp.textContent = initials;
+                chip.appendChild(sp);
+              }
+
+              const rm = document.createElement('span');
+              rm.className = 'va-avatar-chip-rm';
+              rm.setAttribute('aria-hidden', 'true');
+              rm.textContent = '×';
+              chip.appendChild(rm);
+
+              chip.addEventListener('click', () => {
+                cb.checked = false;
+                syncMultiselectUi();
+              });
+              avatarsTray.appendChild(chip);
+            });
+          }
+        }
+
+        if (selectAllBtn) {
+          const allChecked = checkboxes.length > 0 && checkboxes.every((cb) => cb.checked);
+          const span = selectAllBtn.querySelector('span');
+          if (span) span.textContent = allChecked ? 'Clear All' : 'Select All';
+        }
+      };
+
+      if (trigger && menu) {
+        trigger.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const willOpen = menu.classList.contains('is-hidden');
+          closeAllMenus(willOpen ? ms : null);
+          menu.classList.toggle('is-hidden', !willOpen);
+          trigger.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+          if (willOpen && searchInp) {
+            window.setTimeout(() => searchInp.focus(), 20);
+          }
+        });
+      }
+
+      if (searchInp) {
+        searchInp.addEventListener('input', () => {
+          const q = searchInp.value.trim().toLowerCase();
+          ms.querySelectorAll('.va-ms-option').forEach((opt) => {
+            const nm = (opt.getAttribute('data-va-option-name') || '').toLowerCase();
+            opt.style.display = (q === '' || nm.includes(q)) ? '' : 'none';
+          });
+        });
+      }
+
+      if (selectAllBtn) {
+        selectAllBtn.addEventListener('click', () => {
+          const nextChecked = !(checkboxes.length > 0 && checkboxes.every((cb) => cb.checked));
+          checkboxes.forEach((cb) => { cb.checked = nextChecked; });
+          syncMultiselectUi();
+        });
+      }
+
+      checkboxes.forEach((cb) => cb.addEventListener('change', syncMultiselectUi));
+      syncMultiselectUi();
     });
 
-    document.querySelectorAll('[data-select-all-vas]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const form = btn.closest('form');
-        if (!form) return;
-        const boxes = Array.from(form.querySelectorAll('input[type="checkbox"][name="user_ids[]"]'));
-        const nextChecked = !(boxes.length > 0 && boxes.every((cb) => cb.checked));
-        boxes.forEach((cb) => {
-          cb.checked = nextChecked;
-          const pill = cb.closest('.va-recipient-pill');
-          if (pill) pill.classList.toggle('is-checked', nextChecked);
-        });
-        const span = btn.querySelector('span');
-        if (span) span.textContent = nextChecked ? 'Clear All' : 'Select All VAs';
+    if (allSelects.length > 0) {
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('[data-va-multiselect]')) {
+          closeAllMenus(null);
+        }
       });
-    });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeAllMenus(null);
+      });
+    }
 
     document.querySelectorAll('[data-icon-picker]').forEach((picker) => {
       const hidden = picker.querySelector('[data-icon-value]');

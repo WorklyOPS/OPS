@@ -7,13 +7,12 @@ $statusCounts = $data['kanban_status_counts'] ?? [
     'backlog'     => 0,
     'todo'        => 0,
     'in_progress' => 0,
-    'in_review'   => 0,
     'completed'   => 0,
 ];
 $byVa = $data['kanban_by_va'] ?? [];
 $vaRates = $data['va_completion_rates'] ?? [];
 $overdueTotal = (int) ($data['overdue_total'] ?? 0);
-$reviewQueue = $data['review_queue'] ?? [];
+$activeDeliverables = $data['active_deliverables'] ?? [];
 
 $totalKanbanTasks = array_sum(array_map('intval', $statusCounts));
 $overallCompRate = $totalKanbanTasks > 0
@@ -42,15 +41,15 @@ $stageMeta = [
     'backlog'     => ['label' => 'Backlog',     'color' => '#94A3B8'],
     'todo'        => ['label' => 'To Do',       'color' => '#A855F7'],
     'in_progress' => ['label' => 'In Progress', 'color' => '#2563EB'],
-    'in_review'   => ['label' => 'In Review',   'color' => '#D97706'],
     'completed'   => ['label' => 'Completed',   'color' => '#059669'],
 ];
+$urgentOpenCount = count(array_filter($activeDeliverables, static fn(array $d): bool => in_array($d['priority'] ?? '', ['urgent', 'high'], true)));
 ?>
 
 <div class="page-header">
   <div>
     <h1>Team Leader Operations Hub</h1>
-    <p class="muted">Real-time Kanban distribution by stage &amp; VA assignee, pod management, instant review approvals, and 30-day velocity.</p>
+    <p class="muted">Real-time Kanban distribution by stage &amp; VA assignee, pod management, priority deliverables, and 30-day velocity.</p>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <button type="button" class="btn btn-secondary" data-open-drawer="drawer-tl-pod">Manage Pod VAs</button>
@@ -71,9 +70,9 @@ $stageMeta = [
     <div class="kpi-sub"><?= (int) $statusCounts['completed'] ?> completed</div>
   </div>
   <div class="card card-hover">
-    <div class="kpi-label">Pending Task Reviews</div>
-    <div class="kpi-value" style="color:<?= count($reviewQueue) > 0 ? 'var(--warn)' : 'var(--ink)' ?>;"><?= count($reviewQueue) ?></div>
-    <div class="kpi-sub">Awaiting QA sign-off</div>
+    <div class="kpi-label">Urgent &amp; High Priority</div>
+    <div class="kpi-value" style="color:<?= $urgentOpenCount > 0 ? 'var(--danger)' : 'var(--ink)' ?>;"><?= $urgentOpenCount ?></div>
+    <div class="kpi-sub">Active priority focus</div>
   </div>
   <div class="card card-hover">
     <div class="kpi-label">Managed Client Accounts</div>
@@ -176,7 +175,7 @@ $stageMeta = [
       </svg>
     </div>
 
-    <div class="grid-5">
+    <div class="grid-4">
       <?php foreach ($stKeys as $stKey): ?>
         <?php
           $cnt = (int) ($statusCounts[$stKey] ?? 0);
@@ -232,13 +231,13 @@ $stageMeta = [
               $firstName = explode(' ', trim((string) $vr['va_name']))[0] ?? 'VA';
               $shortName = strlen($firstName) > 12 ? substr($firstName, 0, 11) . '…' : $firstName;
               $vaHref = '/tasks?va=' . urlencode((string) $vr['va_id']);
-              $vaTip = $vr['va_name'] . ' — Total: ' . $tot . ' | Done: ' . (int) $vr['completed'] . ' | Review: ' . (int) $vr['in_review'] . ' | Active: ' . (int) $vr['in_progress'] . ' | Hrs: ' . number_format((float) $vr['total_hours'], 1) . 'h';
+              $vaTip = $vr['va_name'] . ' — Total: ' . $tot . ' | Done: ' . (int) $vr['completed'] . ' | In Progress: ' . (int) $vr['in_progress'] . ' | To Do: ' . (int) $vr['todo'] . ' | Hrs: ' . number_format((float) $vr['total_hours'], 1) . 'h';
             ?>
             <g>
               <?php if ($tot === 0): ?>
                 <rect x="<?= $x ?>" y="<?= $vaBaseY - 4 ?>" width="<?= $barW ?>" height="4" rx="2" fill="#E2E8F0" data-chart-tip="<?= SecurityHelper::e($vaTip) ?>" data-chart-href="<?= SecurityHelper::e($vaHref) ?>"/>
               <?php else: ?>
-                <?php foreach (['completed', 'in_review', 'in_progress', 'todo', 'backlog'] as $stKey): ?>
+                <?php foreach (['completed', 'in_progress', 'todo', 'backlog'] as $stKey): ?>
                   <?php
                     $segCount = (int) ($vr[$stKey] ?? 0);
                     if ($segCount <= 0) continue;
@@ -273,7 +272,6 @@ $stageMeta = [
               <th>Backlog</th>
               <th>To Do</th>
               <th>In Progress</th>
-              <th>In Review</th>
               <th>Completed</th>
               <th>Total Tasks</th>
               <th>Logged Hours</th>
@@ -291,7 +289,6 @@ $stageMeta = [
                 <td class="tabular-nums"><?= (int) $vr['backlog'] ?></td>
                 <td class="tabular-nums"><?= (int) $vr['todo'] ?></td>
                 <td class="tabular-nums"><?= (int) $vr['in_progress'] ?></td>
-                <td class="tabular-nums"><strong><?= (int) $vr['in_review'] ?></strong></td>
                 <td class="tabular-nums"><strong style="color:var(--success);"><?= (int) $vr['completed'] ?></strong></td>
                 <td class="tabular-nums"><strong><?= (int) $vr['total_tasks'] ?></strong></td>
                 <td class="tabular-nums"><?= number_format((float) $vr['total_hours'], 1) ?>h</td>
@@ -305,44 +302,51 @@ $stageMeta = [
   </div>
 </section>
 
-<!-- Quick SLA Review Approval Queue + 30-Day Velocity Trend -->
+<!-- Priority & Active Pod Deliverables + 30-Day Velocity Trend -->
 <div class="grid-2" style="margin-bottom:22px;">
-  <section class="card" aria-label="Deliverables Awaiting Review">
+  <section class="card" aria-label="Priority and Active Pod Deliverables">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <div>
-        <h3>SLA Review Queue (In Review)</h3>
-        <p class="muted" style="font-size:12px;">Approve completed VA work or return deliverables for revision in one click.</p>
+        <h3>Priority &amp; Active Pod Deliverables</h3>
+        <p class="muted" style="font-size:12px;">Highest priority open deliverables across your pod sorted by urgency and deadline.</p>
       </div>
-      <span class="badge <?= count($reviewQueue) > 0 ? 'badge-warn' : 'badge-success' ?>"><?= count($reviewQueue) ?> Pending</span>
+      <span class="badge <?= count($activeDeliverables) > 0 ? 'badge-brand' : 'badge-success' ?>"><?= count($activeDeliverables) ?> Active</span>
     </div>
 
-    <?php if (empty($reviewQueue)): ?>
-      <div class="notice notice-info" style="margin-bottom:0;">All pod deliverables have been reviewed. No cards currently waiting in In Review.</div>
+    <?php if (empty($activeDeliverables)): ?>
+      <div class="notice notice-info" style="margin-bottom:0;">All pod deliverables are completed. Great operational momentum.</div>
     <?php else: ?>
       <div style="display:flex;flex-direction:column;gap:10px;max-height:310px;overflow-y:auto;">
-        <?php foreach ($reviewQueue as $rq): ?>
+        <?php foreach ($activeDeliverables as $ad): ?>
+          <?php
+            $adPrio = strtolower((string) ($ad['priority'] ?? 'medium'));
+            $adMeta = match ($adPrio) {
+                'urgent' => ['Urgent', 'priority-urgent'],
+                'high'   => ['High', 'priority-high'],
+                'low'    => ['Low', 'priority-low'],
+                default  => ['Medium', 'priority-medium'],
+            };
+          ?>
           <div style="padding:12px 14px;border:1px solid var(--border);border-radius:11px;background:var(--bg);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
             <div style="min-width:0;flex:1;">
-              <strong style="font-size:13.5px;display:block;"><?= SecurityHelper::e($rq['title']) ?></strong>
-              <div class="meta-inline" style="margin-top:3px;">
-                <span><?= SecurityHelper::e($rq['va_name']) ?></span>
+              <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                <span class="badge priority-badge <?= $adMeta[1] ?>"><?= $adMeta[0] ?></span>
+                <strong style="font-size:13.5px;"><?= SecurityHelper::e($ad['title']) ?></strong>
+              </div>
+              <div class="meta-inline" style="margin-top:4px;">
+                <span><?= SecurityHelper::e($ad['va_name']) ?></span>
                 <span>·</span>
-                <span><?= SecurityHelper::e($rq['client_name']) ?></span>
+                <span><?= SecurityHelper::e($ad['client_name']) ?></span>
                 <span>·</span>
-                <span class="mono">Due <?= SecurityHelper::e($rq['deadline']) ?></span>
+                <span class="mono">Due <?= SecurityHelper::e($ad['deadline']) ?></span>
               </div>
             </div>
             <div style="display:flex;gap:6px;flex-shrink:0;">
               <button type="button"
                       class="btn btn-primary btn-sm"
-                      data-action-url="/api/v1/tasks/<?= SecurityHelper::e($rq['id']) ?>/status"
+                      data-action-url="/api/v1/tasks/<?= SecurityHelper::e($ad['id']) ?>/status"
                       data-action-method="PATCH"
-                      data-action-body='{"status":"completed"}'>Approve</button>
-              <button type="button"
-                      class="btn btn-secondary btn-sm"
-                      data-action-url="/api/v1/tasks/<?= SecurityHelper::e($rq['id']) ?>/status"
-                      data-action-method="PATCH"
-                      data-action-body='{"status":"in_progress"}'>Revise</button>
+                      data-action-body='{"status":"completed"}'>Mark Completed</button>
             </div>
           </div>
         <?php endforeach; ?>

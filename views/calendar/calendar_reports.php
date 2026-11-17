@@ -65,8 +65,8 @@ $analytics = $data['report_analytics'] ?? [
     'est_hours'       => 0.0,
     'extra_hours'     => 0.0,
     'total_hours'     => 0.0,
-    'status_counts'   => ['backlog' => 0, 'todo' => 0, 'in_progress' => 0, 'in_review' => 0, 'completed' => 0],
-    'priority_counts' => ['high' => 0, 'medium' => 0, 'low' => 0],
+    'status_counts'   => ['backlog' => 0, 'todo' => 0, 'in_progress' => 0, 'completed' => 0],
+    'priority_counts' => ['urgent' => 0, 'high' => 0, 'medium' => 0, 'low' => 0],
     'by_client'       => [],
     'by_va'           => [],
 ];
@@ -296,7 +296,6 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
         'backlog'     => ['label' => 'Backlog',     'color' => '#94A3B8'],
         'todo'        => ['label' => 'To Do',       'color' => '#A855F7'],
         'in_progress' => ['label' => 'In Progress', 'color' => '#2563EB'],
-        'in_review'   => ['label' => 'In Review',   'color' => '#D97706'],
         'completed'   => ['label' => 'Completed',   'color' => '#059669'],
     ];
     $stCounts = $analytics['status_counts'] ?? [];
@@ -313,14 +312,14 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
             <?php
               $cnt = (int) ($stCounts[$k] ?? 0);
               $bh = $cnt > 0 ? max(8, (int) round(($cnt / $maxRepStage) * 98)) : 4;
-              $bx = 32 + ($idx * 92);
+              $bx = 48 + ($idx * 114);
               $by = 130 - $bh;
               $idx++;
             ?>
             <g>
-              <rect class="chart-bar-rect" x="<?= $bx ?>" y="<?= $by ?>" width="44" height="<?= $bh ?>" rx="6" fill="<?= SecurityHelper::e($m['color']) ?>" data-chart-tip="<?= SecurityHelper::e($m['label'] . ': ' . $cnt . ' task(s)') ?>"/>
-              <text x="<?= $bx + 22 ?>" y="<?= $by - 5 ?>" text-anchor="middle" font-size="11" font-weight="800" fill="#0F172A"><?= $cnt ?></text>
-              <text x="<?= $bx + 22 ?>" y="150" text-anchor="middle" font-size="10.5" font-weight="600" fill="#475569"><?= SecurityHelper::e($m['label']) ?></text>
+              <rect class="chart-bar-rect" x="<?= $bx ?>" y="<?= $by ?>" width="48" height="<?= $bh ?>" rx="6" fill="<?= SecurityHelper::e($m['color']) ?>" data-chart-tip="<?= SecurityHelper::e($m['label'] . ': ' . $cnt . ' task(s)') ?>"/>
+              <text x="<?= $bx + 24 ?>" y="<?= $by - 5 ?>" text-anchor="middle" font-size="11" font-weight="800" fill="#0F172A"><?= $cnt ?></text>
+              <text x="<?= $bx + 24 ?>" y="150" text-anchor="middle" font-size="10.5" font-weight="600" fill="#475569"><?= SecurityHelper::e($m['label']) ?></text>
             </g>
           <?php endforeach; ?>
         </svg>
@@ -331,7 +330,7 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
       <div>
         <h4 style="margin-bottom:12px;">Priority &amp; Punctuality Breakdown</h4>
         <div style="display:grid;gap:10px;margin-bottom:14px;">
-          <?php foreach (['high' => ['High Priority', 'var(--danger)'], 'medium' => ['Medium Priority', 'var(--warn)'], 'low' => ['Low Priority', '#64748B']] as $pk => [$plbl, $pcol]): ?>
+          <?php foreach (['urgent' => ['Urgent Priority', '#B91C1C'], 'high' => ['High Priority', '#D97706'], 'medium' => ['Medium Priority', '#2563EB'], 'low' => ['Low Priority', '#64748B']] as $pk => [$plbl, $pcol]): ?>
             <?php
               $pcnt = (int) ($prCounts[$pk] ?? 0);
               $ppct = $repTotal > 0 ? round(($pcnt / $repTotal) * 100, 1) : 0;
@@ -458,7 +457,16 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
                   <div class="muted" style="font-size:11.5px;margin-top:2px;">Note: <?= SecurityHelper::e($rt['latest_note']) ?></div>
                 <?php endif; ?>
               </td>
-              <td><?= SecurityHelper::e(ucfirst((string) $rt['priority'])) ?></td>
+              <?php
+                $rtPrio = strtolower((string) ($rt['priority'] ?? 'medium'));
+                $rtPrioClass = match ($rtPrio) {
+                    'urgent' => 'priority-urgent',
+                    'high'   => 'priority-high',
+                    'low'    => 'priority-low',
+                    default  => 'priority-medium',
+                };
+              ?>
+              <td><span class="badge priority-badge <?= $rtPrioClass ?>"><?= SecurityHelper::e(ucfirst($rtPrio)) ?></span></td>
               <td><?= SecurityHelper::e($rt['client_name']) ?></td>
               <td><?= SecurityHelper::e($rt['va_name']) ?></td>
               <td class="mono" style="font-size:12px;"><?= SecurityHelper::e($rt['deadline']) ?></td>

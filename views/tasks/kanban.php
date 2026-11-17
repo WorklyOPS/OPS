@@ -5,7 +5,6 @@ $columns = [
     'backlog'     => 'Backlog',
     'todo'        => 'To Do',
     'in_progress' => 'In Progress',
-    'in_review'   => 'In Review',
     'completed'   => 'Completed',
 ];
 
@@ -54,6 +53,7 @@ $notesMap = $data['notes_by_task'] ?? [];
 $commentsMap = $data['comments_by_task'] ?? [];
 $commentAuthorsMap = $data['comment_authors_by_task'] ?? [];
 $extraHoursMap = $data['extra_hours_by_task'] ?? [];
+$mentionCandidatesMap = $data['mention_candidates_by_task'] ?? [];
 $dueToday = (int) ($data['due_today_count'] ?? 0);
 $overdue = (int) ($data['overdue_count'] ?? 0);
 $todayYmd = date('Y-m-d');
@@ -63,10 +63,12 @@ $vaDistinctClientCount = max(count($data['clients'] ?? []), count($swimlanes));
 $showSwimlanes = !($role === 'va' && $vaDistinctClientCount <= 1);
 
 $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $commentAuthorsMap, $todayYmd): string {
-    $pBadge = match ($task['priority']) {
-        'high'  => 'badge-danger',
-        'low'   => 'badge-neutral',
-        default => 'badge-warn',
+    $prioKey = strtolower((string) ($task['priority'] ?? 'medium'));
+    $pMeta = match ($prioKey) {
+        'urgent' => ['Urgent', 'priority-urgent', 'Zap'],
+        'high'   => ['High', 'priority-high', 'Flag'],
+        'low'    => ['Low', 'priority-low', 'Flag'],
+        default  => ['Medium', 'priority-medium', 'Flag'],
     };
     $noteCount = count($notesMap[$task['id']] ?? []);
     $commentCount = count($commentsMap[$task['id']] ?? []);
@@ -81,10 +83,14 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
              draggable="true"
              data-task-id="<?= SecurityHelper::e($task['id']) ?>"
              data-client-id="<?= SecurityHelper::e($task['client_id']) ?>"
-             data-search="<?= SecurityHelper::e($task['title'] . ' ' . $task['client_name'] . ' ' . $task['va_name']) ?>">
+             data-priority="<?= SecurityHelper::e($prioKey) ?>"
+             data-search="<?= SecurityHelper::e($task['title'] . ' ' . $task['client_name'] . ' ' . $task['va_name'] . ' ' . $prioKey) ?>">
       <div class="task-card-top">
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
-          <span class="badge <?= $pBadge ?>"><?= SecurityHelper::e(ucfirst($task['priority'])) ?></span>
+          <span class="badge priority-badge <?= $pMeta[1] ?>" data-task-priority-badge>
+            <?= workly_icon_svg($pMeta[2], 11) ?>
+            <span><?= $pMeta[0] ?></span>
+          </span>
           <?php if ($isOverdueCard): ?>
             <span class="badge badge-danger">Overdue</span>
           <?php endif; ?>
@@ -180,14 +186,12 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
       <span class="badge badge-neutral">Backlog: <?= (int) $data['status_counts']['backlog'] ?></span>
       <span class="badge badge-neutral">To Do: <?= (int) $data['status_counts']['todo'] ?></span>
       <span class="badge badge-info">In Progress: <?= (int) $data['status_counts']['in_progress'] ?></span>
-      <span class="badge badge-warn">In Review: <?= (int) $data['status_counts']['in_review'] ?></span>
       <span class="badge badge-success">Completed: <?= (int) $data['status_counts']['completed'] ?></span>
     </div>
   </div>
   <?php if ($role === 'team_leader'): ?>
     <div class="progress-track" style="display:flex;height:10px;">
       <div style="width:<?= round(($data['status_counts']['completed'] / $totalCount) * 100, 1) ?>%;background:var(--success);"></div>
-      <div style="width:<?= round(($data['status_counts']['in_review'] / $totalCount) * 100, 1) ?>%;background:var(--warn);"></div>
       <div style="width:<?= round(($data['status_counts']['in_progress'] / $totalCount) * 100, 1) ?>%;background:var(--brand);"></div>
       <div style="width:<?= round(($data['status_counts']['todo'] / $totalCount) * 100, 1) ?>%;background:#C4B5FD;"></div>
     </div>
@@ -234,13 +238,20 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
       <?php if ($showSwimlanes): ?>
         <div class="tab-strip" style="margin-bottom:0;">
           <button type="button" class="tab-btn active" data-tab-group="kanban-layout" data-tab-btn="swimlanes">Client Swimlanes</button>
-          <button type="button" class="tab-btn" data-tab-group="kanban-layout" data-tab-btn="board">5-Column Board</button>
+          <button type="button" class="tab-btn" data-tab-group="kanban-layout" data-tab-btn="board">4-Column Board</button>
         </div>
       <?php endif; ?>
     </div>
 
-    <div style="min-width:240px;flex:0 1 300px;">
-      <input id="kanban-search" type="search" class="input" placeholder="Search tasks by title, client, or VA...">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex:0 1 420px;">
+      <select id="kanban-priority-filter" class="select" style="width:auto;min-width:142px;" aria-label="Filter by priority">
+        <option value="all">All Priorities</option>
+        <option value="urgent">Urgent</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+      <input id="kanban-search" type="search" class="input" style="flex:1;min-width:190px;" placeholder="Search tasks by title, client, or VA...">
     </div>
   </form>
 </div>
@@ -313,7 +324,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
   </div>
 <?php endif; ?>
 
-<!-- View 2: Unified 5-Column Board (Active immediately when VA has <= 1 client) -->
+<!-- View 2: Unified 4-Column Board (Active immediately when VA has <= 1 client) -->
 <div class="<?= $showSwimlanes ? 'is-hidden' : '' ?>" data-tab-group="kanban-layout" data-tab-panel="board">
   <section id="workly-kanban" class="kanban-board kanban-surface">
     <?php foreach ($columns as $colKey => $colTitle): ?>
@@ -344,11 +355,11 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
   <button type="button" data-cm-action="status" data-status="backlog"><?= workly_icon_svg('ArrowRight', 13) ?> <span>Backlog</span></button>
   <button type="button" data-cm-action="status" data-status="todo"><?= workly_icon_svg('ArrowRight', 13) ?> <span>To Do</span></button>
   <button type="button" data-cm-action="status" data-status="in_progress"><?= workly_icon_svg('ArrowRight', 13) ?> <span>In Progress</span></button>
-  <button type="button" data-cm-action="status" data-status="in_review"><?= workly_icon_svg('ArrowRight', 13) ?> <span>In Review</span></button>
   <button type="button" data-cm-action="status" data-status="completed"><?= workly_icon_svg('Check', 13) ?> <span>Completed</span></button>
 
   <div class="context-menu-divider"></div>
   <div class="context-menu-label">Priority</div>
+  <button type="button" data-cm-action="priority" data-priority="urgent"><?= workly_icon_svg('Zap', 13) ?> <span>Urgent Priority</span></button>
   <button type="button" data-cm-action="priority" data-priority="high"><?= workly_icon_svg('Flag', 13) ?> <span>High Priority</span></button>
   <button type="button" data-cm-action="priority" data-priority="medium"><?= workly_icon_svg('Flag', 13) ?> <span>Medium Priority</span></button>
   <button type="button" data-cm-action="priority" data-priority="low"><?= workly_icon_svg('Flag', 13) ?> <span>Low Priority</span></button>
@@ -361,11 +372,12 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
 
 <!-- Embedded Non-Executable JSON Payload for Drawer/Modal Inspection -->
 <script type="application/json" id="task-details-json"><?= json_encode([
-    'tasks'           => $tasksMap,
-    'notes'           => $notesMap,
-    'comments'        => $commentsMap,
-    'comment_authors' => $commentAuthorsMap,
-    'extra_hours'     => $extraHoursMap,
+    'tasks'              => $tasksMap,
+    'notes'              => $notesMap,
+    'comments'           => $commentsMap,
+    'comment_authors'    => $commentAuthorsMap,
+    'extra_hours'        => $extraHoursMap,
+    'mention_candidates' => $mentionCandidatesMap,
 ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
 
 <!-- Right-Side Drawer: Create Deliverable -->
@@ -419,9 +431,10 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
             <div class="form-group">
               <label class="form-label">Priority</label>
               <select class="select" name="priority">
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
                 <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
               </select>
             </div>
             <div class="form-group">
@@ -478,7 +491,6 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
               <option value="backlog">Backlog</option>
               <option value="todo">To Do</option>
               <option value="in_progress">In Progress</option>
-              <option value="in_review">In Review</option>
               <option value="completed">Completed</option>
             </select>
           </div>
@@ -488,6 +500,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
               <option value="low">Low</option>
               <option value="medium">Medium</option>
               <option value="high">High</option>
+              <option value="urgent">Urgent</option>
             </select>
           </div>
         </div>
@@ -577,8 +590,9 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
             </div>
             <span class="muted collab-shortcut-hint">Ctrl+Enter to send</span>
           </div>
-          <div class="form-group" style="margin-bottom:10px;">
+          <div class="form-group mention-field-wrap" style="margin-bottom:10px;">
             <textarea class="textarea collab-textarea" name="body" rows="3" required placeholder="Write a comment or @mention a teammate..."></textarea>
+            <div class="mention-popover is-hidden" role="listbox" aria-label="Mention teammate"></div>
           </div>
           <div style="display:flex;justify-content:flex-end;">
             <button type="submit" id="btn-collab-submit" class="btn btn-primary btn-sm">Post Comment</button>
@@ -591,9 +605,10 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
         <div id="detail-notes-list" style="margin-bottom:14px;"></div>
         <form id="form-task-note" data-no-reload="1" data-api-form="/api/v1/tasks/{task_id}/notes" data-api-method="POST">
           <input type="hidden" name="task_id" value="">
-          <div class="form-group">
+          <div class="form-group mention-field-wrap">
             <label class="form-label">Add SLA Execution Note / Instruction</label>
-            <textarea class="textarea" name="content" rows="3" required placeholder="Add SOP guidance, execution check, or handover note..."></textarea>
+            <textarea class="textarea" name="content" rows="3" required placeholder="Add SOP guidance, execution check, or @mention teammate..."></textarea>
+            <div class="mention-popover is-hidden" role="listbox" aria-label="Mention teammate"></div>
           </div>
           <button type="submit" class="btn btn-primary">Add Note</button>
         </form>
@@ -604,9 +619,10 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
         <div id="detail-comments-list" style="margin-bottom:14px;"></div>
         <form id="form-task-comment" data-no-reload="1" data-api-form="/api/v1/tasks/{task_id}/comments" data-api-method="POST">
           <input type="hidden" name="task_id" value="">
-          <div class="form-group">
+          <div class="form-group mention-field-wrap">
             <label class="form-label">Post Threaded Comment</label>
-            <textarea class="textarea" name="message" rows="3" required placeholder="Collaborate with Team Leader or VA (use @Name to notify)..."></textarea>
+            <textarea class="textarea" name="message" rows="3" required placeholder="Collaborate with Team Leader or VA (type @ to tag)..."></textarea>
+            <div class="mention-popover is-hidden" role="listbox" aria-label="Mention teammate"></div>
           </div>
           <button type="submit" class="btn btn-primary">Post Comment</button>
         </form>

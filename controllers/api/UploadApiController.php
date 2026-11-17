@@ -261,6 +261,14 @@ final class UploadApiController
             $this->jsonError(403, 'Forbidden: Only administrators or team leaders can upload photos for staff');
             return;
         }
+        if ($actor['role'] === 'team_leader' && $targetUserId !== $actor['id']) {
+            $podChk = $this->db->prepare("SELECT id FROM users WHERE id = :id AND role = 'va' AND team_leader_id = :tl LIMIT 1");
+            $podChk->execute([':id' => $targetUserId, ':tl' => $actor['id']]);
+            if (!$podChk->fetch()) {
+                $this->jsonError(403, 'Forbidden: You can only manage photos for yourself or VAs assigned to your team');
+                return;
+            }
+        }
 
         if (empty($_FILES['avatar'])) {
             $this->jsonError(400, 'No avatar file received. Check PHP post_max_size / upload_max_filesize limits.');
@@ -320,6 +328,14 @@ final class UploadApiController
         if (!in_array($actor['role'], ['admin', 'team_leader'], true) && $targetUserId !== $actor['id']) {
             $this->jsonError(403, 'Forbidden: Cannot delete another user avatar');
             return;
+        }
+        if ($actor['role'] === 'team_leader' && $targetUserId !== $actor['id']) {
+            $podChk = $this->db->prepare("SELECT id FROM users WHERE id = :id AND role = 'va' AND team_leader_id = :tl LIMIT 1");
+            $podChk->execute([':id' => $targetUserId, ':tl' => $actor['id']]);
+            if (!$podChk->fetch()) {
+                $this->jsonError(403, 'Forbidden: You can only manage photos for yourself or VAs assigned to your team');
+                return;
+            }
         }
 
         $stmt = $this->db->prepare('UPDATE users SET avatar_url = NULL, updated_at = NOW() WHERE id = :id');

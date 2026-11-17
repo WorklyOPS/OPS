@@ -170,9 +170,6 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/></svg>
             <span>Tasks</span>
           </span>
-          <?php if (($alerts['review_tasks'] ?? 0) > 0 && $role === 'team_leader'): ?>
-            <span class="nav-badge" title="Tasks waiting in review"><?= (int) $alerts['review_tasks'] ?></span>
-          <?php endif; ?>
         </a>
 
         <?php if ($role !== 'va'): ?>
@@ -237,13 +234,10 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
         <?php endif; ?>
       </nav>
 
-      <?php if ($role === 'team_leader' && (($alerts['review_tasks'] ?? 0) > 0 || ($alerts['pending_pto'] ?? 0) > 0 || ($alerts['unread_tl_notifications'] ?? 0) > 0)): ?>
+      <?php if ($role === 'team_leader' && (($alerts['pending_pto'] ?? 0) > 0 || ($alerts['unread_tl_notifications'] ?? 0) > 0)): ?>
         <div class="sidebar-foot">
           <div class="sidebar-alert-box">
             <strong style="display:block;margin-bottom:4px;color:var(--brand);">Team Leader Alerts</strong>
-            <?php if (($alerts['review_tasks'] ?? 0) > 0): ?>
-              <div><?= (int) $alerts['review_tasks'] ?> task(s) awaiting review</div>
-            <?php endif; ?>
             <?php if (($alerts['pending_pto'] ?? 0) > 0): ?>
               <div><?= (int) $alerts['pending_pto'] ?> PTO request(s) pending</div>
             <?php endif; ?>
@@ -284,12 +278,12 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
               </div>
               <div class="swimlane-body">
                 <div class="kanban-board">
-                  <?php for ($col = 0; $col < 5; $col++): ?>
+                  <?php for ($col = 0; $col < 4; $col++): ?>
                     <div class="kanban-col" style="min-height:360px;">
                       <div class="skeleton-bar" style="width:60%;height:18px;margin-bottom:8px;"></div>
                       <div class="skeleton-card" style="height:126px;"></div>
                       <div class="skeleton-card" style="height:112px;"></div>
-                      <?php if ($col < 3): ?>
+                      <?php if ($col < 2): ?>
                         <div class="skeleton-card" style="height:112px;"></div>
                       <?php endif; ?>
                     </div>

@@ -18,7 +18,7 @@ final class TaskRoleMiddleware
     private const ORCHESTRATION_ROLES = ['va', 'team_leader', 'admin'];
 
     /** Allowed task workflow states. */
-    public const VALID_STATUSES = ['backlog', 'todo', 'in_progress', 'in_review', 'completed'];
+    public const VALID_STATUSES = ['backlog', 'todo', 'in_progress', 'completed'];
 
     /**
      * Verifies the authenticated user belongs to roles allowed to invoke task orchestration endpoints.

@@ -15,13 +15,151 @@ require_once __DIR__ . '/NotificationApiController.php';
 
 final class TaskApiController
 {
+    public const VALID_PRIORITIES = ['low', 'medium', 'high', 'urgent'];
+    private static bool $schemaChecked = false;
+
     public function __construct(private PDO $db) {}
+
+    public static function ensureTaskSchemaConstraints(PDO $db): void
+    {
+        if (self::$schemaChecked) {
+            return;
+        }
+        self::$schemaChecked = true;
+        try {
+            $db->exec("UPDATE tasks SET status = 'in_progress', updated_at = NOW() WHERE status = 'in_review'");
+            $db->exec("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_status_check");
+            $db->exec("ALTER TABLE tasks ADD CONSTRAINT tasks_status_check CHECK (status IN ('backlog', 'todo', 'in_progress', 'completed'))");
+            $db->exec("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_priority_check");
+            $db->exec("ALTER TABLE tasks ADD CONSTRAINT tasks_priority_check CHECK (priority IN ('low', 'medium', 'high', 'urgent'))");
+        } catch (Throwable) {
+            // Constraints already aligned or restricted
+        }
+    }
+
+    public static function getMentionCandidatesForTask(PDO $db, array $task, array $user): array
+    {
+        $clientId = (string) ($task['client_id'] ?? '');
+        $actorId = (string) ($user['id'] ?? '');
+        $role = (string) ($user['role'] ?? '');
+
+        if ($clientId === '' || $actorId === '') {
+            return [];
+        }
+
+        try {
+            $cStmt = $db->prepare('SELECT focus_va_id, team_leader_id FROM clients WHERE id = :cid LIMIT 1');
+            $cStmt->execute([':cid' => $clientId]);
+            $client = $cStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+            $focusVaId = (string) ($client['focus_va_id'] ?? '');
+            $clientTlId = (string) ($client['team_leader_id'] ?? '');
+
+            $candidates = [];
+            if ($role === 'va') {
+                $myTlId = (string) ($user['team_leader_id'] ?? '');
+                $tlIds = array_values(array_unique(array_filter([$myTlId, $clientTlId], static fn(string $v): bool => $v !== '' && $v !== $actorId)));
+
+                if (!empty($tlIds)) {
+                    $ph = implode(',', array_fill(0, count($tlIds), '?'));
+                    $tlStmt = $db->prepare("SELECT id, name, role, COALESCE(avatar_url, '') AS avatar_url FROM users WHERE id IN ({$ph}) AND is_active = TRUE");
+                    $tlStmt->execute($tlIds);
+                    foreach ($tlStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                        $candidates[(string) $r['id']] = $r;
+                    }
+                }
+
+                $mateStmt = $db->prepare("
+                    SELECT DISTINCT u.id, u.name, u.role, COALESCE(u.avatar_url, '') AS avatar_url
+                    FROM users u
+                    WHERE u.is_active = TRUE
+                      AND u.role = 'va'
+                      AND u.id <> :me
+                      AND (
+                        u.id = :focus_va
+                        OR EXISTS (
+                            SELECT 1 FROM tasks t2
+                            WHERE t2.client_id = :cid AND t2.assigned_va_id = u.id
+                        )
+                      )
+                    ORDER BY u.name ASC
+                ");
+                $mateStmt->execute([
+                    ':me'       => $actorId,
+                    ':focus_va' => $focusVaId,
+                    ':cid'      => $clientId,
+                ]);
+                foreach ($mateStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $candidates[(string) $r['id']] = $r;
+                }
+            } elseif ($role === 'team_leader') {
+                $vaStmt = $db->prepare("
+                    SELECT DISTINCT u.id, u.name, u.role, COALESCE(u.avatar_url, '') AS avatar_url
+                    FROM users u
+                    WHERE u.is_active = TRUE
+                      AND u.role = 'va'
+                      AND u.team_leader_id = :tl
+                      AND (
+                        u.id = :focus_va
+                        OR EXISTS (
+                            SELECT 1 FROM tasks t2
+                            WHERE t2.client_id = :cid AND t2.assigned_va_id = u.id
+                        )
+                      )
+                    ORDER BY u.name ASC
+                ");
+                $vaStmt->execute([
+                    ':tl'       => $actorId,
+                    ':focus_va' => $focusVaId,
+                    ':cid'      => $clientId,
+                ]);
+                foreach ($vaStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $candidates[(string) $r['id']] = $r;
+                }
+            } elseif ($role === 'admin') {
+                $admStmt = $db->prepare("
+                    SELECT DISTINCT u.id, u.name, u.role, COALESCE(u.avatar_url, '') AS avatar_url
+                    FROM users u
+                    WHERE u.is_active = TRUE
+                      AND u.id <> :me
+                      AND (
+                        u.id = :focus_va
+                        OR u.id = :client_tl
+                        OR EXISTS (
+                            SELECT 1 FROM tasks t2
+                            WHERE t2.client_id = :cid AND t2.assigned_va_id = u.id
+                        )
+                      )
+                    ORDER BY u.name ASC
+                ");
+                $admStmt->execute([
+                    ':me'        => $actorId,
+                    ':focus_va'  => $focusVaId,
+                    ':client_tl' => $clientTlId,
+                    ':cid'       => $clientId,
+                ]);
+                foreach ($admStmt->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $candidates[(string) $r['id']] = $r;
+                }
+            }
+
+            $list = array_values($candidates);
+            usort($list, static function (array $a, array $b): int {
+                $ra = $a['role'] === 'team_leader' ? 0 : 1;
+                $rb = $b['role'] === 'team_leader' ? 0 : 1;
+                return $ra !== $rb ? $ra <=> $rb : strcasecmp((string) $a['name'], (string) $b['name']);
+            });
+            return $list;
+        } catch (Throwable) {
+            return [];
+        }
+    }
 
     public function handle(string $method, string $uri): void
     {
         $user = AuthMiddleware::authenticateApi($this->db);
         TaskRoleMiddleware::requireOrchestrationRole($user, $this->db);
         CsrfMiddleware::validateApi($method);
+        self::ensureTaskSchemaConstraints($this->db);
 
         $parts = explode('/', trim($uri, '/'));
         // /api/v1/tasks/{id}/{sub}
@@ -167,7 +305,7 @@ final class TaskApiController
 
     private function getActivity(string $taskId, array $user): void
     {
-        $this->assertTaskAccess($taskId, $user);
+        $task = $this->assertTaskAccess($taskId, $user);
 
         $nStmt = $this->db->prepare("
             SELECT n.id, n.task_id, n.author_id, n.author_name, n.author_role, n.is_instruction, n.content, n.created_at,
@@ -235,13 +373,16 @@ final class TaskApiController
 
         usort($timeline, static fn(array $a, array $b): int => strcmp((string) $a['created_at'], (string) $b['created_at']));
 
+        $mentionCandidates = self::getMentionCandidatesForTask($this->db, $task, $user);
+
         echo json_encode([
-            'success'         => true,
-            'task_id'         => $taskId,
-            'notes'           => $notes,
-            'comments'        => $comments,
-            'timeline'        => $timeline,
-            'comment_authors' => $commentAuthors,
+            'success'            => true,
+            'task_id'            => $taskId,
+            'notes'              => $notes,
+            'comments'           => $comments,
+            'timeline'           => $timeline,
+            'comment_authors'    => $commentAuthors,
+            'mention_candidates' => $mentionCandidates,
         ]);
     }
 
@@ -279,8 +420,8 @@ final class TaskApiController
 
         $title = SecurityHelper::sanitizePlainText($input['title'] ?? '', 255);
         $description = SecurityHelper::sanitizePlainText($input['description'] ?? '', 4000);
-        $priority = in_array($input['priority'] ?? '', ['low', 'medium', 'high'], true) ? $input['priority'] : 'medium';
-        $status = in_array($input['status'] ?? '', ['backlog', 'todo', 'in_progress', 'in_review', 'completed'], true) ? $input['status'] : 'todo';
+        $priority = in_array($input['priority'] ?? '', self::VALID_PRIORITIES, true) ? $input['priority'] : 'medium';
+        $status = in_array($input['status'] ?? '', TaskRoleMiddleware::VALID_STATUSES, true) ? $input['status'] : 'todo';
         $assignedVaId = $user['role'] === 'va'
             ? $user['id']
             : SecurityHelper::sanitizePlainText($input['assigned_va_id'] ?? $user['id'], 64);
@@ -391,10 +532,21 @@ final class TaskApiController
 
         foreach ($allowed as $col) {
             if (array_key_exists($col, $input)) {
-                $fields[] = "{$col} = :{$col}";
-                $params[":{$col}"] = is_string($input[$col])
+                $val = is_string($input[$col])
                     ? SecurityHelper::sanitizePlainText($input[$col])
                     : $input[$col];
+                if ($col === 'status' && !in_array($val, TaskRoleMiddleware::VALID_STATUSES, true)) {
+                    http_response_code(422);
+                    echo json_encode(['error' => 'Invalid task status']);
+                    return;
+                }
+                if ($col === 'priority' && !in_array($val, self::VALID_PRIORITIES, true)) {
+                    http_response_code(422);
+                    echo json_encode(['error' => 'Invalid task priority']);
+                    return;
+                }
+                $fields[] = "{$col} = :{$col}";
+                $params[":{$col}"] = $val;
             }
         }
 

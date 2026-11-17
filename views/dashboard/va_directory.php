@@ -97,7 +97,9 @@ foreach ($vas as $v) {
         </div>
 
         <div class="va-dir-actions">
-          <a href="/profile?va_id=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm">View Profile</a>
+          <?php if ($role === 'admin' || ($role === 'team_leader' && (string) ($va['team_leader_id'] ?? '') === (string) $user['id'])): ?>
+            <a href="/profile?va_id=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm">View Profile</a>
+          <?php endif; ?>
           <?php if ($role === 'admin'): ?>
             <button type="button" class="btn btn-primary btn-sm" data-dir-edit-va="<?= SecurityHelper::e($va['va_id']) ?>">Edit VA</button>
           <?php endif; ?>

@@ -366,13 +366,31 @@ final class UserApiController
 
     private function updateUser(string $targetId, array $actor): void
     {
-        $uStmt = $this->db->prepare('SELECT id, role FROM users WHERE id = :id LIMIT 1');
+        $uStmt = $this->db->prepare('SELECT id, role, team_leader_id FROM users WHERE id = :id LIMIT 1');
         $uStmt->execute([':id' => $targetId]);
         $targetRow = $uStmt->fetch(PDO::FETCH_ASSOC);
         if (!$targetRow) {
             http_response_code(404);
             echo json_encode(['error' => 'Target user account not found']);
             return;
+        }
+
+        if ($actor['role'] === 'team_leader') {
+            $isSelf = (string) $targetRow['id'] === (string) $actor['id'];
+            $isMyVa = (string) $targetRow['role'] === 'va' && (string) ($targetRow['team_leader_id'] ?? '') === (string) $actor['id'];
+            if (!$isSelf && !$isMyVa) {
+                AuditLogger::log(
+                    'USER_PROFILE_SCOPE_DENIED',
+                    'blocked',
+                    "Team Leader {$actor['id']} denied edit access to out-of-pod user {$targetId}",
+                    (string) $actor['id'],
+                    (string) $actor['role'],
+                    $this->db
+                );
+                http_response_code(403);
+                echo json_encode(['error' => 'Forbidden: You can only inspect or update your own profile and VAs assigned to your team']);
+                return;
+            }
         }
 
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];

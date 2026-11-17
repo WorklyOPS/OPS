@@ -97,7 +97,7 @@ final class ReportApiController
                 $params[':tl_self'] = $user['id'];
             }
 
-            $sql .= ' ORDER BY t.deadline ASC, t.priority DESC';
+            $sql .= " ORDER BY t.deadline ASC, CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END ASC";
             $stmt = $this->db->prepare($sql);
             $stmt->execute($params);
             $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
