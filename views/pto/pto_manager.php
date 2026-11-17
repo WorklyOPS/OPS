@@ -159,6 +159,8 @@ foreach ($requests as $r) {
     </div>
   </div>
 
+  <?php require __DIR__ . '/../partials/pto_calendar_card.php'; ?>
+
   <!-- VA Search + Monthly PTO Usage Category Register -->
   <div class="card" style="margin-bottom:22px;">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
@@ -394,6 +396,8 @@ foreach ($requests as $r) {
 
 <?php else: ?>
   <!-- Team Leader View -->
+  <?php require __DIR__ . '/../partials/pto_calendar_card.php'; ?>
+
   <div class="pto-layout-grid-wide">
     <div class="card">
       <h3 style="margin-bottom:12px;">Pod PTO Request History</h3>

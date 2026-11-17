@@ -94,6 +94,7 @@
     initKnowledgeBase();
     initPerksControls();
     initHrmPtoRejection();
+    initPtoApprovalCalendar();
     initCsvExports();
     initForms();
     initInteractiveButtons();
@@ -714,6 +715,13 @@
     });
   }
 
+  let collabFilterKind = 'all';
+
+  function buildCollabActionBtn(label, action, attrName, attrVal) {
+    return '<button type="button" class="collab-card-action" data-collab-action="' + action + '" ' +
+      attrName + '="' + escapeHtml(attrVal || '') + '">' + escapeHtml(label) + '</button>';
+  }
+
   function renderTaskCollabLists(taskId, allData) {
     const drawer = document.getElementById('drawer-task-collab');
     if (!drawer || !allData) return;
@@ -721,7 +729,15 @@
     const notes = ((allData.notes || {})[taskId]) || [];
     const comments = ((allData.comments || {})[taskId]) || [];
 
-    // Combined Timeline uniting Notes (color-highlighted) + Comments (with commenter avatar photo)
+    // Update filter counts
+    const allCountEl = drawer.querySelector('[data-collab-count="all"]');
+    const noteCountEl = drawer.querySelector('[data-collab-count="note"]');
+    const commentCountEl = drawer.querySelector('[data-collab-count="comment"]');
+    if (allCountEl) allCountEl.textContent = String(notes.length + comments.length);
+    if (noteCountEl) noteCountEl.textContent = String(notes.length);
+    if (commentCountEl) commentCountEl.textContent = String(comments.length);
+
+    // Combined Timeline: Notes carry clean warm highlight; Comments stay crisp & neutral
     const combinedList = drawer.querySelector('#detail-combined-list');
     if (combinedList) {
       combinedList.innerHTML = '';
@@ -748,35 +764,53 @@
       });
       merged.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
 
-      if (merged.length === 0) {
-        combinedList.innerHTML = '<p class="muted">No notes or comments on this deliverable yet. Start the conversation below.</p>';
+      const visibleItems = collabFilterKind === 'all'
+        ? merged
+        : merged.filter((m) => m.kind === collabFilterKind);
+
+      if (visibleItems.length === 0) {
+        combinedList.innerHTML = '<div class="collab-empty">No ' + (collabFilterKind === 'all' ? 'notes or comments' : collabFilterKind + 's') + ' on this deliverable yet.</div>';
       } else {
-        merged.forEach((item) => {
-          const el = document.createElement('div');
+        visibleItems.forEach((item) => {
+          const el = document.createElement('article');
+          const rolePretty = String(item.author_role || 'va').replace('_', ' ');
           if (item.kind === 'note') {
             el.className = 'collab-note-item';
             el.innerHTML =
-              '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px;">' +
-                '<div style="display:flex;align-items:center;gap:7px;">' +
-                  renderSmallAvatarHtml(item.avatar_url, item.author_name) +
-                  '<strong>' + escapeHtml(item.author_name) + '</strong>' +
+              renderSmallAvatarHtml(item.avatar_url, item.author_name) +
+              '<div class="collab-entry-body">' +
+                '<div class="collab-entry-head">' +
+                  '<div class="collab-entry-author">' +
+                    '<strong>' + escapeHtml(item.author_name) + '</strong>' +
+                    '<span class="collab-note-tag">Note</span>' +
+                    '<span class="muted mono collab-entry-ts">' + escapeHtml(formatShortTs(item.created_at)) + '</span>' +
+                  '</div>' +
+                  '<div class="collab-entry-actions">' +
+                    buildCollabActionBtn('Reply', 'reply', 'data-author-name', item.author_name) +
+                    buildCollabActionBtn('Copy', 'copy', 'data-copy-text', item.text) +
+                  '</div>' +
                 '</div>' +
-                '<div style="display:flex;align-items:center;gap:6px;">' +
-                  '<span class="badge badge-warn">VA / SLA Note</span>' +
-                  '<span class="muted mono" style="font-size:11px;">' + escapeHtml(formatShortTs(item.created_at)) + '</span>' +
-                '</div>' +
-              '</div>' +
-              '<p style="margin:0;font-size:13px;">' + escapeHtml(item.text) + '</p>';
+                '<p class="collab-entry-text">' + escapeHtml(item.text) + '</p>' +
+              '</div>';
           } else {
             el.className = 'collab-comment-item';
             el.innerHTML =
               renderSmallAvatarHtml(item.avatar_url, item.author_name) +
               '<div class="collab-entry-body">' +
-                '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px;">' +
-                  '<div><strong>' + escapeHtml(item.author_name) + '</strong> <span class="badge badge-brand">' + escapeHtml(item.author_role) + '</span></div>' +
-                  '<span class="muted mono" style="font-size:11px;">' + escapeHtml(formatShortTs(item.created_at)) + '</span>' +
+                '<div class="collab-entry-head">' +
+                  '<div class="collab-entry-author">' +
+                    '<strong>' + escapeHtml(item.author_name) + '</strong>' +
+                    '<span class="muted collab-role-sep">·</span>' +
+                    '<span class="muted" style="font-size:11.5px;text-transform:capitalize;">' + escapeHtml(rolePretty) + '</span>' +
+                    '<span class="muted collab-role-sep">·</span>' +
+                    '<span class="muted mono collab-entry-ts">' + escapeHtml(formatShortTs(item.created_at)) + '</span>' +
+                  '</div>' +
+                  '<div class="collab-entry-actions">' +
+                    buildCollabActionBtn('Reply', 'reply', 'data-author-name', item.author_name) +
+                    buildCollabActionBtn('Copy', 'copy', 'data-copy-text', item.text) +
+                  '</div>' +
                 '</div>' +
-                '<p style="margin:0;font-size:13px;">' + escapeHtml(item.text) + '</p>' +
+                '<p class="collab-entry-text">' + escapeHtml(item.text) + '</p>' +
               '</div>';
           }
           combinedList.appendChild(el);
@@ -788,18 +822,27 @@
     if (notesList) {
       notesList.innerHTML = '';
       if (notes.length === 0) {
-        notesList.innerHTML = '<p class="muted">No execution notes added yet.</p>';
+        notesList.innerHTML = '<div class="collab-empty">No execution notes added yet.</div>';
       } else {
         notes.forEach((n) => {
-          const div = document.createElement('div');
+          const div = document.createElement('article');
           div.className = 'collab-note-item';
-          div.style.marginBottom = '8px';
+          div.style.marginBottom = '10px';
           div.innerHTML =
-            '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-              '<strong>' + escapeHtml(n.author_name) + '</strong>' +
-              '<span class="badge badge-warn">SLA Note</span>' +
-            '</div>' +
-            '<p style="margin-top:6px;">' + escapeHtml(n.content) + '</p>';
+            renderSmallAvatarHtml(n.avatar_url, n.author_name) +
+            '<div class="collab-entry-body">' +
+              '<div class="collab-entry-head">' +
+                '<div class="collab-entry-author">' +
+                  '<strong>' + escapeHtml(n.author_name) + '</strong>' +
+                  '<span class="collab-note-tag">Note</span>' +
+                  '<span class="muted mono collab-entry-ts">' + escapeHtml(formatShortTs(n.created_at)) + '</span>' +
+                '</div>' +
+                '<div class="collab-entry-actions">' +
+                  buildCollabActionBtn('Copy', 'copy', 'data-copy-text', n.content) +
+                '</div>' +
+              '</div>' +
+              '<p class="collab-entry-text">' + escapeHtml(n.content) + '</p>' +
+            '</div>';
           notesList.appendChild(div);
         });
       }
@@ -809,20 +852,30 @@
     if (commentsList) {
       commentsList.innerHTML = '';
       if (comments.length === 0) {
-        commentsList.innerHTML = '<p class="muted">No discussion comments yet.</p>';
+        commentsList.innerHTML = '<div class="collab-empty">No discussion comments yet.</div>';
       } else {
         comments.forEach((c) => {
-          const div = document.createElement('div');
+          const div = document.createElement('article');
           div.className = 'collab-comment-item';
-          div.style.marginBottom = '8px';
+          div.style.marginBottom = '10px';
+          const rolePretty = String(c.author_role || 'va').replace('_', ' ');
           div.innerHTML =
             renderSmallAvatarHtml(c.avatar_url, c.author_name) +
             '<div class="collab-entry-body">' +
-              '<div style="display:flex;justify-content:space-between;align-items:center;">' +
-                '<strong>' + escapeHtml(c.author_name) + '</strong>' +
-                '<span class="badge badge-neutral">' + escapeHtml(c.author_role) + '</span>' +
+              '<div class="collab-entry-head">' +
+                '<div class="collab-entry-author">' +
+                  '<strong>' + escapeHtml(c.author_name) + '</strong>' +
+                  '<span class="muted collab-role-sep">·</span>' +
+                  '<span class="muted" style="font-size:11.5px;text-transform:capitalize;">' + escapeHtml(rolePretty) + '</span>' +
+                  '<span class="muted collab-role-sep">·</span>' +
+                  '<span class="muted mono collab-entry-ts">' + escapeHtml(formatShortTs(c.created_at)) + '</span>' +
+                '</div>' +
+                '<div class="collab-entry-actions">' +
+                  buildCollabActionBtn('Reply', 'reply', 'data-author-name', c.author_name) +
+                  buildCollabActionBtn('Copy', 'copy', 'data-copy-text', c.message) +
+                '</div>' +
               '</div>' +
-              '<p style="margin-top:6px;">' + escapeHtml(c.message) + '</p>' +
+              '<p class="collab-entry-text">' + escapeHtml(c.message) + '</p>' +
             '</div>';
           commentsList.appendChild(div);
         });
@@ -1228,29 +1281,96 @@
       }, 240);
     }
 
-    // Combined Timeline No-Reload Submission (Note or Comment toggle)
-    const combinedForm = document.getElementById('form-task-combined');
-    if (combinedForm) {
-      const pills = combinedForm.querySelectorAll('.choice-pill');
-      combinedForm.querySelectorAll('input[name="entry_kind"]').forEach((radio) => {
-        radio.addEventListener('change', () => {
-          pills.forEach((p) => {
-            const r = p.querySelector('input[type="radio"]');
-            p.classList.toggle('is-checked', Boolean(r && r.checked));
+    // Combined Timeline No-Reload Submission + Interactive Filter & Reply/Copy Actions
+    const collabDrawer = document.getElementById('drawer-task-collab');
+    if (collabDrawer) {
+      collabDrawer.querySelectorAll('[data-collab-filter]').forEach((chip) => {
+        chip.addEventListener('click', () => {
+          collabFilterKind = chip.getAttribute('data-collab-filter') || 'all';
+          collabDrawer.querySelectorAll('[data-collab-filter]').forEach((c) => {
+            c.classList.toggle('is-active', c === chip);
           });
+          if (activeCollabTaskId) {
+            renderTaskCollabLists(activeCollabTaskId, getTaskDataset());
+          }
         });
       });
+
+      collabDrawer.addEventListener('click', (e) => {
+        const actionBtn = e.target.closest('[data-collab-action]');
+        if (!actionBtn) return;
+        const act = actionBtn.getAttribute('data-collab-action');
+        if (act === 'reply') {
+          const author = actionBtn.getAttribute('data-author-name') || '';
+          const combinedTa = collabDrawer.querySelector('#form-task-combined textarea[name="body"]');
+          const commentsTa = collabDrawer.querySelector('#form-task-comment textarea[name="message"]');
+          const activeTa = (combinedTa && combinedTa.offsetParent !== null) ? combinedTa : (commentsTa || combinedTa);
+          if (activeTa) {
+            const mention = author ? ('@' + author + ' ') : '';
+            if (mention && !activeTa.value.startsWith(mention)) {
+              activeTa.value = mention + activeTa.value;
+            }
+            activeTa.focus();
+          }
+        } else if (act === 'copy') {
+          const text = actionBtn.getAttribute('data-copy-text') || '';
+          if (navigator.clipboard && text) {
+            navigator.clipboard.writeText(text).then(() => {
+              const orig = actionBtn.textContent;
+              actionBtn.textContent = 'Copied';
+              window.setTimeout(() => { actionBtn.textContent = orig; }, 1200);
+            }).catch(() => {});
+          }
+        }
+      });
+    }
+
+    const combinedForm = document.getElementById('form-task-combined');
+    if (combinedForm) {
+      const modeOpts = combinedForm.querySelectorAll('.collab-mode-opt');
+      const submitBtn = combinedForm.querySelector('#btn-collab-submit');
+      const bodyTa = combinedForm.querySelector('textarea[name="body"]');
+
+      const syncModeUi = () => {
+        const checked = combinedForm.querySelector('input[name="entry_kind"]:checked');
+        const mode = checked ? checked.value : 'comment';
+        combinedForm.setAttribute('data-mode', mode);
+        modeOpts.forEach((opt) => {
+          const r = opt.querySelector('input[type="radio"]');
+          opt.classList.toggle('is-active', Boolean(r && r.checked));
+        });
+        if (submitBtn) {
+          submitBtn.textContent = mode === 'note' ? 'Pin Note' : 'Post Comment';
+        }
+        if (bodyTa) {
+          bodyTa.placeholder = mode === 'note'
+            ? 'Highlight key execution instruction or handover note...'
+            : 'Write a comment or @mention a teammate...';
+        }
+      };
+
+      combinedForm.querySelectorAll('input[name="entry_kind"]').forEach((radio) => {
+        radio.addEventListener('change', syncModeUi);
+      });
+      syncModeUi();
+
+      if (bodyTa) {
+        bodyTa.addEventListener('keydown', (e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            combinedForm.requestSubmit();
+          }
+        });
+      }
 
       combinedForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const tid = (combinedForm.querySelector('input[name="task_id"]') || {}).value || '';
-        const bodyInp = combinedForm.querySelector('textarea[name="body"]');
         const kindInp = combinedForm.querySelector('input[name="entry_kind"]:checked');
         const kind = kindInp ? kindInp.value : 'comment';
-        const text = bodyInp ? bodyInp.value.trim() : '';
+        const text = bodyTa ? bodyTa.value.trim() : '';
         if (!tid || !text) return;
 
-        const submitBtn = combinedForm.querySelector('button[type="submit"]');
         if (submitBtn) submitBtn.disabled = true;
 
         try {
@@ -1260,7 +1380,7 @@
               body: JSON.stringify({ content: text })
             });
             if (res && res.item) appendCollabItemLocal(tid, 'note', res.item);
-            showToast('VA Note added', 'success');
+            showToast('Execution note pinned', 'success');
           } else {
             const res = await apiFetch('/api/v1/tasks/' + encodeURIComponent(tid) + '/comments', {
               method: 'POST',
@@ -1269,7 +1389,7 @@
             if (res && res.item) appendCollabItemLocal(tid, 'comment', res.item);
             showToast('Comment posted', 'success');
           }
-          if (bodyInp) bodyInp.value = '';
+          if (bodyTa) bodyTa.value = '';
           refreshTaskActivityLive(tid);
         } catch (err) {
           showToast(err.message, 'error');
@@ -2541,6 +2661,213 @@
         openDrawer('drawer-edit-pto-balance');
       });
     });
+  }
+
+  // ------------------------------------------------------------------------
+  // Visual PTO Approval Calendar (Dynamic Fetch for Managers)
+  // ------------------------------------------------------------------------
+  function initPtoApprovalCalendar() {
+    const calRoot = document.querySelector('[data-pto-calendar]');
+    if (!calRoot) return;
+
+    const gridWrap = calRoot.querySelector('[data-pto-cal-grid]');
+    const titleEl = calRoot.querySelector('[data-pto-cal-title]');
+    const summaryEl = calRoot.querySelector('[data-pto-cal-summary]');
+    const upcomingEl = calRoot.querySelector('[data-pto-cal-upcoming]');
+    const upcomingCountEl = calRoot.querySelector('[data-pto-upcoming-count]');
+
+    let currentMonth = calRoot.getAttribute('data-initial-month') || new Date().toISOString().slice(0, 7);
+    let prevMonth = currentMonth;
+    let nextMonth = currentMonth;
+    let statusFilter = 'all';
+    let lastPayload = null;
+
+    function ymd(y, m, d) {
+      return y + '-' + String(m).padStart(2, '0') + '-' + String(d).padStart(2, '0');
+    }
+
+    function renderCalendarView(data) {
+      lastPayload = data;
+      prevMonth = data.prev_month || currentMonth;
+      nextMonth = data.next_month || currentMonth;
+      if (titleEl) titleEl.textContent = data.month_label || currentMonth;
+
+      const rawRequests = Array.isArray(data.requests) ? data.requests : [];
+      const rawUpcoming = Array.isArray(data.upcoming) ? data.upcoming : [];
+
+      const requests = statusFilter === 'all'
+        ? rawRequests
+        : rawRequests.filter((r) => r.status === statusFilter);
+      const upcoming = statusFilter === 'all'
+        ? rawUpcoming
+        : rawUpcoming.filter((r) => r.status === statusFilter);
+
+      const pendingCount = rawRequests.filter((r) => r.status === 'pending').length;
+      const approvedCount = rawRequests.filter((r) => r.status === 'approved').length;
+      if (summaryEl) {
+        summaryEl.textContent = approvedCount + ' approved · ' + pendingCount + ' pending this month';
+      }
+
+      // Build Mon–Sun calendar cells
+      const parts = String(data.month || currentMonth).split('-');
+      const yr = parseInt(parts[0], 10);
+      const mo = parseInt(parts[1], 10); // 1-12
+      const firstDate = new Date(yr, mo - 1, 1);
+      const daysInMonth = new Date(yr, mo, 0).getDate();
+      const jsDow = firstDate.getDay(); // 0=Sun..6=Sat
+      const leadingBlanks = (jsDow === 0) ? 6 : (jsDow - 1);
+      const totalCells = Math.ceil((leadingBlanks + daysInMonth) / 7) * 7;
+      const todayIso = new Date().toISOString().slice(0, 10);
+
+      let html = '<div class="pto-cal-grid">';
+      ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].forEach((dow) => {
+        html += '<div class="pto-cal-dow">' + dow + '</div>';
+      });
+
+      for (let idx = 0; idx < totalCells; idx++) {
+        const dayNum = idx - leadingBlanks + 1;
+        if (dayNum < 1 || dayNum > daysInMonth) {
+          html += '<div class="pto-cal-day is-outside"></div>';
+          continue;
+        }
+        const dateStr = ymd(yr, mo, dayNum);
+        const isToday = (dateStr === todayIso);
+        const dayReqs = requests.filter((r) => r.start_date <= dateStr && r.end_date >= dateStr);
+        const dowIdx = idx % 7;
+        const isWeekend = (dowIdx === 5 || dowIdx === 6);
+
+        html += '<div class="pto-cal-day' + (isToday ? ' is-today' : '') + (isWeekend ? ' is-weekend' : '') + '">';
+        html += '<div class="pto-cal-day-head"><span class="pto-cal-day-num tabular-nums">' + dayNum + '</span>';
+        if (dayReqs.length > 1) {
+          html += '<span class="pto-overlap-flag" title="Multiple VAs scheduled off">Overlap</span>';
+        }
+        html += '</div>';
+
+        html += '<div class="pto-cal-chips">';
+        dayReqs.slice(0, 3).forEach((req) => {
+          const firstName = String(req.va_name || 'VA').split(' ')[0];
+          const tone = req.status === 'approved' ? 'is-approved' : (req.status === 'rejected' ? 'is-rejected' : 'is-pending');
+          const tip = req.va_name + ' (' + req.status + ' · ' + req.business_days_count + 'd): ' + (req.reason || '');
+          html += '<div class="pto-cal-chip ' + tone + '" title="' + escapeHtml(tip) + '">' +
+            '<span>' + escapeHtml(firstName) + '</span>' +
+            '</div>';
+        });
+        if (dayReqs.length > 3) {
+          html += '<div class="pto-cal-more">+' + (dayReqs.length - 3) + ' more</div>';
+        }
+        html += '</div></div>';
+      }
+      html += '</div>';
+      if (gridWrap) gridWrap.innerHTML = html;
+
+      // Render Upcoming Time-Off Agenda
+      if (upcomingCountEl) upcomingCountEl.textContent = upcoming.length + ' upcoming';
+      if (upcomingEl) {
+        if (upcoming.length === 0) {
+          upcomingEl.innerHTML = '<div class="collab-empty">No upcoming pending or approved PTO requests found.</div>';
+        } else {
+          upcomingEl.innerHTML = upcoming.map((u) => {
+            const stCls = u.status === 'approved' ? 'badge-success' : (u.status === 'rejected' ? 'badge-danger' : 'badge-warn');
+            const overlaps = Array.isArray(u.overlaps) && u.overlaps.length > 0
+              ? '<div class="pto-agenda-overlap">Overlaps with: ' + escapeHtml(u.overlaps.join(', ')) + '</div>'
+              : '';
+            const actions = (data.can_approve && u.status === 'pending')
+              ? '<div class="pto-agenda-actions">' +
+                  '<button type="button" class="btn btn-primary btn-sm" data-cal-approve="' + escapeHtml(u.id) + '">Approve</button>' +
+                  '<button type="button" class="btn btn-danger btn-sm" data-cal-decline="' + escapeHtml(u.id) + '" data-cal-va="' + escapeHtml(u.va_name) + '">Decline</button>' +
+                '</div>'
+              : '';
+            return '<article class="pto-agenda-item">' +
+              '<div class="pto-agenda-top">' +
+                '<div style="display:flex;align-items:center;gap:8px;min-width:0;">' +
+                  renderSmallAvatarHtml(u.avatar_url, u.va_name) +
+                  '<div style="min-width:0;">' +
+                    '<strong style="display:block;font-size:13px;">' + escapeHtml(u.va_name) + '</strong>' +
+                    '<span class="muted mono" style="font-size:11px;">' + escapeHtml(u.start_date) + ' &rarr; ' + escapeHtml(u.end_date) + ' (' + escapeHtml(u.business_days_count) + 'd)</span>' +
+                  '</div>' +
+                '</div>' +
+                '<span class="badge ' + stCls + '">' + escapeHtml(u.status.charAt(0).toUpperCase() + u.status.slice(1)) + '</span>' +
+              '</div>' +
+              '<p class="muted" style="font-size:12px;margin:6px 0 0;">' + escapeHtml(u.reason || '') + '</p>' +
+              overlaps +
+              actions +
+            '</article>';
+          }).join('');
+        }
+      }
+    }
+
+    async function loadPtoCalendar(month) {
+      currentMonth = month;
+      try {
+        const data = await apiFetch('/api/v1/pto/calendar?month=' + encodeURIComponent(month), { method: 'GET' });
+        if (data && data.success) {
+          renderCalendarView(data);
+        }
+      } catch (err) {
+        if (gridWrap) {
+          gridWrap.innerHTML = '<div class="notice notice-error">' + escapeHtml(err.message || 'Unable to load PTO calendar') + '</div>';
+        }
+      }
+    }
+
+    calRoot.querySelectorAll('[data-pto-cal-nav]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const dir = btn.getAttribute('data-pto-cal-nav');
+        if (dir === 'prev') loadPtoCalendar(prevMonth);
+        else if (dir === 'next') loadPtoCalendar(nextMonth);
+        else loadPtoCalendar(new Date().toISOString().slice(0, 7));
+      });
+    });
+
+    calRoot.querySelectorAll('[data-pto-cal-filter]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        statusFilter = btn.getAttribute('data-pto-cal-filter') || 'all';
+        calRoot.querySelectorAll('[data-pto-cal-filter]').forEach((b) => b.classList.toggle('is-active', b === btn));
+        if (lastPayload) renderCalendarView(lastPayload);
+      });
+    });
+
+    if (upcomingEl) {
+      upcomingEl.addEventListener('click', async (e) => {
+        const approveBtn = e.target.closest('[data-cal-approve]');
+        if (approveBtn) {
+          const reqId = approveBtn.getAttribute('data-cal-approve');
+          if (!reqId) return;
+          try {
+            approveBtn.disabled = true;
+            await apiFetch('/api/v1/pto/' + encodeURIComponent(reqId) + '/review', {
+              method: 'PATCH',
+              body: JSON.stringify({ status: 'approved' })
+            });
+            showToast('PTO request approved', 'success');
+            loadPtoCalendar(currentMonth);
+          } catch (err) {
+            showToast(err.message, 'error');
+            approveBtn.disabled = false;
+          }
+          return;
+        }
+
+        const declineBtn = e.target.closest('[data-cal-decline]');
+        if (declineBtn) {
+          const reqId = declineBtn.getAttribute('data-cal-decline');
+          const vaName = declineBtn.getAttribute('data-cal-va') || 'Staff Member';
+          const drawer = document.getElementById('drawer-pto-reject');
+          if (drawer && reqId) {
+            const form = drawer.querySelector('#form-pto-reject');
+            const label = drawer.querySelector('#pto-reject-target');
+            if (label) label.textContent = vaName;
+            if (form) {
+              form.setAttribute('data-api-form', '/api/v1/pto/' + encodeURIComponent(reqId) + '/review');
+            }
+            openDrawer('drawer-pto-reject');
+          }
+        }
+      });
+    }
+
+    loadPtoCalendar(currentMonth);
   }
 
   // ------------------------------------------------------------------------

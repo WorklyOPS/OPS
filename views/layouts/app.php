@@ -33,18 +33,128 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
 </head>
 <body>
   <div id="workly-global-progress" class="workly-global-progress" aria-hidden="true"></div>
-  <div class="app-shell">
-    <aside class="sidebar" id="workly-sidebar">
-      <div class="sidebar-head">
-        <a href="<?= $role === 'va' ? '/tasks' : '/dashboard' ?>" class="sidebar-brand" style="text-decoration:none;">
-          <span class="brand-mark" style="width:30px;height:30px;font-size:14px;">W</span>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="topbar-left">
+        <button type="button" id="mobile-menu-toggle" class="mobile-menu-btn" aria-label="Toggle Menu">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+
+        <a href="<?= $role === 'va' ? '/tasks' : '/dashboard' ?>" class="topbar-brand" style="text-decoration:none;">
+          <span class="brand-mark" style="width:32px;height:32px;font-size:15px;">W</span>
           <span>Workly</span>
         </a>
-        <span class="badge badge-brand"><?= SecurityHelper::e($roleLabel) ?></span>
+
+        <span class="topbar-divider" aria-hidden="true"></span>
+
+        <div class="topbar-breadcrumb">
+          <strong style="font-size:14.5px;color:var(--ink);"><?= SecurityHelper::e($pageTitle) ?></strong>
+        </div>
       </div>
 
+      <div class="topbar-right">
+        <button type="button" id="btn-open-cmdk" class="cmdk-trigger no-print" title="Quick workspace navigation (Ctrl+K)">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <span>Quick Jump</span>
+          <span class="kbd-hint">Ctrl+K</span>
+        </button>
+
+        <button type="button" id="btn-start-tour" class="btn btn-secondary btn-sm no-print">Guide</button>
+
+        <!-- Minimalist Notification Bell & Dropdown Popover -->
+        <div class="header-menu-wrap no-print">
+          <button type="button" id="btn-notif-bell" class="notif-btn" aria-label="Notifications" aria-expanded="false">
+            <?= workly_icon_svg('Bell', 18) ?>
+            <?php if ($unreadNotifCount > 0): ?>
+              <span class="notif-count-badge" id="notif-badge-count"><?= min(99, $unreadNotifCount) ?></span>
+            <?php endif; ?>
+          </button>
+
+          <div id="notif-popover" class="header-popover notif-popover is-hidden" role="region" aria-label="Incoming Notifications">
+            <div class="popover-head">
+              <div>
+                <strong style="font-size:13.5px;">Notifications</strong>
+                <div class="muted" style="font-size:11px;"><?= $unreadNotifCount ?> unread alert(s)</div>
+              </div>
+              <?php if ($unreadNotifCount > 0): ?>
+                <button type="button" id="btn-mark-notifs-read" class="btn btn-secondary btn-sm">Mark all read</button>
+              <?php endif; ?>
+            </div>
+
+            <div class="popover-list">
+              <?php if (empty($headerNotifications)): ?>
+                <div style="padding:20px 14px;text-align:center;" class="muted">You’re all caught up — no recent alerts.</div>
+              <?php else: ?>
+                <?php foreach ($headerNotifications as $nf): ?>
+                  <?php
+                    $catBadge = match ($nf['category'] ?? '') {
+                        'message' => ['Mail', 'badge-info'],
+                        'pto'     => ['PTO', 'badge-warn'],
+                        'comment' => ['Task', 'badge-brand'],
+                        'perk'    => ['Reward', 'badge-success'],
+                        default   => ['Alert', 'badge-neutral'],
+                    };
+                  ?>
+                  <a href="<?= SecurityHelper::e($nf['href']) ?>" class="notif-item <?= !empty($nf['unread']) ? 'is-unread' : '' ?>">
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:3px;">
+                      <span class="badge <?= $catBadge[1] ?>"><?= $catBadge[0] ?></span>
+                      <span class="muted mono" style="font-size:10.5px;"><?= SecurityHelper::e(substr((string) $nf['created_at'], 0, 16)) ?></span>
+                    </div>
+                    <strong style="font-size:12.5px;display:block;color:var(--ink);"><?= SecurityHelper::e($nf['title']) ?></strong>
+                    <?php if (!empty($nf['subtitle'])): ?>
+                      <div class="muted" style="font-size:11.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                        <?= SecurityHelper::e($nf['subtitle']) ?>
+                      </div>
+                    <?php endif; ?>
+                  </a>
+                <?php endforeach; ?>
+              <?php endif; ?>
+            </div>
+          </div>
+        </div>
+
+        <!-- Header User Profile Popover (Contains Profile Link & Sign Out) -->
+        <div class="header-menu-wrap no-print">
+          <button type="button" id="btn-profile-menu" class="user-pill user-pill-btn" aria-label="Account Menu" aria-expanded="false">
+            <?php if (!empty($user['avatar_url'])): ?>
+              <img src="<?= SecurityHelper::e($user['avatar_url']) ?>" alt="Avatar" class="avatar">
+            <?php else: ?>
+              <span class="avatar"><?= SecurityHelper::e($initials) ?></span>
+            <?php endif; ?>
+            <div style="line-height:1.2;text-align:left;">
+              <div style="font-size:12.5px;font-weight:700;color:var(--ink);"><?= SecurityHelper::e($user['name']) ?></div>
+              <div class="muted" style="font-size:11px;"><?= SecurityHelper::e($roleLabel) ?></div>
+            </div>
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--muted);margin-left:2px;"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+
+          <div id="profile-popover" class="header-popover profile-popover is-hidden" role="menu">
+            <div class="popover-head" style="flex-direction:column;align-items:flex-start;gap:2px;">
+              <strong style="font-size:13.5px;"><?= SecurityHelper::e($user['name']) ?></strong>
+              <div class="muted" style="font-size:11.5px;word-break:break-all;"><?= SecurityHelper::e($user['email']) ?></div>
+              <span class="badge badge-brand" style="margin-top:4px;"><?= SecurityHelper::e($roleLabel) ?></span>
+            </div>
+            <div style="padding:6px;display:grid;gap:2px;">
+              <a href="/profile" class="popover-menu-link">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v2"/></svg>
+                <span>My Profile</span>
+              </a>
+              <a href="/logout" class="popover-menu-link danger">
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                <span>Sign Out</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <div class="app-shell workspace-frame">
+    <aside class="sidebar" id="workly-sidebar" aria-label="Primary Workspace Navigation">
       <nav class="sidebar-nav" aria-label="Workspace Navigation">
-        <div class="nav-section-label">Workspace</div>
+        <div class="nav-section-label">Workspace · <?= SecurityHelper::e($roleLabel) ?></div>
 
         <?php if ($role !== 'va'): ?>
           <a href="/dashboard" class="nav-link <?= $activeSection === 'dashboard' ? 'active' : '' ?>">
@@ -146,115 +256,6 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
     </aside>
 
     <div class="main-wrap">
-      <header class="topbar">
-        <div class="topbar-left">
-          <button type="button" id="mobile-menu-toggle" class="mobile-menu-btn" aria-label="Toggle Menu">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
-          </button>
-          <div class="topbar-breadcrumb">
-            <span class="muted">Workly</span>
-            <span class="muted">/</span>
-            <strong style="font-size:15px;color:var(--ink);"><?= SecurityHelper::e($pageTitle) ?></strong>
-          </div>
-        </div>
-
-        <div class="topbar-right">
-          <button type="button" id="btn-open-cmdk" class="cmdk-trigger no-print" title="Quick workspace navigation (Ctrl+K)">
-            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
-            <span>Quick Jump</span>
-            <span class="kbd-hint">Ctrl+K</span>
-          </button>
-
-          <button type="button" id="btn-start-tour" class="btn btn-secondary btn-sm no-print">Guide</button>
-
-          <!-- Minimalist Notification Bell & Dropdown Popover -->
-          <div class="header-menu-wrap no-print">
-            <button type="button" id="btn-notif-bell" class="notif-btn" aria-label="Notifications" aria-expanded="false">
-              <?= workly_icon_svg('Bell', 18) ?>
-              <?php if ($unreadNotifCount > 0): ?>
-                <span class="notif-count-badge" id="notif-badge-count"><?= min(99, $unreadNotifCount) ?></span>
-              <?php endif; ?>
-            </button>
-
-            <div id="notif-popover" class="header-popover notif-popover is-hidden" role="region" aria-label="Incoming Notifications">
-              <div class="popover-head">
-                <div>
-                  <strong style="font-size:13.5px;">Notifications</strong>
-                  <div class="muted" style="font-size:11px;"><?= $unreadNotifCount ?> unread alert(s)</div>
-                </div>
-                <?php if ($unreadNotifCount > 0): ?>
-                  <button type="button" id="btn-mark-notifs-read" class="btn btn-secondary btn-sm">Mark all read</button>
-                <?php endif; ?>
-              </div>
-
-              <div class="popover-list">
-                <?php if (empty($headerNotifications)): ?>
-                  <div style="padding:20px 14px;text-align:center;" class="muted">You’re all caught up — no recent alerts.</div>
-                <?php else: ?>
-                  <?php foreach ($headerNotifications as $nf): ?>
-                    <?php
-                      $catBadge = match ($nf['category'] ?? '') {
-                          'message' => ['Mail', 'badge-info'],
-                          'pto'     => ['PTO', 'badge-warn'],
-                          'comment' => ['Task', 'badge-brand'],
-                          'perk'    => ['Reward', 'badge-success'],
-                          default   => ['Alert', 'badge-neutral'],
-                      };
-                    ?>
-                    <a href="<?= SecurityHelper::e($nf['href']) ?>" class="notif-item <?= !empty($nf['unread']) ? 'is-unread' : '' ?>">
-                      <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:3px;">
-                        <span class="badge <?= $catBadge[1] ?>"><?= $catBadge[0] ?></span>
-                        <span class="muted mono" style="font-size:10.5px;"><?= SecurityHelper::e(substr((string) $nf['created_at'], 0, 16)) ?></span>
-                      </div>
-                      <strong style="font-size:12.5px;display:block;color:var(--ink);"><?= SecurityHelper::e($nf['title']) ?></strong>
-                      <?php if (!empty($nf['subtitle'])): ?>
-                        <div class="muted" style="font-size:11.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                          <?= SecurityHelper::e($nf['subtitle']) ?>
-                        </div>
-                      <?php endif; ?>
-                    </a>
-                  <?php endforeach; ?>
-                <?php endif; ?>
-              </div>
-            </div>
-          </div>
-
-          <!-- Header User Profile Popover (Contains Profile Link & Sign Out) -->
-          <div class="header-menu-wrap no-print">
-            <button type="button" id="btn-profile-menu" class="user-pill user-pill-btn" aria-label="Account Menu" aria-expanded="false">
-              <?php if (!empty($user['avatar_url'])): ?>
-                <img src="<?= SecurityHelper::e($user['avatar_url']) ?>" alt="Avatar" class="avatar">
-              <?php else: ?>
-                <span class="avatar"><?= SecurityHelper::e($initials) ?></span>
-              <?php endif; ?>
-              <div style="line-height:1.2;text-align:left;">
-                <div style="font-size:12.5px;font-weight:700;color:var(--ink);"><?= SecurityHelper::e($user['name']) ?></div>
-                <div class="muted" style="font-size:11px;"><?= SecurityHelper::e($roleLabel) ?></div>
-              </div>
-              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--muted);margin-left:2px;"><path d="m6 9 6 6 6-6"/></svg>
-            </button>
-
-            <div id="profile-popover" class="header-popover profile-popover is-hidden" role="menu">
-              <div class="popover-head" style="flex-direction:column;align-items:flex-start;gap:2px;">
-                <strong style="font-size:13.5px;"><?= SecurityHelper::e($user['name']) ?></strong>
-                <div class="muted" style="font-size:11.5px;word-break:break-all;"><?= SecurityHelper::e($user['email']) ?></div>
-                <span class="badge badge-brand" style="margin-top:4px;"><?= SecurityHelper::e($roleLabel) ?></span>
-              </div>
-              <div style="padding:6px;display:grid;gap:2px;">
-                <a href="/profile" class="popover-menu-link">
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-2a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v2"/></svg>
-                  <span>My Profile</span>
-                </a>
-                <a href="/logout" class="popover-menu-link danger">
-                  <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
-                  <span>Sign Out</span>
-                </a>
-              </div>
-            </div>
-          </div>
-        </div>
-      </header>
-
       <main class="page-content">
         <div id="workly-skeleton" class="skeleton-screen" aria-busy="true" aria-label="Loading module">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -534,6 +535,10 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
   </div>
 
   <script src="/assets/js/app.js"></script>
+  <?php if ($activeSection === 'dashboard' && $role === 'team_leader'): ?>
+    <script src="/assets/js/vendor/recharts-bundle.js"></script>
+    <script src="/assets/js/tl-recharts.js"></script>
+  <?php endif; ?>
   <?php if ($activeSection === 'email'): ?>
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>

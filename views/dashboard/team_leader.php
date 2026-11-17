@@ -11,9 +11,22 @@ $statusCounts = $data['kanban_status_counts'] ?? [
     'completed'   => 0,
 ];
 $byVa = $data['kanban_by_va'] ?? [];
+$vaRates = $data['va_completion_rates'] ?? [];
+$overdueTotal = (int) ($data['overdue_total'] ?? 0);
 $reviewQueue = $data['review_queue'] ?? [];
 
 $totalKanbanTasks = array_sum(array_map('intval', $statusCounts));
+$overallCompRate = $totalKanbanTasks > 0
+    ? round(((int) ($statusCounts['completed'] ?? 0) / $totalKanbanTasks) * 100, 1)
+    : 0.0;
+$avgOnTimeSla = 100.0;
+if (!empty($vaRates)) {
+    $slaSum = 0.0;
+    foreach ($vaRates as $vrItem) {
+        $slaSum += (float) ($vrItem['on_time_rate'] ?? 100.0);
+    }
+    $avgOnTimeSla = round($slaSum / count($vaRates), 1);
+}
 $maxStatusCount = max(1, ...array_map('intval', array_values($statusCounts)));
 $maxVaTotal = 1;
 foreach ($byVa as $vr) {
@@ -68,6 +81,39 @@ $stageMeta = [
     <div class="kpi-sub"><?= (int) ($alerts['pending_pto'] ?? 0) ?> pending PTO alert(s)</div>
   </div>
 </div>
+
+<!-- Recharts Performance Dashboard Component: Team Completion Rates & Overdue Trends -->
+<section class="card" style="margin-bottom:22px;" aria-label="Team Task Completion & Overdue Trends">
+  <div class="tl-perf-head">
+    <div>
+      <h3>Team Task Completion &amp; Overdue Performance</h3>
+      <p class="muted" style="font-size:12.5px;">Interactive completion rate trajectory, overdue deliverables tracking, and per-VA SLA benchmarks.</p>
+    </div>
+
+    <div class="tl-perf-summary">
+      <div class="tl-perf-stat">
+        <span class="muted">Completion Rate</span>
+        <strong class="tabular-nums" style="color:var(--success);"><?= number_format($overallCompRate, 1) ?>%</strong>
+      </div>
+      <div class="tl-perf-stat">
+        <span class="muted">Overdue Tasks</span>
+        <strong class="tabular-nums" style="color:<?= $overdueTotal > 0 ? 'var(--danger)' : 'var(--success)' ?>;"><?= $overdueTotal ?></strong>
+      </div>
+      <div class="tl-perf-stat">
+        <span class="muted">Pod On-Time SLA</span>
+        <strong class="tabular-nums" style="color:var(--brand-secondary);"><?= number_format($avgOnTimeSla, 1) ?>%</strong>
+      </div>
+    </div>
+  </div>
+
+  <script type="application/json" id="tl-performance-json"><?= json_encode([
+      'trend'    => $trend,
+      'va_rates' => $vaRates,
+  ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
+  <div id="tl-recharts-performance-root" class="tl-recharts-host">
+    <div class="skeleton-bar" style="height:300px;border-radius:12px;"></div>
+  </div>
+</section>
 
 <!-- Kanban Task Distribution Dashboard Component (Status & VA Assignee Bar Charts) -->
 <section class="card" style="margin-bottom:22px;" aria-label="Kanban Task Distribution Analytics">
@@ -354,6 +400,9 @@ $stageMeta = [
     <?php endif; ?>
   </section>
 </div>
+
+<!-- Visual PTO Approval Calendar (Fetches upcoming pod leave from DB) -->
+<?php require __DIR__ . '/../partials/pto_calendar_card.php'; ?>
 
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
   <h3>Assigned Virtual Assistants</h3>

@@ -433,19 +433,32 @@ final class PageController
 
                 $trendStmt = $this->db->prepare("
                     SELECT TO_CHAR(t.deadline, 'YYYY-MM-DD') AS day_label,
+                           TO_CHAR(t.deadline, 'Mon DD') AS short_date,
                            COUNT(*)::INTEGER AS total_count,
-                           COUNT(*) FILTER (WHERE t.status = 'completed')::INTEGER AS done_count
+                           COUNT(*) FILTER (WHERE t.status = 'completed')::INTEGER AS done_count,
+                           COUNT(*) FILTER (WHERE t.status <> 'completed' AND t.deadline < CURRENT_DATE)::INTEGER AS overdue_count
                     FROM tasks t
                     JOIN users u ON t.assigned_va_id = u.id
                     WHERE (u.team_leader_id = :tl OR t.assigned_va_id = :tl2 OR t.created_by_id = :tl3)
                       AND t.deadline >= CURRENT_DATE - INTERVAL '30 days'
-                    GROUP BY TO_CHAR(t.deadline, 'YYYY-MM-DD')
+                    GROUP BY TO_CHAR(t.deadline, 'YYYY-MM-DD'), TO_CHAR(t.deadline, 'Mon DD')
                     ORDER BY day_label ASC
                 ");
                 $trendStmt->execute([':tl' => $uid, ':tl2' => $uid, ':tl3' => $uid]);
-                $res['completion_trend'] = $trendStmt->fetchAll(PDO::FETCH_ASSOC);
+                $trendRows = $trendStmt->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($trendRows as &$tr) {
+                    $tot = (int) ($tr['total_count'] ?? 0);
+                    $done = (int) ($tr['done_count'] ?? 0);
+                    $ovd = (int) ($tr['overdue_count'] ?? 0);
+                    $tr['total_count'] = $tot;
+                    $tr['done_count'] = $done;
+                    $tr['overdue_count'] = $ovd;
+                    $tr['completion_rate'] = $tot > 0 ? round(($done / $tot) * 100, 1) : 0.0;
+                }
+                unset($tr);
+                $res['completion_trend'] = $trendRows;
 
-                // Kanban distribution per status & per VA assignee
+                // Kanban distribution per status & per VA assignee (including completion_rate & overdue_count)
                 $kDistStmt = $this->db->prepare("
                     SELECT u.id AS va_id,
                            u.name AS va_name,
@@ -456,6 +469,7 @@ final class PageController
                            COUNT(t.id) FILTER (WHERE t.status = 'in_progress')::INTEGER AS in_progress,
                            COUNT(t.id) FILTER (WHERE t.status = 'in_review')::INTEGER AS in_review,
                            COUNT(t.id) FILTER (WHERE t.status = 'completed')::INTEGER AS completed,
+                           COUNT(t.id) FILTER (WHERE t.status <> 'completed' AND t.deadline < CURRENT_DATE)::INTEGER AS overdue_count,
                            COUNT(t.id)::INTEGER AS total_tasks,
                            COALESCE(SUM(t.estimated_hours + COALESCE(t.extra_hours_logged, 0)), 0)::NUMERIC AS total_hours
                     FROM users u
@@ -476,13 +490,35 @@ final class PageController
                     'in_review'   => 0,
                     'completed'   => 0,
                 ];
-                foreach ($kanbanByVa as $vaRow) {
+                $overdueTotal = 0;
+                $vaPerfRows = [];
+                foreach ($kanbanByVa as &$vaRow) {
                     foreach (array_keys($kanbanStatusCounts) as $stKey) {
                         $kanbanStatusCounts[$stKey] += (int) ($vaRow[$stKey] ?? 0);
                     }
+                    $totVa = (int) ($vaRow['total_tasks'] ?? 0);
+                    $doneVa = (int) ($vaRow['completed'] ?? 0);
+                    $ovdVa = (int) ($vaRow['overdue_count'] ?? 0);
+                    $overdueTotal += $ovdVa;
+                    $compRate = $totVa > 0 ? round(($doneVa / $totVa) * 100, 1) : 0.0;
+                    $vaRow['completion_rate'] = $compRate;
+                    $firstName = explode(' ', trim((string) $vaRow['va_name']))[0] ?: 'VA';
+                    $vaPerfRows[] = [
+                        'va_id'           => (string) $vaRow['va_id'],
+                        'name'            => $firstName,
+                        'full_name'       => (string) $vaRow['va_name'],
+                        'completion_rate' => $compRate,
+                        'on_time_rate'    => round((float) ($vaRow['on_time_rate'] ?? 100), 1),
+                        'completed'       => $doneVa,
+                        'overdue_count'   => $ovdVa,
+                        'total_tasks'     => $totVa,
+                    ];
                 }
+                unset($vaRow);
                 $res['kanban_status_counts'] = $kanbanStatusCounts;
                 $res['kanban_by_va'] = $kanbanByVa;
+                $res['va_completion_rates'] = $vaPerfRows;
+                $res['overdue_total'] = $overdueTotal;
 
                 // Review queue (In Review deliverables awaiting TL approval)
                 $revStmt = $this->db->prepare("

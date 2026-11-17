@@ -548,28 +548,41 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
 
       <!-- Tab 1: Combined Notes + Comments Timeline -->
       <div data-tab-group="task-collab" data-tab-panel="combined">
-        <div style="display:flex;gap:10px;flex-wrap:wrap;font-size:11.5px;margin-bottom:10px;">
-          <span class="badge badge-brand">Comment (Profile Photo)</span>
-          <span class="badge badge-warn">VA / Execution Note (Highlighted)</span>
+        <div class="collab-filter-bar">
+          <div class="collab-filter-chips" role="group" aria-label="Filter deliverable activity">
+            <button type="button" class="collab-filter-chip is-active" data-collab-filter="all">All Activity <span data-collab-count="all" class="tabular-nums">0</span></button>
+            <button type="button" class="collab-filter-chip" data-collab-filter="note">Notes <span data-collab-count="note" class="tabular-nums">0</span></button>
+            <button type="button" class="collab-filter-chip" data-collab-filter="comment">Comments <span data-collab-count="comment" class="tabular-nums">0</span></button>
+          </div>
+          <div class="collab-legend-hint">
+            <span class="collab-legend-dot is-note" aria-hidden="true"></span>
+            <span>Highlighted cards = Execution Notes</span>
+          </div>
         </div>
+
         <div id="detail-combined-list" class="collab-timeline" style="margin-bottom:14px;"></div>
 
-        <form id="form-task-combined" data-no-reload="1" data-task-collab-form>
+        <form id="form-task-combined" class="collab-composer" data-no-reload="1" data-task-collab-form data-mode="comment">
           <input type="hidden" name="task_id" value="">
-          <div style="display:flex;gap:8px;margin-bottom:8px;">
-            <label class="choice-pill is-checked" style="font-size:12px;">
-              <input type="radio" name="entry_kind" value="comment" checked>
-              <span>Comment</span>
-            </label>
-            <label class="choice-pill" style="font-size:12px;">
-              <input type="radio" name="entry_kind" value="note">
-              <span>VA / Instruction Note</span>
-            </label>
+          <div class="collab-composer-head">
+            <div class="collab-mode-switch" role="radiogroup" aria-label="Entry type">
+              <label class="collab-mode-opt is-active">
+                <input type="radio" name="entry_kind" value="comment" checked>
+                <span>Comment</span>
+              </label>
+              <label class="collab-mode-opt is-note-opt">
+                <input type="radio" name="entry_kind" value="note">
+                <span>VA Note</span>
+              </label>
+            </div>
+            <span class="muted collab-shortcut-hint">Ctrl+Enter to send</span>
           </div>
-          <div class="form-group">
-            <textarea class="textarea" name="body" rows="3" required placeholder="Write a comment or @mention a teammate, or switch to VA Note..."></textarea>
+          <div class="form-group" style="margin-bottom:10px;">
+            <textarea class="textarea collab-textarea" name="body" rows="3" required placeholder="Write a comment or @mention a teammate..."></textarea>
           </div>
-          <button type="submit" class="btn btn-primary">Send Update</button>
+          <div style="display:flex;justify-content:flex-end;">
+            <button type="submit" id="btn-collab-submit" class="btn btn-primary btn-sm">Post Comment</button>
+          </div>
         </form>
       </div>
 
