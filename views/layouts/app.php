@@ -147,6 +147,7 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
               </a>
             </div>
           </div>
+        </div>
         <!-- Button for theme Dark/Light mode  -->
         <button class="theme-toggle" id="themeToggle">
             <svg id="themeIcon" viewBox="0 0 24 24"
@@ -156,7 +157,6 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
                 <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/>
             </svg>
         </button>
-        </div>
       </div>
     </div>
   </header>
