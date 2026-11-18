@@ -353,22 +353,10 @@ final class PageController
         if ($role === 'va' && !empty($uid)) {
             $vaIdsForSpec[(string) $uid] = true;
         }
-        $vaSpecialtiesByVa = [];
-        if (!empty($vaIdsForSpec)) {
-            try {
-                $idList = array_keys($vaIdsForSpec);
-                $spPh = implode(',', array_fill(0, count($idList), '?'));
-                $spStmt = $this->db->prepare("SELECT va_id, specialty FROM va_specialties WHERE va_id IN ({$spPh}) ORDER BY specialty ASC");
-                $spStmt->execute($idList);
-                foreach ($spStmt->fetchAll(PDO::FETCH_ASSOC) as $spRow) {
-                    $vaSpecialtiesByVa[(string) $spRow['va_id']][] = (string) $spRow['specialty'];
-                }
-            } catch (Throwable) {
-                $vaSpecialtiesByVa = [];
-            }
-        }
-
-        $taskTemplates = TaskApiController::listTaskTemplates($this->db);
+        $suggestedByVa = TaskApiController::buildInternalSuggestionsForVas(
+            $this->db,
+            array_keys($vaIdsForSpec)
+        );
 
         return [
             'tasks'                      => $tasks,
@@ -377,8 +365,7 @@ final class PageController
             'comment_authors_by_task'    => $commentAuthorsByTask,
             'extra_hours_by_task'        => $extraHoursByTask,
             'subtasks_by_task'           => $subtasksByTask,
-            'va_specialties_by_va'       => $vaSpecialtiesByVa,
-            'task_templates'             => $taskTemplates,
+            'suggested_by_va'            => $suggestedByVa,
             'mention_candidates_by_task' => $mentionCandidatesByTask,
             'status_counts'              => $statusCounts,
             'due_today_count'            => $dueTodayCount,

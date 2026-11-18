@@ -85,15 +85,16 @@
       <p class="muted" style="margin-bottom:20px;font-size:13px;">Enter your Workly staff credentials and complete security verification.</p>
 
       <?php if (!empty($pageError)): ?>
-        <div class="notice notice-error"><?= SecurityHelper::e($pageError) ?></div>
+        <div id="login-server-alert" class="notice notice-error"><?= SecurityHelper::e($pageError) ?></div>
       <?php endif; ?>
+      <div id="login-client-alert" class="notice notice-error is-hidden" role="alert"></div>
 
-      <form method="POST" action="/login" autocomplete="on">
+      <form id="login-form" method="POST" action="/login" autocomplete="on" novalidate>
         <input type="hidden" name="_csrf" value="<?= SecurityHelper::e($csrfToken) ?>">
 
         <div class="form-group">
           <label class="form-label" for="login-email">Work Email</label>
-          <input class="input" id="login-email" name="email" type="email" required autocomplete="email" placeholder="name@company.com">
+          <input class="input" id="login-email" name="email" type="email" value="<?= SecurityHelper::e($prefillEmail ?? '') ?>" required autocomplete="email" placeholder="name@company.com">
         </div>
 
         <div class="form-group">

@@ -18,7 +18,7 @@ final class AuthController
 {
     public function __construct(private PDO $db) {}
 
-    public function showLogin(?string $error = null): void
+    public function showLogin(?string $error = null, string $prefillEmail = ''): void
     {
         SecurityHelper::sendHtmlHeaders();
         SecurityHelper::configureSecureSession();
@@ -44,16 +44,21 @@ final class AuthController
     public function handleLogin(): void
     {
         SecurityHelper::configureSecureSession();
-        CsrfMiddleware::validateForm();
+        $email = strtolower(trim((string) ($_POST['email'] ?? '')));
+
+        if (!CsrfMiddleware::checkFormCsrf()) {
+            SecurityHelper::rotateCsrfToken();
+            $this->showLogin('Your security session expired. Please enter the verification code and sign in again.', $email);
+            return;
+        }
 
         $waitSeconds = SecurityHelper::checkLoginRateLimit();
         if ($waitSeconds !== null) {
             $mins = max(1, (int) ceil($waitSeconds / 60));
-            $this->showLogin("Too many failed login attempts. Try again in {$mins} minute(s).");
+            $this->showLogin("Too many failed login attempts. Try again in {$mins} minute(s).", $email);
             return;
         }
 
-        $email = strtolower(trim((string) ($_POST['email'] ?? '')));
         $password = (string) ($_POST['password'] ?? '');
         $turnstileToken = (string) ($_POST['cf-turnstile-response'] ?? '');
         $captchaCode = (string) ($_POST['captcha_code'] ?? '');
@@ -61,12 +66,12 @@ final class AuthController
         if (!SecurityHelper::verifyLoginCaptcha($captchaCode, $turnstileToken)) {
             SecurityHelper::recordLoginFailure();
             AuditLogger::log('LOGIN_CAPTCHA_BLOCKED', 'blocked', "Security CAPTCHA verification failed for {$email}", 'anonymous', 'guest', $this->db);
-            $this->showLogin('Security CAPTCHA verification failed. Please enter the updated characters and try again.');
+            $this->showLogin('Security CAPTCHA verification failed. Please enter the updated characters and try again.', $email);
             return;
         }
 
         if ($email === '' || $password === '') {
-            $this->showLogin('Please enter both your email address and password.');
+            $this->showLogin('Please enter both your email address and password.', $email);
             return;
         }
 
@@ -87,14 +92,14 @@ final class AuthController
         if (!$user || !password_verify($password, (string) $user['password_hash'])) {
             SecurityHelper::recordLoginFailure();
             AuditLogger::log('LOGIN_FAILED', 'warning', "Failed sign-in attempt for {$email}", 'anonymous', 'guest', $this->db);
-            $this->showLogin('Invalid email address or password.');
+            $this->showLogin('Invalid email address or password.', $email);
             return;
         }
 
         if (!$user['is_active'] || $user['is_suspended']) {
             $reason = $user['suspended_reason'] ? (' (' . $user['suspended_reason'] . ')') : '';
             AuditLogger::log('LOGIN_SUSPENDED_BLOCKED', 'blocked', "Suspended account sign-in blocked for {$email}", (string) $user['id'], (string) $user['role'], $this->db);
-            $this->showLogin('This account is currently suspended or inactive' . $reason . '. Contact your Administrator.');
+            $this->showLogin('This account is currently suspended or inactive' . $reason . '. Contact your Administrator.', $email);
             return;
         }
 
@@ -201,7 +206,11 @@ final class AuthController
     public function handleSetup(): void
     {
         SecurityHelper::configureSecureSession();
-        CsrfMiddleware::validateForm();
+        if (!CsrfMiddleware::checkFormCsrf()) {
+            SecurityHelper::rotateCsrfToken();
+            $this->showSetup('Your security session expired. Please submit the setup form again.');
+            return;
+        }
 
         // Permanently locked once any user exists
         if (AuthMiddleware::userCount($this->db) > 0) {

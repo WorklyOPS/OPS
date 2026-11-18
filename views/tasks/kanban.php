@@ -54,7 +54,7 @@ $commentsMap = $data['comments_by_task'] ?? [];
 $commentAuthorsMap = $data['comment_authors_by_task'] ?? [];
 $extraHoursMap = $data['extra_hours_by_task'] ?? [];
 $subtasksMap = $data['subtasks_by_task'] ?? [];
-$vaSpecialtiesMap = $data['va_specialties_by_va'] ?? [];
+$suggestedByVaMap = $data['suggested_by_va'] ?? [];
 $mentionCandidatesMap = $data['mention_candidates_by_task'] ?? [];
 $dueToday = (int) ($data['due_today_count'] ?? 0);
 $overdue = (int) ($data['overdue_count'] ?? 0);
@@ -184,15 +184,10 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
 <div class="page-header">
   <div>
     <h1>Weekly Task Organizer</h1>
-    <p class="muted">Drag cards across stages, right-click for quick actions, inject reusable VA templates, or collaborate live.</p>
+    <p class="muted">Drag cards across stages, right-click for quick actions, track subtasks, or collaborate live.</p>
   </div>
   <?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-      <button type="button" class="btn btn-secondary" id="btn-open-templates-library">
-        <?= workly_icon_svg('Book', 15) ?> <span>Templates Library</span>
-      </button>
-      <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-task">+ New Deliverable</button>
-    </div>
+    <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-task">+ New Deliverable</button>
   <?php endif; ?>
 </div>
 
@@ -412,8 +407,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
     'comment_authors'    => $commentAuthorsMap,
     'extra_hours'        => $extraHoursMap,
     'subtasks'           => $subtasksMap,
-    'va_specialties'     => $vaSpecialtiesMap,
-    'templates'          => $data['task_templates'] ?? [],
+    'suggested_by_va'    => $suggestedByVaMap,
     'mention_candidates' => $mentionCandidatesMap,
     'current_user_id'    => (string) ($user['id'] ?? ''),
     'current_user_name'  => (string) ($user['name'] ?? ''),
@@ -437,16 +431,13 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
         </div>
       <?php else: ?>
         <form data-api-form="/api/v1/tasks" data-api-method="POST">
-          <div class="tpl-quick-bar" style="margin-bottom:14px;">
-            <div class="tpl-quick-bar-head">
-              <span class="subtask-suggestions-label">Inject Reusable VA Template</span>
-              <button type="button" class="btn btn-secondary btn-xs" id="btn-browse-create-templates">Browse Library</button>
-            </div>
-            <div class="tpl-quick-bar-row">
-              <select class="select" id="create-template-select" aria-label="Select reusable task template">
-                <option value="">Choose a template by VA specialization...</option>
-              </select>
-              <button type="button" class="btn btn-primary btn-sm" id="btn-inject-create-template">Inject</button>
+          <div class="create-optional-suggest-row">
+            <button type="button" class="create-optional-suggest-toggle" id="btn-toggle-create-suggestions" aria-expanded="false">
+              <span>Optional quick ideas</span>
+              <span class="create-optional-suggest-chevron" aria-hidden="true">▾</span>
+            </button>
+            <div id="create-optional-tasks-panel" class="create-optional-tasks-panel is-hidden">
+              <div class="create-suggested-tasks-chips" id="create-suggested-tasks-chips"></div>
             </div>
           </div>
 
@@ -517,8 +508,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
             </div>
             <div class="subtask-suggestions-wrap" id="create-subtask-suggestions">
               <div class="subtask-suggestions-head">
-                <span class="subtask-suggestions-label">Quick Checklist Suggestions</span>
-                <span class="muted" id="create-subtask-spec-label" style="font-size:11px;"></span>
+                <span class="subtask-suggestions-label">Suggested checklist steps (optional)</span>
               </div>
               <div class="subtask-suggestions-tags" id="create-subtask-suggestions-tags"></div>
             </div>
@@ -730,7 +720,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
     </div>
     <div class="modal-body">
       <div class="subtasks-head" style="margin-bottom:8px;">
-        <span class="muted" style="font-size:12.5px;">Track granular steps and add recurring specialty checklist actions in one click.</span>
+        <span class="muted" style="font-size:12.5px;">Break this deliverable down into granular steps and track completion.</span>
         <span id="subtasks-modal-counter" class="badge badge-brand tabular-nums">0 / 0 done</span>
       </div>
       <div class="progress-track" style="height:7px;margin-bottom:14px;">
@@ -746,110 +736,10 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
 
       <div class="subtask-suggestions-wrap" id="modal-subtask-suggestions">
         <div class="subtask-suggestions-head">
-          <span class="subtask-suggestions-label">One-Click Suggestions by VA Specialty</span>
-          <span class="muted" id="modal-subtask-spec-label" style="font-size:11px;"></span>
+          <span class="subtask-suggestions-label">Suggested steps</span>
         </div>
         <div class="subtask-suggestions-tags" id="modal-subtask-suggestions-tags"></div>
       </div>
-
-      <div class="tpl-quick-bar" style="margin-top:12px;">
-        <div class="tpl-quick-bar-head">
-          <span class="subtask-suggestions-label">Inject Pre-Defined Template Subtasks</span>
-          <button type="button" class="btn btn-secondary btn-xs" id="btn-browse-subtasks-templates">Open Library</button>
-        </div>
-        <div class="tpl-quick-bar-row">
-          <select class="select" id="subtasks-template-select" aria-label="Choose task template to inject">
-            <option value="">Select VA specialization template...</option>
-          </select>
-          <button type="button" class="btn btn-primary btn-sm" id="btn-inject-subtasks-template">1-Click Inject</button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- Window 5: Reusable Task Templates Library Modal -->
-<div id="modal-task-templates" class="modal-backdrop is-hidden">
-  <div class="modal-panel modal-panel-templates" role="dialog" aria-modal="true" aria-label="Reusable Task Templates Library">
-    <div class="modal-head">
-      <div>
-        <h3>VA Specialization Task Templates Library</h3>
-        <div class="muted" style="font-size:12px;margin-top:2px;">Inject pre-defined workflows &amp; subtasks into any deliverable in one click, or save reusable custom templates.</div>
-      </div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <button type="button" class="btn btn-secondary btn-sm" id="btn-toggle-new-template">+ New Template</button>
-        <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
-      </div>
-    </div>
-
-    <div class="modal-body">
-      <div id="tpl-create-panel" class="tpl-create-panel is-hidden">
-        <form id="form-create-task-template">
-          <div class="grid-3">
-            <div class="form-group">
-              <label class="form-label">Template Title</label>
-              <input class="input" name="title" required placeholder="e.g. Daily Lead Enrichment Batch">
-            </div>
-            <div class="form-group">
-              <label class="form-label">VA Specialization</label>
-              <input class="input" name="specialty_category" list="tpl-specialty-datalist" required placeholder="e.g. Executive Admin, Data Entry">
-              <datalist id="tpl-specialty-datalist">
-                <option value="Executive Admin">
-                <option value="Social Media Manager">
-                <option value="Data Entry">
-                <option value="Development">
-                <option value="Marketing">
-                <option value="Accounting">
-                <option value="Legal">
-                <option value="Healthcare">
-                <option value="Insurance">
-                <option value="Administrative">
-                <option value="Management">
-              </datalist>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Default Priority &amp; Est Hrs</label>
-              <div style="display:flex;gap:6px;">
-                <select class="select" name="default_priority">
-                  <option value="low">Low</option>
-                  <option value="medium" selected>Medium</option>
-                  <option value="high">High</option>
-                  <option value="urgent">Urgent</option>
-                </select>
-                <input class="input" type="number" step="0.5" min="0.5" name="default_estimated_hours" value="2" style="max-width:86px;">
-              </div>
-            </div>
-          </div>
-
-          <div class="grid-2">
-            <div class="form-group">
-              <label class="form-label">Description (optional)</label>
-              <textarea class="textarea" name="description" rows="3" placeholder="Brief summary of expected deliverable standard..."></textarea>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Pre-Defined Subtasks (one step per line)</label>
-              <textarea class="textarea" name="subtasks" rows="3" required placeholder="Step 1: Audit source records&#10;Step 2: Validate required fields&#10;Step 3: Export final QA report"></textarea>
-            </div>
-          </div>
-
-          <div style="display:flex;justify-content:flex-end;gap:8px;">
-            <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-new-template">Cancel</button>
-            <button type="submit" class="btn btn-primary btn-sm">Save Reusable Template</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="tpl-library-toolbar">
-        <div class="tpl-category-pills" id="tpl-category-pills" role="tablist" aria-label="Filter templates by VA specialization"></div>
-        <div class="tpl-toolbar-right">
-          <select class="select tpl-target-select" id="tpl-inject-target-select" aria-label="Target task for 1-click injection">
-            <option value="__new__">Inject Target: + New Deliverable</option>
-          </select>
-          <input type="search" class="input tpl-search-input" id="tpl-search-input" placeholder="Search templates or steps...">
-        </div>
-      </div>
-
-      <div id="tpl-library-grid" class="tpl-library-grid"></div>
     </div>
   </div>
 </div>

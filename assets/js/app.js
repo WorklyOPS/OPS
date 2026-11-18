@@ -80,6 +80,7 @@
     portalOverlaysToBody();
     initSkeletonStaging();
     initAuthControls();
+    initLoginSecurityEnhancements();
     initCookieBanner();
     initMobileDrawer();
     initHeaderPopovers();
@@ -104,6 +105,10 @@
 
   window.addEventListener('pageshow', (e) => {
     if (e.persisted) {
+      if (document.getElementById('login-form')) {
+        window.location.reload();
+        return;
+      }
       WorklyLoader.done();
       WorklyLoader.revealContent();
     }
@@ -181,6 +186,75 @@
     });
   }
 
+  function initLoginSecurityEnhancements() {
+    const form = document.getElementById('login-form');
+    if (!form) return;
+
+    const clientAlert = document.getElementById('login-client-alert');
+    const serverAlert = document.getElementById('login-server-alert');
+    const emailInput = document.getElementById('login-email');
+    const passInput = document.getElementById('login-password');
+    const captchaInput = document.getElementById('login-captcha');
+
+    const showLoginError = (msg, focusEl) => {
+      if (serverAlert) serverAlert.classList.add('is-hidden');
+      if (clientAlert) {
+        clientAlert.textContent = msg;
+        clientAlert.classList.remove('is-hidden');
+      } else {
+        showToast(msg, 'error');
+      }
+      if (focusEl && typeof focusEl.focus === 'function') {
+        focusEl.focus();
+      }
+    };
+
+    const clearClientAlert = () => {
+      if (clientAlert) {
+        clientAlert.classList.add('is-hidden');
+        clientAlert.textContent = '';
+      }
+    };
+
+    [emailInput, passInput, captchaInput].forEach((el) => {
+      if (el) el.addEventListener('input', clearClientAlert);
+    });
+
+    form.addEventListener('submit', (e) => {
+      const email = emailInput ? String(emailInput.value || '').trim() : '';
+      const pass = passInput ? String(passInput.value || '') : '';
+      const captcha = captchaInput ? String(captchaInput.value || '').trim() : '';
+
+      if (!email) {
+        e.preventDefault();
+        showLoginError('Please enter your work email address.', emailInput);
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        e.preventDefault();
+        showLoginError('Please enter a valid work email address.', emailInput);
+        return;
+      }
+      if (!pass) {
+        e.preventDefault();
+        showLoginError('Please enter your password to sign in.', passInput);
+        return;
+      }
+      if (captchaInput && !captcha) {
+        e.preventDefault();
+        showLoginError('Please enter the security verification code shown above.', captchaInput);
+        return;
+      }
+
+      const csrfField = form.querySelector('input[name="_csrf"]');
+      if (csrfField && !String(csrfField.value || '').trim()) {
+        e.preventDefault();
+        showLoginError('Your login session expired. Refreshing security token...', null);
+        window.setTimeout(() => window.location.reload(), 650);
+      }
+    });
+  }
+
   // ------------------------------------------------------------------------
   // Essential Session Cookie Consent Popup
   // ------------------------------------------------------------------------
@@ -210,7 +284,8 @@
       if (acceptBtn) acceptBtn.disabled = true;
       if (declineBtn) declineBtn.disabled = true;
 
-      document.cookie = 'workly_cookie_consent=' + choice + '; path=/; max-age=15552000; SameSite=Lax';
+      const cookieFlags = window.location.protocol === 'https:' ? '; SameSite=None; Secure' : '; SameSite=Lax';
+      document.cookie = 'workly_cookie_consent=' + choice + '; path=/; max-age=15552000' + cookieFlags;
       try {
         localStorage.setItem('workly_cookie_consent', choice);
       } catch (_e) {
@@ -892,101 +967,13 @@
     });
   }
 
-  const SPECIALTY_CHECKLIST_PRESETS = {
-    Development: [
-      'Verify staging & lint checks',
-      'Run regression QA test pass',
-      'Update repository & PR notes',
-      'Confirm production deploy check'
-    ],
-    Marketing: [
-      'Audit brand voice & copywriting',
-      'Verify UTM links & pixel tracking',
-      'Prepare & size creative assets',
-      'Schedule campaign & QA preview'
-    ],
-    Legal: [
-      'Review clauses, dates & entities',
-      'Cross-check compliance checklist',
-      'Verify signatory & witness fields',
-      'Archive executed PDF copy'
-    ],
-    Insurance: [
-      'Verify policy limits & coverage',
-      'Audit client underwriting docs',
-      'Update carrier portal status',
-      'Send COI / renewal confirmation'
-    ],
-    Healthcare: [
-      'Verify HIPAA privacy compliance',
-      'Confirm patient & provider intake',
-      'Audit billing & coding accuracy',
-      'Log EHR follow-up summary'
-    ],
-    Administrative: [
-      'Audit inbox & calendar conflicts',
-      'Organize client cloud folders',
-      'Update CRM tracker records',
-      'Send EOD status summary'
-    ],
-    Management: [
-      'Confirm pod owners & capacity',
-      'Review SLA milestones & blockers',
-      'Verify QA sign-off criteria',
-      'Send stakeholder progress brief'
-    ],
-    Accounting: [
-      'Reconcile invoices & receipts',
-      'Verify ledger account categories',
-      'Cross-check tax & due dates',
-      'Export reconciled ledger summary'
-    ],
-    General: [
-      'Review acceptance criteria',
-      'Complete primary deliverable draft',
-      'Self-QA & proofread output',
-      'Confirm client handoff ready'
-    ]
-  };
-
-  function resolveChecklistSuggestionsForVa(vaId, allData) {
+  function getSuggestionsForVa(vaId, allData) {
     const data = allData || {};
-    const specsRaw = (data.va_specialties && vaId && Array.isArray(data.va_specialties[vaId]))
-      ? data.va_specialties[vaId]
-      : [];
-    const matchedKeys = [];
-    const seenSteps = new Set();
-    const suggestions = [];
-
-    specsRaw.forEach((sp) => {
-      const clean = String(sp || '').trim();
-      if (!clean) return;
-      const presetKey = Object.keys(SPECIALTY_CHECKLIST_PRESETS).find(
-        (k) => k.toLowerCase() === clean.toLowerCase()
-      );
-      if (presetKey) {
-        if (!matchedKeys.includes(presetKey)) matchedKeys.push(presetKey);
-        SPECIALTY_CHECKLIST_PRESETS[presetKey].forEach((step) => {
-          const low = step.toLowerCase();
-          if (!seenSteps.has(low)) {
-            seenSteps.add(low);
-            suggestions.push({ title: step, category: presetKey });
-          }
-        });
-      }
-    });
-
-    SPECIALTY_CHECKLIST_PRESETS.General.forEach((step) => {
-      const low = step.toLowerCase();
-      if (!seenSteps.has(low)) {
-        seenSteps.add(low);
-        suggestions.push({ title: step, category: 'General' });
-      }
-    });
-
+    const map = (data.suggested_by_va && typeof data.suggested_by_va === 'object') ? data.suggested_by_va : {};
+    const entry = (vaId && map[String(vaId)]) ? map[String(vaId)] : (map.__default__ || {});
     return {
-      label: matchedKeys.length > 0 ? (matchedKeys.join(' · ') + ' + General') : 'General Workflow',
-      items: suggestions.slice(0, 10)
+      steps: Array.isArray(entry.steps) ? entry.steps : [],
+      tasks: Array.isArray(entry.tasks) ? entry.tasks : []
     };
   }
 
@@ -994,7 +981,7 @@
 
   function renderSubtaskSuggestionsForModal(taskId, allData) {
     const wrap = document.getElementById('modal-subtask-suggestions-tags');
-    const lbl = document.getElementById('modal-subtask-spec-label');
+    const box = document.getElementById('modal-subtask-suggestions');
     if (!wrap) return;
 
     const data = allData || getTaskDataset() || {};
@@ -1004,24 +991,28 @@
       ((data.subtasks || {})[taskId] || []).map((s) => String(s.title || '').trim().toLowerCase())
     );
 
-    const resolved = resolveChecklistSuggestionsForVa(vaId, data);
-    if (lbl) lbl.textContent = resolved.label;
+    const resolved = getSuggestionsForVa(vaId, data);
+    if (box) {
+      box.classList.toggle('is-hidden', resolved.steps.length === 0);
+    }
 
     wrap.innerHTML = '';
-    resolved.items.forEach((item) => {
-      const isAdded = existingSet.has(item.title.toLowerCase());
+    resolved.steps.forEach((stepTitle) => {
+      const cleanTitle = String(stepTitle || '').trim();
+      if (!cleanTitle) return;
+      const isAdded = existingSet.has(cleanTitle.toLowerCase());
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = 'subtask-suggest-tag' + (isAdded ? ' is-added' : '');
-      btn.setAttribute('data-modal-suggest-step', item.title);
-      btn.setAttribute('title', item.category + ': Click to add to checklist');
+      btn.setAttribute('data-modal-suggest-step', cleanTitle);
+      btn.setAttribute('title', isAdded ? 'Already in checklist' : 'Click to add step');
       if (isAdded) btn.disabled = true;
 
       const iconSpan = document.createElement('span');
       iconSpan.className = 'subtask-suggest-plus';
       iconSpan.textContent = isAdded ? '✓' : '+';
       const txtSpan = document.createElement('span');
-      txtSpan.textContent = item.title;
+      txtSpan.textContent = cleanTitle;
 
       btn.appendChild(iconSpan);
       btn.appendChild(txtSpan);
@@ -2070,49 +2061,18 @@
       }
     });
 
-    // Sub-Tasks Draft Builder + 1-Click Specialty Suggestions inside Create Deliverable Drawer
+    // Sub-Tasks Draft Builder + Optional Backend Suggestions inside Create Deliverable Drawer
     const createDrawer = document.getElementById('drawer-create-task');
     const createSubInput = document.getElementById('create-subtask-draft-input');
     const createSubBtn = document.getElementById('btn-add-create-subtask');
     const createSubList = document.getElementById('create-subtasks-list');
+    const createSuggestBox = document.getElementById('create-subtask-suggestions');
     const createSuggestTags = document.getElementById('create-subtask-suggestions-tags');
-    const createSuggestSpecLbl = document.getElementById('create-subtask-spec-label');
+    const toggleCreateIdeasBtn = document.getElementById('btn-toggle-create-suggestions');
+    const createIdeasPanel = document.getElementById('create-optional-tasks-panel');
+    const createIdeasChips = document.getElementById('create-suggested-tasks-chips');
+
     if (createSubInput && createSubBtn && createSubList) {
-      const refreshCreateSuggestions = () => {
-        if (!createSuggestTags) return;
-        const allData = getTaskDataset() || {};
-        const vaField = createDrawer ? createDrawer.querySelector('[name="assigned_va_id"]') : null;
-        const vaId = vaField ? String(vaField.value || '') : String(allData.current_user_id || '');
-        const resolved = resolveChecklistSuggestionsForVa(vaId, allData);
-        if (createSuggestSpecLbl) createSuggestSpecLbl.textContent = resolved.label;
-
-        const existingDrafts = new Set(
-          Array.from(createSubList.querySelectorAll('input[name="subtasks[]"]'))
-            .map((inp) => String(inp.value || '').trim().toLowerCase())
-        );
-
-        createSuggestTags.innerHTML = '';
-        resolved.items.forEach((item) => {
-          const isAdded = existingDrafts.has(item.title.toLowerCase());
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'subtask-suggest-tag' + (isAdded ? ' is-added' : '');
-          btn.setAttribute('data-create-suggest-step', item.title);
-          btn.setAttribute('title', item.category + ': Click to add to checklist');
-          if (isAdded) btn.disabled = true;
-
-          const iconSpan = document.createElement('span');
-          iconSpan.className = 'subtask-suggest-plus';
-          iconSpan.textContent = isAdded ? '✓' : '+';
-          const txtSpan = document.createElement('span');
-          txtSpan.textContent = item.title;
-
-          btn.appendChild(iconSpan);
-          btn.appendChild(txtSpan);
-          createSuggestTags.appendChild(btn);
-        });
-      };
-
       const appendDraftStep = (rawTitle, refocusInput) => {
         const val = String(rawTitle || '').trim();
         if (!val) {
@@ -2156,6 +2116,92 @@
         refreshCreateSuggestions();
       };
 
+      const applyStarterIdea = (idea) => {
+        if (!idea || !createDrawer) return;
+        const titleInp = createDrawer.querySelector('input[name="title"]');
+        const descInp = createDrawer.querySelector('textarea[name="description"]');
+        const prioSel = createDrawer.querySelector('select[name="priority"]');
+        const hrsInp = createDrawer.querySelector('input[name="estimated_hours"]');
+
+        if (titleInp && idea.title) titleInp.value = idea.title;
+        if (descInp && idea.description) descInp.value = idea.description;
+        if (prioSel && idea.priority) prioSel.value = idea.priority;
+        if (hrsInp && idea.estimated_hours) hrsInp.value = String(idea.estimated_hours);
+
+        const steps = Array.isArray(idea.steps) ? idea.steps : [];
+        steps.forEach((step) => appendDraftStep(step, false));
+
+        if (createIdeasPanel && toggleCreateIdeasBtn) {
+          createIdeasPanel.classList.add('is-hidden');
+          toggleCreateIdeasBtn.setAttribute('aria-expanded', 'false');
+        }
+        showToast('Applied suggested deliverable & checklist', 'success');
+      };
+
+      function refreshCreateSuggestions() {
+        const allData = getTaskDataset() || {};
+        const vaField = createDrawer ? createDrawer.querySelector('[name="assigned_va_id"]') : null;
+        const vaId = vaField ? String(vaField.value || '') : String(allData.current_user_id || '');
+        const resolved = getSuggestionsForVa(vaId, allData);
+
+        if (createSuggestTags) {
+          if (createSuggestBox) {
+            createSuggestBox.classList.toggle('is-hidden', resolved.steps.length === 0);
+          }
+          const existingDrafts = new Set(
+            Array.from(createSubList.querySelectorAll('input[name="subtasks[]"]'))
+              .map((inp) => String(inp.value || '').trim().toLowerCase())
+          );
+
+          createSuggestTags.innerHTML = '';
+          resolved.steps.forEach((stepTitle) => {
+            const cleanTitle = String(stepTitle || '').trim();
+            if (!cleanTitle) return;
+            const isAdded = existingDrafts.has(cleanTitle.toLowerCase());
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'subtask-suggest-tag' + (isAdded ? ' is-added' : '');
+            btn.setAttribute('data-create-suggest-step', cleanTitle);
+            btn.setAttribute('title', isAdded ? 'Already added' : 'Click to add step');
+            if (isAdded) btn.disabled = true;
+
+            const iconSpan = document.createElement('span');
+            iconSpan.className = 'subtask-suggest-plus';
+            iconSpan.textContent = isAdded ? '✓' : '+';
+            const txtSpan = document.createElement('span');
+            txtSpan.textContent = cleanTitle;
+
+            btn.appendChild(iconSpan);
+            btn.appendChild(txtSpan);
+            createSuggestTags.appendChild(btn);
+          });
+        }
+
+        if (createIdeasChips && toggleCreateIdeasBtn) {
+          const rowWrap = toggleCreateIdeasBtn.closest('.create-optional-suggest-row');
+          if (rowWrap) {
+            rowWrap.classList.toggle('is-hidden', resolved.tasks.length === 0);
+          }
+          createIdeasChips.innerHTML = '';
+          resolved.tasks.forEach((idea) => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'create-suggest-task-chip';
+            btn.textContent = idea.title || 'Suggested task';
+            btn.addEventListener('click', () => applyStarterIdea(idea));
+            createIdeasChips.appendChild(btn);
+          });
+        }
+      }
+
+      if (toggleCreateIdeasBtn && createIdeasPanel) {
+        toggleCreateIdeasBtn.addEventListener('click', () => {
+          const willOpen = createIdeasPanel.classList.contains('is-hidden');
+          createIdeasPanel.classList.toggle('is-hidden', !willOpen);
+          toggleCreateIdeasBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+        });
+      }
+
       createSubBtn.addEventListener('click', () => appendDraftStep(createSubInput.value, true));
       createSubInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
@@ -2189,443 +2235,6 @@
       }
 
       refreshCreateSuggestions();
-
-      // Reusable Task Templates Library & 1-Click Injection
-      const createTplSelect = document.getElementById('create-template-select');
-      const createTplInjectBtn = document.getElementById('btn-inject-create-template');
-      const browseCreateTplBtn = document.getElementById('btn-browse-create-templates');
-      const subtasksTplSelect = document.getElementById('subtasks-template-select');
-      const subtasksTplInjectBtn = document.getElementById('btn-inject-subtasks-template');
-      const browseSubtasksTplBtn = document.getElementById('btn-browse-subtasks-templates');
-      const openTplLibraryBtn = document.getElementById('btn-open-templates-library');
-
-      const tplModal = document.getElementById('modal-task-templates');
-      const tplGrid = document.getElementById('tpl-library-grid');
-      const tplPills = document.getElementById('tpl-category-pills');
-      const tplTargetSelect = document.getElementById('tpl-inject-target-select');
-      const tplSearchInput = document.getElementById('tpl-search-input');
-      const tplCreatePanel = document.getElementById('tpl-create-panel');
-      const tplToggleNewBtn = document.getElementById('btn-toggle-new-template');
-      const tplCancelNewBtn = document.getElementById('btn-cancel-new-template');
-      const tplCreateForm = document.getElementById('form-create-task-template');
-
-      let activeTplCategory = 'all';
-
-      const getTemplatesList = () => {
-        const ds = getTaskDataset() || {};
-        return Array.isArray(ds.templates) ? ds.templates : [];
-      };
-
-      const saveTemplatesList = (list) => {
-        const ds = getTaskDataset() || {};
-        ds.templates = Array.isArray(list) ? list : [];
-        saveTaskDataset(ds);
-      };
-
-      const populateTemplateSelects = () => {
-        const list = getTemplatesList();
-        const byCat = new Map();
-        list.forEach((t) => {
-          const cat = String(t.specialty_category || 'General');
-          if (!byCat.has(cat)) byCat.set(cat, []);
-          byCat.get(cat).push(t);
-        });
-
-        [createTplSelect, subtasksTplSelect].forEach((sel, idx) => {
-          if (!sel) return;
-          const prevVal = sel.value;
-          sel.innerHTML = '';
-          const ph = document.createElement('option');
-          ph.value = '';
-          ph.textContent = idx === 0
-            ? 'Choose a template by VA specialization...'
-            : 'Select VA specialization template...';
-          sel.appendChild(ph);
-
-          Array.from(byCat.keys()).sort((a, b) => a.localeCompare(b)).forEach((cat) => {
-            const grp = document.createElement('optgroup');
-            grp.label = cat;
-            byCat.get(cat).forEach((tpl) => {
-              const opt = document.createElement('option');
-              opt.value = tpl.id;
-              const stepsCnt = Array.isArray(tpl.subtasks) ? tpl.subtasks.length : 0;
-              opt.textContent = tpl.title + ' (' + stepsCnt + ' steps)';
-              grp.appendChild(opt);
-            });
-            sel.appendChild(grp);
-          });
-
-          if (prevVal && list.some((t) => t.id === prevVal)) {
-            sel.value = prevVal;
-          }
-        });
-      };
-
-      const populateTargetTasksSelect = (preferredTaskId) => {
-        if (!tplTargetSelect) return;
-        const ds = getTaskDataset() || {};
-        const tasksObj = ds.tasks || {};
-        tplTargetSelect.innerHTML = '';
-
-        const newOpt = document.createElement('option');
-        newOpt.value = '__new__';
-        newOpt.textContent = 'Inject Target: + New Deliverable';
-        tplTargetSelect.appendChild(newOpt);
-
-        Object.values(tasksObj).forEach((t) => {
-          const opt = document.createElement('option');
-          opt.value = t.id;
-          opt.textContent = 'Task: ' + (t.title || 'Untitled') + ' (' + (t.client_name || 'Client') + ')';
-          tplTargetSelect.appendChild(opt);
-        });
-
-        if (preferredTaskId && tasksObj[preferredTaskId]) {
-          tplTargetSelect.value = preferredTaskId;
-        } else {
-          tplTargetSelect.value = '__new__';
-        }
-      };
-
-      const injectTemplateIntoCreateDrawer = (tpl) => {
-        if (!tpl || !createDrawer) return;
-        const titleInp = createDrawer.querySelector('input[name="title"]');
-        const descInp = createDrawer.querySelector('textarea[name="description"]');
-        const prioSel = createDrawer.querySelector('select[name="priority"]');
-        const hrsInp = createDrawer.querySelector('input[name="estimated_hours"]');
-
-        if (titleInp && !titleInp.value.trim()) {
-          titleInp.value = tpl.title || '';
-        }
-        if (descInp && !descInp.value.trim() && tpl.description) {
-          descInp.value = tpl.description;
-        }
-        if (prioSel && tpl.default_priority) {
-          prioSel.value = tpl.default_priority;
-        }
-        if (hrsInp && tpl.default_estimated_hours) {
-          hrsInp.value = String(tpl.default_estimated_hours);
-        }
-
-        const steps = Array.isArray(tpl.subtasks) ? tpl.subtasks : [];
-        steps.forEach((step) => appendDraftStep(step, false));
-        showToast('Injected "' + tpl.title + '" (' + steps.length + ' subtasks)', 'success');
-      };
-
-      const injectTemplateIntoExistingTask = async (taskId, tpl, triggerBtn) => {
-        if (!taskId || !tpl) return;
-        const origLabel = triggerBtn ? triggerBtn.textContent : '';
-        if (triggerBtn) {
-          triggerBtn.disabled = true;
-          triggerBtn.textContent = 'Injecting...';
-        }
-        try {
-          const res = await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId) + '/inject-template', {
-            method: 'POST',
-            body: JSON.stringify({ template_id: tpl.id })
-          });
-          const ds = getTaskDataset() || {};
-          ds.subtasks = ds.subtasks || {};
-          if (res && Array.isArray(res.subtasks)) {
-            ds.subtasks[taskId] = res.subtasks;
-          }
-          if (Array.isArray(ds.templates)) {
-            const found = ds.templates.find((item) => item.id === tpl.id);
-            if (found) found.usage_count = Number(found.usage_count || 0) + 1;
-          }
-          saveTaskDataset(ds);
-          renderSubtasksForTask(taskId, ds);
-          syncTaskCardIndicators(taskId, ds);
-          populateTemplateSelects();
-          renderTemplateLibraryModal();
-
-          const added = Number(res && res.added_count != null ? res.added_count : 0);
-          showToast(
-            added > 0
-              ? ('Injected ' + added + ' subtask(s) from "' + tpl.title + '"')
-              : ('All steps from "' + tpl.title + '" are already in this checklist'),
-            added > 0 ? 'success' : 'info'
-          );
-        } catch (err) {
-          showToast(err.message || 'Unable to inject template', 'error');
-        } finally {
-          if (triggerBtn) {
-            triggerBtn.disabled = false;
-            triggerBtn.textContent = origLabel;
-          }
-        }
-      };
-
-      function renderTemplateLibraryModal() {
-        if (!tplGrid || !tplPills) return;
-        const list = getTemplatesList();
-        const categories = ['all'];
-        list.forEach((t) => {
-          const c = String(t.specialty_category || '').trim();
-          if (c && !categories.includes(c)) categories.push(c);
-        });
-        if (activeTplCategory !== 'all' && !categories.includes(activeTplCategory)) {
-          activeTplCategory = 'all';
-        }
-
-        tplPills.innerHTML = '';
-        categories.forEach((cat) => {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.className = 'collab-filter-chip' + (activeTplCategory === cat ? ' is-active' : '');
-          btn.setAttribute('data-tpl-cat', cat);
-          const cnt = cat === 'all'
-            ? list.length
-            : list.filter((t) => String(t.specialty_category || '') === cat).length;
-          btn.textContent = (cat === 'all' ? 'All Specializations' : cat) + ' (' + cnt + ')';
-          tplPills.appendChild(btn);
-        });
-
-        const q = String(tplSearchInput ? tplSearchInput.value : '').trim().toLowerCase();
-        const filtered = list.filter((t) => {
-          if (activeTplCategory !== 'all' && String(t.specialty_category || '') !== activeTplCategory) {
-            return false;
-          }
-          if (!q) return true;
-          const hay = [
-            t.title,
-            t.specialty_category,
-            t.description,
-            ...(Array.isArray(t.subtasks) ? t.subtasks : [])
-          ].join(' ').toLowerCase();
-          return hay.includes(q);
-        });
-
-        tplGrid.innerHTML = '';
-        if (!filtered.length) {
-          const empty = document.createElement('div');
-          empty.className = 'notice notice-info';
-          empty.style.gridColumn = '1 / -1';
-          empty.textContent = 'No templates match this specialization or search filter. Click "+ New Template" to create one.';
-          tplGrid.appendChild(empty);
-          return;
-        }
-
-        filtered.forEach((tpl) => {
-          const card = document.createElement('article');
-          card.className = 'tpl-card';
-
-          const top = document.createElement('div');
-          top.className = 'tpl-card-top';
-          const catBadge = document.createElement('span');
-          catBadge.className = 'badge badge-brand';
-          catBadge.textContent = tpl.specialty_category || 'General';
-          const metaRight = document.createElement('div');
-          metaRight.style.display = 'flex';
-          metaRight.style.alignItems = 'center';
-          metaRight.style.gap = '6px';
-          const prioBadge = document.createElement('span');
-          const prio = String(tpl.default_priority || 'medium').toLowerCase();
-          prioBadge.className = 'badge priority-badge priority-' + prio;
-          prioBadge.textContent = prio.charAt(0).toUpperCase() + prio.slice(1);
-          const hrsBadge = document.createElement('span');
-          hrsBadge.className = 'badge badge-neutral tabular-nums';
-          hrsBadge.textContent = Number(tpl.default_estimated_hours || 2).toFixed(1) + 'h';
-          metaRight.appendChild(prioBadge);
-          metaRight.appendChild(hrsBadge);
-          top.appendChild(catBadge);
-          top.appendChild(metaRight);
-
-          const titleEl = document.createElement('h4');
-          titleEl.className = 'tpl-card-title';
-          titleEl.textContent = tpl.title || 'Template';
-
-          const descEl = document.createElement('p');
-          descEl.className = 'muted tpl-card-desc';
-          descEl.textContent = tpl.description || 'Reusable deliverable workflow with pre-defined subtasks.';
-
-          const stepsList = document.createElement('ul');
-          stepsList.className = 'tpl-card-steps';
-          const steps = Array.isArray(tpl.subtasks) ? tpl.subtasks : [];
-          steps.slice(0, 5).forEach((st) => {
-            const li = document.createElement('li');
-            li.textContent = st;
-            stepsList.appendChild(li);
-          });
-          if (steps.length > 5) {
-            const more = document.createElement('li');
-            more.className = 'muted';
-            more.textContent = '+' + (steps.length - 5) + ' more step(s)';
-            stepsList.appendChild(more);
-          }
-
-          const footer = document.createElement('div');
-          footer.className = 'tpl-card-footer';
-          const usageSpan = document.createElement('span');
-          usageSpan.className = 'muted tabular-nums';
-          usageSpan.style.fontSize = '11.5px';
-          usageSpan.textContent = steps.length + ' subtasks · ' + Number(tpl.usage_count || 0) + ' uses';
-
-          const btns = document.createElement('div');
-          btns.style.display = 'flex';
-          btns.style.gap = '6px';
-          btns.style.alignItems = 'center';
-
-          if (!tpl.is_system) {
-            const delBtn = document.createElement('button');
-            delBtn.type = 'button';
-            delBtn.className = 'btn btn-secondary btn-xs';
-            delBtn.textContent = 'Delete';
-            delBtn.addEventListener('click', async () => {
-              delBtn.disabled = true;
-              try {
-                const res = await apiFetch('/api/v1/tasks/templates/' + encodeURIComponent(tpl.id), { method: 'DELETE' });
-                if (res && Array.isArray(res.templates)) {
-                  saveTemplatesList(res.templates);
-                } else {
-                  saveTemplatesList(getTemplatesList().filter((x) => x.id !== tpl.id));
-                }
-                populateTemplateSelects();
-                renderTemplateLibraryModal();
-                showToast('Template removed', 'success');
-              } catch (err) {
-                delBtn.disabled = false;
-                showToast(err.message || 'Unable to delete template', 'error');
-              }
-            });
-            btns.appendChild(delBtn);
-          }
-
-          const injectBtn = document.createElement('button');
-          injectBtn.type = 'button';
-          injectBtn.className = 'btn btn-primary btn-sm';
-          injectBtn.textContent = '1-Click Inject';
-          injectBtn.addEventListener('click', async () => {
-            const targetId = tplTargetSelect ? tplTargetSelect.value : '__new__';
-            if (!targetId || targetId === '__new__') {
-              closeAllModals(true);
-              openDrawer('drawer-create-task');
-              injectTemplateIntoCreateDrawer(tpl);
-            } else {
-              await injectTemplateIntoExistingTask(targetId, tpl, injectBtn);
-              if (activeSubtasksTaskId === targetId) {
-                renderSubtasksForTask(targetId, getTaskDataset() || {});
-              }
-            }
-          });
-          btns.appendChild(injectBtn);
-
-          footer.appendChild(usageSpan);
-          footer.appendChild(btns);
-
-          card.appendChild(top);
-          card.appendChild(titleEl);
-          card.appendChild(descEl);
-          card.appendChild(stepsList);
-          card.appendChild(footer);
-          tplGrid.appendChild(card);
-        });
-      }
-
-      const openTemplatesLibrary = (preferredTaskId) => {
-        if (!tplModal) return;
-        populateTargetTasksSelect(preferredTaskId || '');
-        renderTemplateLibraryModal();
-        openModal('modal-task-templates');
-      };
-
-      populateTemplateSelects();
-
-      if (createTplInjectBtn && createTplSelect) {
-        createTplInjectBtn.addEventListener('click', () => {
-          const tpl = getTemplatesList().find((t) => t.id === createTplSelect.value);
-          if (!tpl) {
-            showToast('Select a template first', 'info');
-            return;
-          }
-          injectTemplateIntoCreateDrawer(tpl);
-        });
-      }
-
-      if (subtasksTplInjectBtn && subtasksTplSelect) {
-        subtasksTplInjectBtn.addEventListener('click', () => {
-          if (!activeSubtasksTaskId) return;
-          const tpl = getTemplatesList().find((t) => t.id === subtasksTplSelect.value);
-          if (!tpl) {
-            showToast('Select a template to inject', 'info');
-            return;
-          }
-          injectTemplateIntoExistingTask(activeSubtasksTaskId, tpl, subtasksTplInjectBtn);
-        });
-      }
-
-      if (openTplLibraryBtn) {
-        openTplLibraryBtn.addEventListener('click', () => openTemplatesLibrary('__new__'));
-      }
-      if (browseCreateTplBtn) {
-        browseCreateTplBtn.addEventListener('click', () => openTemplatesLibrary('__new__'));
-      }
-      if (browseSubtasksTplBtn) {
-        browseSubtasksTplBtn.addEventListener('click', () => {
-          const currentTid = activeSubtasksTaskId || '__new__';
-          closeAllModals(true);
-          openTemplatesLibrary(currentTid);
-        });
-      }
-
-      if (tplPills) {
-        tplPills.addEventListener('click', (e) => {
-          const pill = e.target.closest('[data-tpl-cat]');
-          if (!pill) return;
-          activeTplCategory = pill.getAttribute('data-tpl-cat') || 'all';
-          renderTemplateLibraryModal();
-        });
-      }
-
-      if (tplSearchInput) {
-        tplSearchInput.addEventListener('input', renderTemplateLibraryModal);
-      }
-
-      if (tplToggleNewBtn && tplCreatePanel) {
-        tplToggleNewBtn.addEventListener('click', () => {
-          tplCreatePanel.classList.toggle('is-hidden');
-        });
-      }
-      if (tplCancelNewBtn && tplCreatePanel) {
-        tplCancelNewBtn.addEventListener('click', () => {
-          tplCreatePanel.classList.add('is-hidden');
-        });
-      }
-
-      if (tplCreateForm) {
-        tplCreateForm.addEventListener('submit', async (e) => {
-          e.preventDefault();
-          const fd = new FormData(tplCreateForm);
-          const submitBtn = tplCreateForm.querySelector('button[type="submit"]');
-          if (submitBtn) submitBtn.disabled = true;
-          try {
-            const payload = {
-              title: String(fd.get('title') || '').trim(),
-              specialty_category: String(fd.get('specialty_category') || '').trim(),
-              default_priority: String(fd.get('default_priority') || 'medium'),
-              default_estimated_hours: Number(fd.get('default_estimated_hours') || 2),
-              description: String(fd.get('description') || '').trim(),
-              subtasks: String(fd.get('subtasks') || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
-            };
-            const res = await apiFetch('/api/v1/tasks/templates', {
-              method: 'POST',
-              body: JSON.stringify(payload)
-            });
-            if (res && Array.isArray(res.templates)) {
-              saveTemplatesList(res.templates);
-            }
-            tplCreateForm.reset();
-            if (tplCreatePanel) tplCreatePanel.classList.add('is-hidden');
-            activeTplCategory = payload.specialty_category || 'all';
-            populateTemplateSelects();
-            renderTemplateLibraryModal();
-            showToast('Reusable template saved to library', 'success');
-          } catch (err) {
-            showToast(err.message || 'Failed to save template', 'error');
-          } finally {
-            if (submitBtn) submitBtn.disabled = false;
-          }
-        });
-      }
     }
   }
 

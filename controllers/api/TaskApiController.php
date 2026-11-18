@@ -306,6 +306,209 @@ final class TaskApiController
         }
     }
 
+    /**
+     * Backend-only suggestion engine combining internal VA specialties & task_templates.
+     * Returns only clean UI-ready steps & optional task starters (never exposes internal categories/templates).
+     */
+    public static function buildInternalSuggestionsForVas(PDO $db, array $vaIds): array
+    {
+        self::ensureTaskSchemaConstraints($db);
+
+        $presetSteps = [
+            'Development' => [
+                'Verify staging & lint checks',
+                'Run regression QA test pass',
+                'Update repository & PR notes',
+                'Confirm production deploy check',
+            ],
+            'Marketing' => [
+                'Audit brand voice & copywriting',
+                'Verify UTM links & pixel tracking',
+                'Prepare & size creative assets',
+                'Schedule campaign & QA preview',
+            ],
+            'Social Media Manager' => [
+                'Draft post copy & hook variations',
+                'Size & export branded visual creatives',
+                'Schedule posts across active channels',
+                'Verify UTM links & hashtag formatting',
+            ],
+            'Legal' => [
+                'Review clauses, dates & entities',
+                'Cross-check compliance checklist',
+                'Verify signatory & witness fields',
+                'Archive executed PDF copy',
+            ],
+            'Insurance' => [
+                'Verify policy limits & coverage',
+                'Audit client underwriting docs',
+                'Update carrier portal status',
+                'Send COI / renewal confirmation',
+            ],
+            'Healthcare' => [
+                'Verify HIPAA privacy compliance',
+                'Confirm patient & provider intake',
+                'Audit billing & coding accuracy',
+                'Log EHR follow-up summary',
+            ],
+            'Administrative' => [
+                'Audit inbox & calendar conflicts',
+                'Organize client cloud folders',
+                'Update CRM tracker records',
+                'Send EOD status summary',
+            ],
+            'Executive Admin' => [
+                'Audit unread priority emails & flag VIPs',
+                'Confirm 48h calendar invites & buffers',
+                'Prepare executive briefing packet',
+                'Send EOD inbox zero status summary',
+            ],
+            'Data Entry' => [
+                'Deduplicate contact & account rows',
+                'Standardize phone, email & address fields',
+                'Validate missing required records',
+                'Cross-check totals & export clean CSV',
+            ],
+            'Management' => [
+                'Confirm pod owners & capacity',
+                'Review SLA milestones & blockers',
+                'Verify QA sign-off criteria',
+                'Send stakeholder progress brief',
+            ],
+            'Accounting' => [
+                'Reconcile invoices & receipts',
+                'Verify ledger account categories',
+                'Cross-check tax & due dates',
+                'Export reconciled ledger summary',
+            ],
+            'General' => [
+                'Review acceptance criteria',
+                'Complete primary deliverable draft',
+                'Self-QA & proofread output',
+                'Confirm client handoff ready',
+            ],
+        ];
+
+        $categoryAliases = [
+            'administrative' => ['Administrative', 'Executive Admin', 'Data Entry'],
+            'marketing'      => ['Marketing', 'Social Media Manager'],
+            'accounting'     => ['Accounting', 'Data Entry'],
+            'management'     => ['Management', 'Executive Admin'],
+        ];
+
+        $allTemplates = self::listTaskTemplates($db);
+        $templatesByCat = [];
+        foreach ($allTemplates as $tpl) {
+            $catKey = strtolower(trim((string) ($tpl['specialty_category'] ?? '')));
+            if ($catKey !== '') {
+                $templatesByCat[$catKey][] = $tpl;
+            }
+        }
+
+        $cleanIds = array_values(array_unique(array_filter(array_map('strval', $vaIds), static fn(string $v): bool => $v !== '')));
+        $specsByVa = [];
+        if (!empty($cleanIds)) {
+            try {
+                $ph = implode(',', array_fill(0, count($cleanIds), '?'));
+                $spStmt = $db->prepare("SELECT va_id, specialty FROM va_specialties WHERE va_id IN ({$ph}) ORDER BY specialty ASC");
+                $spStmt->execute($cleanIds);
+                foreach ($spStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
+                    $specsByVa[(string) $row['va_id']][] = (string) $row['specialty'];
+                }
+            } catch (Throwable) {
+                $specsByVa = [];
+            }
+        }
+
+        $buildForSpecs = static function (array $specs) use ($presetSteps, $categoryAliases, $templatesByCat, $allTemplates): array {
+            $expandedCats = [];
+            foreach ($specs as $sp) {
+                $trimmed = trim((string) $sp);
+                if ($trimmed === '') {
+                    continue;
+                }
+                $low = strtolower($trimmed);
+                $expandedCats[] = $trimmed;
+                if (isset($categoryAliases[$low])) {
+                    foreach ($categoryAliases[$low] as $alias) {
+                        $expandedCats[] = $alias;
+                    }
+                }
+            }
+            $expandedCats = array_values(array_unique($expandedCats));
+
+            $steps = [];
+            $seenSteps = [];
+            $pushStep = static function (string $s) use (&$steps, &$seenSteps): void {
+                $clean = trim($s);
+                $low = strtolower($clean);
+                if ($clean !== '' && !isset($seenSteps[$low])) {
+                    $seenSteps[$low] = true;
+                    $steps[] = $clean;
+                }
+            };
+
+            $tasks = [];
+            $seenTasks = [];
+            $pushTask = static function (array $tpl) use (&$tasks, &$seenTasks): void {
+                $title = trim((string) ($tpl['title'] ?? ''));
+                $low = strtolower($title);
+                if ($title === '' || isset($seenTasks[$low])) {
+                    return;
+                }
+                $seenTasks[$low] = true;
+                $tasks[] = [
+                    'title'           => $title,
+                    'description'     => (string) ($tpl['description'] ?? ''),
+                    'priority'        => (string) ($tpl['default_priority'] ?? 'medium'),
+                    'estimated_hours' => (float) ($tpl['default_estimated_hours'] ?? 2.0),
+                    'steps'           => array_values($tpl['subtasks'] ?? []),
+                ];
+            };
+
+            foreach ($expandedCats as $cat) {
+                $catLow = strtolower($cat);
+                foreach (($templatesByCat[$catLow] ?? []) as $tpl) {
+                    $pushTask($tpl);
+                    foreach (($tpl['subtasks'] ?? []) as $st) {
+                        $pushStep((string) $st);
+                    }
+                }
+                foreach ($presetSteps as $pKey => $pList) {
+                    if (strtolower($pKey) === $catLow) {
+                        foreach ($pList as $st) {
+                            $pushStep($st);
+                        }
+                    }
+                }
+            }
+
+            if (empty($tasks)) {
+                foreach (array_slice($allTemplates, 0, 4) as $tpl) {
+                    $pushTask($tpl);
+                }
+            }
+
+            foreach ($presetSteps['General'] as $st) {
+                $pushStep($st);
+            }
+
+            return [
+                'steps' => array_slice($steps, 0, 8),
+                'tasks' => array_slice($tasks, 0, 4),
+            ];
+        };
+
+        $result = [
+            '__default__' => $buildForSpecs([]),
+        ];
+        foreach ($cleanIds as $vid) {
+            $result[$vid] = $buildForSpecs($specsByVa[$vid] ?? []);
+        }
+
+        return $result;
+    }
+
     public static function getMentionCandidatesForTask(PDO $db, array $task, array $user): array
     {
         $clientId = (string) ($task['client_id'] ?? '');

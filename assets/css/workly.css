@@ -4830,145 +4830,86 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   }
 }
 
-/* Reusable Task Templates Library & 1-Click Quick Inject */
-.modal-panel-templates {
-  max-width: 920px;
+.banner-container-one {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
 }
 
-.tpl-quick-bar {
-  padding: 10px 12px;
-  border-radius: 12px;
+.banner-container-two {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+/* Optional Quick Deliverable Suggestions in Create Drawer */
+.create-optional-suggest-row {
+  margin-bottom: 12px;
+}
+
+.create-optional-suggest-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px dashed var(--border-strong);
+  background: var(--surface-alt);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+
+.create-optional-suggest-toggle:hover {
+  border-color: var(--brand);
+  color: var(--brand);
+  background: var(--brand-soft);
+}
+
+.create-optional-suggest-chevron {
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.create-optional-suggest-toggle[aria-expanded="true"] .create-optional-suggest-chevron {
+  transform: rotate(180deg);
+}
+
+.create-optional-tasks-panel {
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 10px;
   background: var(--surface-alt);
   border: 1px solid var(--border);
 }
 
-.tpl-quick-bar-head {
+.create-suggested-tasks-chips {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 7px;
-}
-
-.tpl-quick-bar-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.tpl-quick-bar-row .select {
-  flex: 1;
-  min-width: 0;
-}
-
-.tpl-create-panel {
-  margin-bottom: 16px;
-  padding: 14px;
-  border-radius: 12px;
-  background: var(--surface-alt);
-  border: 1px solid var(--border-strong);
-}
-
-.tpl-library-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 14px;
-}
-
-.tpl-category-pills {
-  display: flex;
-  align-items: center;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.tpl-toolbar-right {
-  display: flex;
+.create-suggest-task-chip {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  flex: 1 1 320px;
-  justify-content: flex-end;
-}
-
-.tpl-target-select {
-  min-width: 210px;
-  max-width: 270px;
-}
-
-.tpl-search-input {
-  min-width: 190px;
-  max-width: 240px;
-}
-
-.tpl-library-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  max-height: 54vh;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.tpl-card {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 14px;
-  border-radius: 12px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
   background: var(--surface);
-  border: 1px solid var(--border);
-  box-shadow: var(--shadow-xs);
-  transition: border-color 0.14s ease, box-shadow 0.14s ease;
-}
-
-.tpl-card:hover {
-  border-color: var(--brand);
-  box-shadow: var(--shadow-sm);
-}
-
-.tpl-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.tpl-card-title {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 700;
   color: var(--ink);
-}
-
-.tpl-card-desc {
-  margin: 0;
   font-size: 12px;
-  line-height: 1.45;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease;
 }
 
-.tpl-card-steps {
-  margin: 2px 0 4px;
-  padding-left: 16px;
-  display: grid;
-  gap: 3px;
-  font-size: 12px;
-  color: var(--ink-soft);
-}
-
-.tpl-card-footer {
-  margin-top: auto;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  flex-wrap: wrap;
+.create-suggest-task-chip:hover {
+  border-color: var(--brand);
+  background: var(--brand-soft);
+  color: var(--brand);
 }
 
 /* --------------------------------------------------------------------------
@@ -5081,17 +5022,6 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   .cookie-banner-actions {
     width: 100%;
     justify-content: flex-end;
-  }
-  .tpl-library-grid {
-    grid-template-columns: 1fr;
-  }
-  .tpl-target-select, .tpl-search-input {
-    max-width: none;
-    flex: 1 1 100%;
-  }
-  .tpl-quick-bar-row {
-    flex-direction: column;
-    align-items: stretch;
   }
 }
 

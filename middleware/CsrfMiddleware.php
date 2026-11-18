@@ -17,9 +17,9 @@ final class CsrfMiddleware
 
         SecurityHelper::configureSecureSession();
         $headers = function_exists('getallheaders') ? getallheaders() : [];
-        $token = $headers['X-CSRF-Token'] ?? $headers['x-csrf-token'] ?? ($_POST['_csrf'] ?? '');
+        $token = (string) ($headers['X-CSRF-Token'] ?? $headers['x-csrf-token'] ?? ($_POST['_csrf'] ?? ''));
 
-        if (empty($_SESSION['workly_csrf_token']) || empty($token) || !hash_equals((string) $_SESSION['workly_csrf_token'], (string) $token)) {
+        if (!SecurityHelper::verifyCsrfToken($token)) {
             http_response_code(403);
             echo json_encode([
                 'error' => 'Invalid or missing CSRF token',
@@ -29,13 +29,28 @@ final class CsrfMiddleware
         }
     }
 
-    public static function validateForm(): void
+    public static function checkFormCsrf(): bool
     {
         SecurityHelper::configureSecureSession();
         $token = (string) ($_POST['_csrf'] ?? '');
-        if (empty($_SESSION['workly_csrf_token']) || $token === '' || !hash_equals((string) $_SESSION['workly_csrf_token'], $token)) {
-            http_response_code(403);
-            exit('Security check failed (CSRF mismatch). Please go back and reload the page.');
+        return SecurityHelper::verifyCsrfToken($token);
+    }
+
+    public static function validateForm(string $fallbackRedirect = '/login'): void
+    {
+        if (!self::checkFormCsrf()) {
+            SecurityHelper::rotateCsrfToken();
+            $_SESSION['workly_flash_error'] = 'Your security session expired. Please verify your details and try again.';
+            $target = $fallbackRedirect;
+            $referer = (string) ($_SERVER['HTTP_REFERER'] ?? '');
+            if ($referer !== '') {
+                $refPath = (string) (parse_url($referer, PHP_URL_PATH) ?: '');
+                if ($refPath !== '' && str_starts_with($refPath, '/')) {
+                    $target = $refPath;
+                }
+            }
+            header('Location: ' . $target, true, 303);
+            exit;
         }
     }
 }

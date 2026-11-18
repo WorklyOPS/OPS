@@ -53,6 +53,11 @@ final class SecurityHelper
             || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
     }
 
+    public static function cookieSameSite(): string
+    {
+        return self::isHttpsRequest() ? 'None' : 'Lax';
+    }
+
     public static function setCookieConsentCookie(string $consent): void
     {
         $val = $consent === 'declined' ? 'declined' : 'accepted';
@@ -62,7 +67,7 @@ final class SecurityHelper
             'domain'   => '',
             'secure'   => self::isHttpsRequest(),
             'httponly' => false,
-            'samesite' => 'Lax',
+            'samesite' => self::cookieSameSite(),
         ]);
         $_COOKIE['workly_cookie_consent'] = $val;
     }
@@ -71,12 +76,13 @@ final class SecurityHelper
     {
         if (session_status() === PHP_SESSION_NONE) {
             $isHttps = self::isHttpsRequest();
+            $sameSite = self::cookieSameSite();
             $lifetime = self::hasDeclinedPersistentCookies() ? 0 : 2592000;
 
             ini_set('session.use_strict_mode', '1');
             ini_set('session.use_only_cookies', '1');
             ini_set('session.cookie_httponly', '1');
-            ini_set('session.cookie_samesite', 'Lax');
+            ini_set('session.cookie_samesite', $sameSite);
             ini_set('session.cookie_lifetime', (string) $lifetime);
             ini_set('session.gc_maxlifetime', '2592000');
 
@@ -86,7 +92,7 @@ final class SecurityHelper
                 'domain'   => '',
                 'secure'   => $isHttps,
                 'httponly' => true,
-                'samesite' => 'Lax',
+                'samesite' => $sameSite,
             ]);
             @session_start();
         }
@@ -104,7 +110,7 @@ final class SecurityHelper
             'domain'   => '',
             'secure'   => self::isHttpsRequest(),
             'httponly' => true,
-            'samesite' => 'Lax',
+            'samesite' => self::cookieSameSite(),
         ]);
     }
 
@@ -171,7 +177,7 @@ final class SecurityHelper
                 'domain'   => '',
                 'secure'   => self::isHttpsRequest(),
                 'httponly' => true,
-                'samesite' => 'Lax',
+                'samesite' => self::cookieSameSite(),
             ]);
         }
         if ($expires < time()) {
@@ -344,20 +350,75 @@ final class SecurityHelper
         self::setPersistentAuthCookie('', time() - 42000);
     }
 
+    private static function setCsrfSignatureCookie(string $token): void
+    {
+        if ($token === '') {
+            return;
+        }
+        $exp = time() + 43200; // 12h window
+        $sig = hash_hmac('sha256', $token . '|' . $exp, Secrets::get('CSRF_SALT'));
+        $cookieVal = $exp . '.' . $sig;
+        if (!headers_sent()) {
+            setcookie('workly_csrf_sig', $cookieVal, [
+                'expires'  => $exp,
+                'path'     => '/',
+                'domain'   => '',
+                'secure'   => self::isHttpsRequest(),
+                'httponly' => true,
+                'samesite' => self::cookieSameSite(),
+            ]);
+        }
+        $_COOKIE['workly_csrf_sig'] = $cookieVal;
+    }
+
     public static function csrfToken(): string
     {
         self::configureSecureSession();
         if (empty($_SESSION['workly_csrf_token'])) {
             $_SESSION['workly_csrf_token'] = bin2hex(random_bytes(32));
         }
-        return (string) $_SESSION['workly_csrf_token'];
+        $token = (string) $_SESSION['workly_csrf_token'];
+        self::setCsrfSignatureCookie($token);
+        return $token;
     }
 
     public static function rotateCsrfToken(): string
     {
         self::configureSecureSession();
-        $_SESSION['workly_csrf_token'] = bin2hex(random_bytes(32));
-        return (string) $_SESSION['workly_csrf_token'];
+        $token = bin2hex(random_bytes(32));
+        $_SESSION['workly_csrf_token'] = $token;
+        self::setCsrfSignatureCookie($token);
+        return $token;
+    }
+
+    public static function verifyCsrfToken(?string $token): bool
+    {
+        self::configureSecureSession();
+        $given = trim((string) $token);
+        if ($given === '' || !preg_match('/^[a-f0-9]{32,128}$/', $given)) {
+            return false;
+        }
+
+        $sessionToken = (string) ($_SESSION['workly_csrf_token'] ?? '');
+        if ($sessionToken !== '' && hash_equals($sessionToken, $given)) {
+            return true;
+        }
+
+        // Resilient double-submit HMAC fallback if server session expired/restarted while form was open
+        $cookieSig = trim((string) ($_COOKIE['workly_csrf_sig'] ?? ''));
+        if ($cookieSig !== '' && str_contains($cookieSig, '.')) {
+            [$expStr, $sig] = explode('.', $cookieSig, 2);
+            $exp = (int) $expStr;
+            if ($exp >= time() && preg_match('/^[a-f0-9]{64}$/', $sig)) {
+                $expectedSig = hash_hmac('sha256', $given . '|' . $exp, Secrets::get('CSRF_SALT'));
+                if (hash_equals($expectedSig, $sig)) {
+                    $_SESSION['workly_csrf_token'] = $given;
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     public static function e(?string $value): string
@@ -461,8 +522,22 @@ final class SecurityHelper
             $code .= $alphabet[random_int(0, strlen($alphabet) - 1)];
         }
 
-        $_SESSION['workly_captcha_hash'] = hash_hmac('sha256', $code, Secrets::get('CSRF_SALT'));
-        $_SESSION['workly_captcha_exp'] = time() + 600;
+        $capHash = hash_hmac('sha256', $code, Secrets::get('CSRF_SALT'));
+        $capExp = time() + 600;
+        $_SESSION['workly_captcha_hash'] = $capHash;
+        $_SESSION['workly_captcha_exp'] = $capExp;
+
+        $capCookieSig = hash_hmac('sha256', $capHash . '|' . $capExp, Secrets::get('CSRF_SALT'));
+        if (!headers_sent()) {
+            setcookie('workly_captcha_sig', $capExp . '.' . $capHash . '.' . $capCookieSig, [
+                'expires'  => $capExp,
+                'path'     => '/',
+                'domain'   => '',
+                'secure'   => self::isHttpsRequest(),
+                'httponly' => true,
+                'samesite' => self::cookieSameSite(),
+            ]);
+        }
 
         $lines = '';
         for ($i = 0; $i < 5; $i++) {
@@ -503,6 +578,29 @@ final class SecurityHelper
         $expected = (string) ($_SESSION['workly_captcha_hash'] ?? '');
         $exp = (int) ($_SESSION['workly_captcha_exp'] ?? 0);
         unset($_SESSION['workly_captcha_hash'], $_SESSION['workly_captcha_exp']);
+
+        if ($expected === '' || $exp < time()) {
+            $rawCookie = trim((string) ($_COOKIE['workly_captcha_sig'] ?? ''));
+            if ($rawCookie !== '' && substr_count($rawCookie, '.') === 2) {
+                [$cExpStr, $cHash, $cSig] = explode('.', $rawCookie, 3);
+                $cExp = (int) $cExpStr;
+                $checkSig = hash_hmac('sha256', $cHash . '|' . $cExp, Secrets::get('CSRF_SALT'));
+                if ($cExp >= time() && hash_equals($checkSig, $cSig)) {
+                    $expected = $cHash;
+                    $exp = $cExp;
+                }
+            }
+        }
+        if (!headers_sent()) {
+            setcookie('workly_captcha_sig', '', [
+                'expires'  => time() - 3600,
+                'path'     => '/',
+                'domain'   => '',
+                'secure'   => self::isHttpsRequest(),
+                'httponly' => true,
+                'samesite' => self::cookieSameSite(),
+            ]);
+        }
 
         if ($expected === '' || time() > $exp) {
             return false;
