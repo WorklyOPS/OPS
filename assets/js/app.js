@@ -805,7 +805,7 @@
 
   function formatShortTs(ts) {
     if (!ts) return '';
-    return String(ts).replace('T', ' ').slice(0, 16);
+    return String(ts).replace('T', ' ').slice(0, 10);
   }
 
   function formatTime(ts) {
@@ -1289,7 +1289,6 @@
                 '</div>' +
                 '<div class="collab-entry-actions">' +
                   buildCollabActionBtn('Reply', 'reply', 'data-author-name', c.author_name) +
-                  buildCollabActionBtn('Copy', 'copy', 'data-copy-text', c.message) +
                 '</div>' +
               '</div>' +
               '<p class="collab-entry-text">' + formatTextWithMentionsHtml(c.message, taskId, allData) + '</p>' +

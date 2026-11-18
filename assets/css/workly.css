@@ -3120,7 +3120,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
     align-items: center;
     justify-content: center;
     margin: 20px 0;
-    color: var(--text-muted);
+    color: var(--ink);
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.02em;
@@ -3131,7 +3131,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
     content: "";
     flex: 1;
     height: 1px;
-    background: var(--border-color);
+    background: var(--brand);
 }
 
 .collab-day-separator::before {
@@ -3235,22 +3235,9 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
 .collab-comment-item.is-mine {
   align-self: flex-end;
   margin-left: auto;
-  flex-direction: row-reverse;
   background: var(--surface-alt);
   border-color: var(--border-strong);
   border-bottom-right-radius: 6px;
-}
-
-.collab-comment-item.is-mine .collab-entry-head {
-  flex-direction: row-reverse;
-}
-
-.collab-comment-item.is-mine .collab-entry-author {
-  justify-content: flex-end;
-}
-
-.collab-comment-item.is-mine .collab-entry-text {
-  text-align: right;
 }
 
 .collab-comment-item:hover {
