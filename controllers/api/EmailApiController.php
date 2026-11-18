@@ -254,6 +254,12 @@ final class EmailApiController
             return;
         }
 
+        if (($user['role'] ?? '') !== 'admin' && ($this->isAdminAddress($recipient) || $this->containsAdminCc($cc))) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Recipient is not available for email delivery']);
+            return;
+        }
+
         if (stripos($subject, 'Re:') !== 0) {
             $subject = 'Re: ' . $subject;
         }
@@ -319,6 +325,12 @@ final class EmailApiController
         if ($recipient === '' || $subject === '' || $body === '') {
             http_response_code(422);
             echo json_encode(['error' => 'Recipient email, subject, and body are required']);
+            return;
+        }
+
+        if (($user['role'] ?? '') !== 'admin' && ($this->isAdminAddress($recipient) || $this->containsAdminCc($cc))) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Recipient is not available for email delivery']);
             return;
         }
 
@@ -626,5 +638,35 @@ final class EmailApiController
         header('X-Content-Type-Options: nosniff');
         echo $bytes;
         exit;
+    }
+
+    private function isAdminAddress(string $email): bool
+    {
+        $clean = strtolower(trim($email));
+        if ($clean === '') {
+            return false;
+        }
+        $stmt = $this->db->prepare("
+            SELECT 1 FROM users WHERE LOWER(email) = :e1 AND role = 'admin'
+            UNION ALL
+            SELECT 1 FROM staff_connected_mailboxes m JOIN users u ON m.user_id = u.id WHERE LOWER(m.email) = :e2 AND u.role = 'admin'
+            LIMIT 1
+        ");
+        $stmt->execute([':e1' => $clean, ':e2' => $clean]);
+        return (bool) $stmt->fetchColumn();
+    }
+
+    private function containsAdminCc(string $cc): bool
+    {
+        if (trim($cc) === '') {
+            return false;
+        }
+        foreach (explode(',', $cc) as $part) {
+            $addr = trim($part);
+            if ($addr !== '' && $this->isAdminAddress($addr)) {
+                return true;
+            }
+        }
+        return false;
     }
 }

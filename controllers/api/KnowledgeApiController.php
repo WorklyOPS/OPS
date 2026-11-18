@@ -120,7 +120,7 @@ final class KnowledgeApiController
         $title = SecurityHelper::sanitizePlainText($input['title'] ?? '', 255);
         $category = SecurityHelper::sanitizePlainText($input['category'] ?? 'General SOP', 191);
         $clientId = SecurityHelper::sanitizePlainText($input['client_id'] ?? '', 64) ?: null;
-        $content = SecurityHelper::sanitizeRichHtml((string) ($input['content'] ?? ''), 30000);
+        $content = SecurityHelper::sanitizeRichHtml((string) ($input['content'] ?? ''), 60000);
 
         if ($title === '' || trim(strip_tags($content)) === '') {
             http_response_code(422);
@@ -156,7 +156,7 @@ final class KnowledgeApiController
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
         $title = SecurityHelper::sanitizePlainText($input['title'] ?? '', 255);
         $category = SecurityHelper::sanitizePlainText($input['category'] ?? '', 191);
-        $content = SecurityHelper::sanitizeRichHtml((string) ($input['content'] ?? ''), 30000);
+        $content = SecurityHelper::sanitizeRichHtml((string) ($input['content'] ?? ''), 60000);
         $clientId = array_key_exists('client_id', $input)
             ? (SecurityHelper::sanitizePlainText((string) $input['client_id'], 64) ?: null)
             : null;

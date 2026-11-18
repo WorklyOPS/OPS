@@ -2,7 +2,7 @@
 require_once __DIR__ . '/../partials/icons.php';
 
 $p = $data['profile'];
-$canManageProfile = in_array($role, ['admin', 'team_leader'], true);
+$canManageProfile = ($role === 'admin') || ($role === 'team_leader' && $p['id'] === $user['id']);
 $canManagePod = ($role === 'team_leader' && $p['id'] === $user['id']);
 
 $earnings = $data['earnings'] ?? [];
@@ -38,7 +38,7 @@ $tls = $data['team_leaders'] ?? [];
     </div>
   </div>
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;max-width:100%;">
-    <?php if (!empty($allStaff) && count($allStaff) > 1): ?>
+    <?php if ($role === 'admin' && !empty($allStaff) && count($allStaff) > 1): ?>
       <form method="GET" action="/profile" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;width:100%;max-width:100%;">
         <select name="va_id" class="select va-inspect-select">
           <?php foreach ($allStaff as $st): ?>

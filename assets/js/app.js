@@ -3,7 +3,7 @@
    Global Skeleton & Progress Coordinator, Portal Drawers/Modals, Header Bell
    & Profile Popovers, Hardened JSON Fetch, Swimlanes + Kanban Board, Client
    CRM Availability Slots, Unified Calendar Slot Scanner, Knowledge Base
-   WYSIWYG/PDF, Perks Icon Picker, Command Palette & SVG Charts.
+   Knowledge Studio/PDF, Perks Icon Picker, Command Palette & SVG Charts.
    ========================================================================== */
 
 (function () {
@@ -1136,10 +1136,11 @@
     const drawer = document.getElementById('drawer-task-collab');
     if (!drawer || !allData) return;
 
+    const currentUid = String(allData.current_user_id || '');
     const notes = ((allData.notes || {})[taskId]) || [];
     const comments = ((allData.comments || {})[taskId]) || [];
 
-    // Combined Timeline: Notes carry clean warm highlight; Comments stay crisp & neutral
+    // Combined Timeline: Notes carry clean warm highlight; Comments align right for self and left for others
     const combinedList = drawer.querySelector('#detail-combined-list');
     if (combinedList) {
       combinedList.innerHTML = '';
@@ -1147,6 +1148,7 @@
       notes.forEach((n) => {
         merged.push({
           kind: 'note',
+          author_id: n.author_id || '',
           author_name: n.author_name || 'Staff',
           author_role: n.author_role || 'va',
           avatar_url: n.avatar_url || '',
@@ -1157,6 +1159,7 @@
       comments.forEach((c) => {
         merged.push({
           kind: 'comment',
+          author_id: c.author_id || '',
           author_name: c.author_name || 'Staff',
           author_role: c.author_role || 'va',
           avatar_url: c.avatar_url || '',
@@ -1191,7 +1194,8 @@
                 '<p class="collab-entry-text">' + formatTextWithMentionsHtml(item.text, taskId, allData) + '</p>' +
               '</div>';
           } else {
-            el.className = 'collab-comment-item';
+            const isMine = currentUid !== '' && String(item.author_id || '') === currentUid;
+            el.className = 'collab-comment-item ' + (isMine ? 'is-mine' : 'is-other');
             el.innerHTML =
               renderSmallAvatarHtml(item.avatar_url, item.author_name) +
               '<div class="collab-entry-body">' +
@@ -1225,7 +1229,6 @@
         notes.forEach((n) => {
           const div = document.createElement('article');
           div.className = 'collab-note-item';
-          div.style.marginBottom = '10px';
           div.innerHTML =
             renderSmallAvatarHtml(n.avatar_url, n.author_name) +
             '<div class="collab-entry-body">' +
@@ -1254,8 +1257,8 @@
       } else {
         comments.forEach((c) => {
           const div = document.createElement('article');
-          div.className = 'collab-comment-item';
-          div.style.marginBottom = '10px';
+          const isMine = currentUid !== '' && String(c.author_id || '') === currentUid;
+          div.className = 'collab-comment-item ' + (isMine ? 'is-mine' : 'is-other');
           const rolePretty = String(c.author_role || 'va').replace('_', ' ');
           div.innerHTML =
             renderSmallAvatarHtml(c.avatar_url, c.author_name) +
@@ -3537,13 +3540,62 @@
   }
 
   // ------------------------------------------------------------------------
-  // Knowledge Base: Live Search, Category Filter Tags, WYSIWYG, Single PDF
+  // Knowledge Base: Live Search, Reader Modal, Document Studio & Single PDF
   // ------------------------------------------------------------------------
+  function printSopDocument(doc) {
+    if (!doc) return;
+    let stage = document.getElementById('kb-print-stage');
+    if (!stage) {
+      stage = document.createElement('div');
+      stage.id = 'kb-print-stage';
+      stage.className = 'kb-print-stage';
+      document.body.appendChild(stage);
+    } else if (stage.parentElement !== document.body) {
+      document.body.appendChild(stage);
+    }
+
+    const scopeLabel = doc.client_name ? ('Client Scope: ' + doc.client_name) : 'Global Playbook';
+    stage.innerHTML =
+      '<div class="kb-print-header">' +
+        '<div class="kb-print-badges">' +
+          '<span class="kb-print-badge">' + escapeHtml(doc.category || 'SOP') + '</span>' +
+          '<span class="kb-print-badge is-scope">' + escapeHtml(scopeLabel) + '</span>' +
+        '</div>' +
+        '<h1>' + escapeHtml(doc.title || 'Standard Operating Procedure') + '</h1>' +
+        '<div class="kb-print-meta">' +
+          'By ' + escapeHtml(doc.author || 'Operations Team') +
+          (doc.last_updated ? (' • Updated ' + escapeHtml(doc.last_updated)) : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="kb-rich-content kb-doc-surface">' + (doc.content || '') + '</div>';
+
+    document.body.classList.add('workly-print-sop');
+    const cleanup = () => {
+      document.body.classList.remove('workly-print-sop');
+      stage.innerHTML = '';
+    };
+    window.addEventListener('afterprint', cleanup, { once: true });
+    window.setTimeout(() => {
+      window.print();
+      window.setTimeout(cleanup, 1200);
+    }, 80);
+  }
+
   function initKnowledgeBase() {
     const searchInp = document.getElementById('kb-search');
     const catContainer = document.getElementById('kb-category-pills');
     const docCards = Array.from(document.querySelectorAll('.kb-doc-card'));
+    const storeEl = document.getElementById('kb-docs-json');
+    let docsMap = {};
+    if (storeEl) {
+      try {
+        docsMap = JSON.parse(storeEl.textContent || '{}');
+      } catch (_e) {
+        docsMap = {};
+      }
+    }
     let activeCat = '';
+    let activeReaderDocId = '';
 
     function filterDocs() {
       const q = searchInp ? searchInp.value.trim().toLowerCase() : '';
@@ -3569,54 +3621,324 @@
       });
     }
 
-    // CSP-safe WYSIWYG Editor Toolbar
-    document.querySelectorAll('[data-wysiwyg]').forEach((wrap) => {
-      const editor = wrap.querySelector('[data-wysiwyg-editor]');
-      const form = wrap.closest('[data-wysiwyg-form]');
-      const hiddenInp = form ? form.querySelector('[data-wysiwyg-input]') : null;
+    // Measure 400px/300px clipping on cards for fade & "open full document" cue (without View More button)
+    function measureKbClips() {
+      document.querySelectorAll('.kb-doc-card').forEach((card) => {
+        const clip = card.querySelector('.kb-rich-clip');
+        if (!clip) return;
+        const hasOverflow = clip.scrollHeight > clip.clientHeight + 8;
+        clip.classList.toggle('has-overflow', hasOverflow);
+        card.classList.toggle('has-overflow', hasOverflow);
+      });
+    }
+    window.setTimeout(measureKbClips, 240);
+    window.addEventListener('resize', measureKbClips);
 
-      const syncHidden = () => {
-        if (editor && hiddenInp) {
-          hiddenInp.value = editor.innerHTML.trim();
-        }
-      };
+    // Reader Modal
+    const readerModal = document.getElementById('modal-kb-reader');
+    const readerTitle = document.getElementById('kb-reader-title');
+    const readerCat = document.getElementById('kb-reader-category');
+    const readerScope = document.getElementById('kb-reader-scope');
+    const readerMeta = document.getElementById('kb-reader-meta');
+    const readerContent = document.getElementById('kb-reader-content');
+    const readerPdfBtn = document.getElementById('btn-kb-reader-pdf');
+    const readerEditBtn = document.getElementById('btn-kb-reader-edit');
 
-      if (editor) {
-        editor.addEventListener('input', syncHidden);
-        editor.addEventListener('blur', syncHidden);
+    function openKbReader(docId) {
+      const doc = docsMap[docId];
+      if (!doc || !readerModal) return;
+      activeReaderDocId = docId;
+      if (readerTitle) readerTitle.textContent = doc.title || 'Standard Operating Procedure';
+      if (readerCat) readerCat.textContent = doc.category || 'SOP';
+      if (readerScope) {
+        readerScope.textContent = doc.client_name ? ('Client Scope: ' + doc.client_name) : 'Global Playbook';
+        readerScope.className = doc.client_name ? 'badge badge-info' : 'badge badge-neutral';
       }
+      if (readerMeta) {
+        readerMeta.textContent = 'By ' + (doc.author || 'Staff') + ' • Updated ' + (doc.last_updated || '');
+      }
+      if (readerContent) readerContent.innerHTML = doc.content || '';
+      openModal('modal-kb-reader');
+    }
 
-      wrap.querySelectorAll('[data-wysiwyg-cmd]').forEach((btn) => {
-        btn.addEventListener('mousedown', (e) => {
+    docCards.forEach((card) => {
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('button, a, input, select, textarea')) return;
+        const docId = card.getAttribute('data-kb-doc-id');
+        if (docId) openKbReader(docId);
+      });
+      card.addEventListener('keydown', (e) => {
+        if ((e.key === 'Enter' || e.key === ' ') && e.target === card) {
           e.preventDefault();
-        });
-        btn.addEventListener('click', () => {
-          if (!editor) return;
-          editor.focus();
-          const cmd = btn.getAttribute('data-wysiwyg-cmd');
-          const val = btn.getAttribute('data-wysiwyg-val') || null;
-          if (cmd) document.execCommand(cmd, false, val);
-          syncHidden();
-        });
+          const docId = card.getAttribute('data-kb-doc-id');
+          if (docId) openKbReader(docId);
+        }
       });
     });
 
-    // Edit Existing SOP
-    document.querySelectorAll('[data-kb-edit]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const docId = btn.getAttribute('data-kb-edit');
-        const store = document.getElementById('kb-docs-json');
-        if (!store || !docId) return;
-        const docsMap = JSON.parse(store.textContent || '{}');
-        const doc = docsMap[docId];
-        const drawer = document.getElementById('drawer-edit-sop');
-        const form = document.getElementById('form-edit-sop');
-        if (!doc || !drawer || !form) return;
+    if (readerPdfBtn) {
+      readerPdfBtn.addEventListener('click', () => {
+        if (activeReaderDocId && docsMap[activeReaderDocId]) {
+          printSopDocument(docsMap[activeReaderDocId]);
+        }
+      });
+    }
 
-        form.setAttribute('data-api-form', '/api/v1/knowledge/' + encodeURIComponent(docId));
-        form.querySelector('[name="title"]').value = doc.title || '';
+    // Card Download PDF buttons
+    document.querySelectorAll('[data-kb-print]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const docId = btn.getAttribute('data-kb-print');
+        if (docId && docsMap[docId]) {
+          printSopDocument(docsMap[docId]);
+        }
+      });
+    });
 
-        const catSel = form.querySelector('[name="category"]');
+    // Word-Style Document Studio Modal (Create & Edit SOP)
+    const studioForm = document.getElementById('form-kb-studio');
+    const studioHeading = document.getElementById('kb-studio-heading');
+    const studioSubmit = document.getElementById('btn-kb-studio-submit');
+    const studioSavePdf = document.getElementById('btn-kb-save-pdf');
+    const studioStats = document.getElementById('kb-studio-stats');
+    const editor = document.getElementById('kb-studio-editor');
+    const hiddenInput = studioForm ? studioForm.querySelector('[data-kb-input]') : null;
+    const blockSel = document.getElementById('kb-block-select');
+    const fontSel = document.getElementById('kb-font-family');
+    const sizeSel = document.getElementById('kb-font-size');
+    const foreColorInp = document.getElementById('kb-fore-color');
+    const hiliteColorInp = document.getElementById('kb-hilite-color');
+    const linkBar = document.getElementById('kb-link-bar');
+    const linkUrlInp = document.getElementById('kb-link-url');
+    const linkApplyBtn = document.getElementById('btn-kb-apply-link');
+    const linkCancelBtn = document.getElementById('btn-kb-cancel-link');
+    const linkToggleBtn = document.getElementById('btn-kb-toggle-linkbar');
+    let savedRange = null;
+
+    function updateStudioStats() {
+      if (!editor) return;
+      if (hiddenInput) hiddenInput.value = editor.innerHTML.trim();
+      const plain = (editor.textContent || '').replace(/\u00a0/g, ' ').trim();
+      const words = plain ? plain.split(/\s+/).filter(Boolean).length : 0;
+      const chars = plain.length;
+      if (studioStats) {
+        studioStats.textContent = words + (words === 1 ? ' word' : ' words') + ' • ' + chars + (chars === 1 ? ' character' : ' characters');
+      }
+    }
+
+    function saveEditorSelection() {
+      if (!editor) return;
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const range = sel.getRangeAt(0);
+        if (editor.contains(range.commonAncestorContainer)) {
+          savedRange = range.cloneRange();
+        }
+      }
+    }
+
+    function restoreEditorSelection() {
+      if (!editor) return null;
+      editor.focus();
+      const sel = window.getSelection();
+      if (!sel) return null;
+      if (savedRange) {
+        try {
+          sel.removeAllRanges();
+          sel.addRange(savedRange);
+          return savedRange;
+        } catch (_err) {
+          savedRange = null;
+        }
+      }
+      if (sel.rangeCount > 0) {
+        const current = sel.getRangeAt(0);
+        if (editor.contains(current.commonAncestorContainer)) {
+          return current;
+        }
+      }
+      return null;
+    }
+
+    function applySpanStyleToSelection(styleProp, styleVal) {
+      if (!editor) return;
+      const range = restoreEditorSelection();
+      if (!range) return;
+
+      if (range.collapsed) {
+        const span = document.createElement('span');
+        span.style[styleProp] = styleVal;
+        span.appendChild(document.createTextNode('\u200B'));
+        range.insertNode(span);
+        const nextRange = document.createRange();
+        nextRange.setStart(span.firstChild, 1);
+        nextRange.collapse(true);
+        const sel = window.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(nextRange);
+        }
+        savedRange = nextRange.cloneRange();
+        updateStudioStats();
+        return;
+      }
+
+      const span = document.createElement('span');
+      span.style[styleProp] = styleVal;
+      const frag = range.extractContents();
+      span.appendChild(frag);
+      range.insertNode(span);
+
+      const newRange = document.createRange();
+      newRange.selectNodeContents(span);
+      const sel = window.getSelection();
+      if (sel) {
+        sel.removeAllRanges();
+        sel.addRange(newRange);
+      }
+      savedRange = newRange.cloneRange();
+      updateStudioStats();
+    }
+
+    function getSelectionTextNodes(range) {
+      if (!editor || !range) return [];
+      const rootNode = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+        ? range.commonAncestorContainer.parentNode
+        : range.commonAncestorContainer;
+      if (!rootNode || !editor.contains(rootNode)) return [];
+
+      const walker = document.createTreeWalker(rootNode, NodeFilter.SHOW_TEXT);
+      const nodes = [];
+      let curr = walker.nextNode();
+      while (curr) {
+        if (curr.nodeValue && range.intersectsNode(curr)) {
+          nodes.push(curr);
+        }
+        curr = walker.nextNode();
+      }
+      return nodes;
+    }
+
+    function transformSelectionCase(mode) {
+      if (!editor) return;
+      const range = restoreEditorSelection();
+      if (!range || range.collapsed) {
+        showToast('Select the text you want to convert first', 'error');
+        return;
+      }
+
+      const transformStr = (s) => {
+        if (mode === 'upper') return s.toUpperCase();
+        if (mode === 'lower') return s.toLowerCase();
+        if (mode === 'title') {
+          return s.toLowerCase().replace(/(^|[\s\-\/(\[])(\S)/g, (_m, sep, ch) => sep + ch.toUpperCase());
+        }
+        // sentence case
+        const lowered = s.toLowerCase();
+        return lowered.replace(/(^\s*[a-zA-ZÀ-ÿ])|([.!?]\s+[a-zA-ZÀ-ÿ])/g, (m) => m.toUpperCase());
+      };
+
+      const startContainer = range.startContainer;
+      const startOffset = range.startOffset;
+      const endContainer = range.endContainer;
+      const endOffset = range.endOffset;
+
+      if (startContainer === endContainer && startContainer.nodeType === Node.TEXT_NODE) {
+        const full = startContainer.nodeValue || '';
+        const before = full.slice(0, startOffset);
+        const mid = transformStr(full.slice(startOffset, endOffset));
+        const after = full.slice(endOffset);
+        startContainer.nodeValue = before + mid + after;
+        const nextRange = document.createRange();
+        nextRange.setStart(startContainer, startOffset);
+        nextRange.setEnd(startContainer, startOffset + mid.length);
+        const sel = window.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(nextRange);
+        }
+        savedRange = nextRange.cloneRange();
+        updateStudioStats();
+        return;
+      }
+
+      const nodes = getSelectionTextNodes(range);
+      nodes.forEach((tn) => {
+        const text = tn.nodeValue || '';
+        const sIdx = (tn === startContainer) ? startOffset : 0;
+        const eIdx = (tn === endContainer) ? endOffset : text.length;
+        if (eIdx <= sIdx) return;
+        tn.nodeValue = text.slice(0, sIdx) + transformStr(text.slice(sIdx, eIdx)) + text.slice(eIdx);
+      });
+      saveEditorSelection();
+      updateStudioStats();
+    }
+
+    function scaleSelectedText(direction) {
+      if (!editor) return;
+      const range = restoreEditorSelection();
+      if (!range || range.collapsed) {
+        showToast('Select text first to adjust its font size', 'error');
+        return;
+      }
+
+      const anchorEl = range.startContainer.nodeType === Node.ELEMENT_NODE
+        ? range.startContainer
+        : range.startContainer.parentElement;
+      const computedPx = anchorEl ? parseFloat(window.getComputedStyle(anchorEl).fontSize || '14') : 14;
+      const currentPx = Number.isFinite(computedPx) ? computedPx : 14;
+      const step = direction === 'up' ? 2 : -2;
+      const nextPx = Math.max(10, Math.min(48, Math.round(currentPx + step)));
+      applySpanStyleToSelection('fontSize', nextPx + 'px');
+      if (sizeSel) {
+        const optExists = Array.from(sizeSel.options).some((o) => o.value === String(nextPx));
+        sizeSel.value = optExists ? String(nextPx) : '';
+      }
+    }
+
+    function insertHtmlAtCursor(html) {
+      if (!editor) return;
+      const range = restoreEditorSelection();
+      if (!range) {
+        editor.insertAdjacentHTML('beforeend', html);
+        updateStudioStats();
+        return;
+      }
+      range.deleteContents();
+      const tpl = document.createElement('template');
+      tpl.innerHTML = html;
+      const frag = tpl.content;
+      const lastNode = frag.lastChild;
+      range.insertNode(frag);
+      if (lastNode) {
+        const after = document.createRange();
+        after.setStartAfter(lastNode);
+        after.collapse(true);
+        const sel = window.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(after);
+        }
+        savedRange = after.cloneRange();
+      }
+      updateStudioStats();
+    }
+
+    function openKbStudio(mode, doc) {
+      if (!studioForm || !editor) return;
+      studioForm.dataset.printAfterSave = '0';
+      if (linkBar) linkBar.classList.add('is-hidden');
+
+      const titleInp = studioForm.querySelector('[name="title"]');
+      const catSel = studioForm.querySelector('[name="category"]');
+      const clSel = studioForm.querySelector('[name="client_id"]');
+
+      if (mode === 'edit' && doc) {
+        studioForm.setAttribute('data-api-form', '/api/v1/knowledge/' + encodeURIComponent(doc.id));
+        studioForm.setAttribute('data-api-method', 'PUT');
+        if (studioHeading) studioHeading.textContent = 'Edit Knowledge Document';
+        if (studioSubmit) studioSubmit.textContent = 'Save Changes';
+        if (titleInp) titleInp.value = doc.title || '';
         if (catSel && doc.category) {
           const hasOpt = Array.from(catSel.options).some((o) => o.value === doc.category);
           if (!hasOpt) {
@@ -3627,68 +3949,212 @@
           }
           catSel.value = doc.category;
         }
-
-        const clSel = form.querySelector('[name="client_id"]');
         if (clSel) clSel.value = doc.client_id || '';
+        editor.innerHTML = doc.content || '';
+      } else {
+        studioForm.setAttribute('data-api-form', '/api/v1/knowledge');
+        studioForm.setAttribute('data-api-method', 'POST');
+        if (studioHeading) studioHeading.textContent = 'Publish Knowledge Document';
+        if (studioSubmit) studioSubmit.textContent = 'Publish SOP';
+        if (titleInp) titleInp.value = '';
+        if (catSel && catSel.options.length > 0) catSel.selectedIndex = 0;
+        if (clSel) clSel.value = '';
+        editor.innerHTML = '';
+      }
 
-        const editor = form.querySelector('[data-wysiwyg-editor]');
-        const hiddenInp = form.querySelector('[data-wysiwyg-input]');
-        if (editor) editor.innerHTML = doc.content || '';
-        if (hiddenInp) hiddenInp.value = doc.content || '';
-
-        openDrawer('drawer-edit-sop');
-      });
-    });
-
-    // Single-SOP PDF Print Export
-    document.querySelectorAll('[data-kb-print]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const card = btn.closest('.kb-doc-card');
-        if (!card) return;
-        document.querySelectorAll('.kb-doc-card.kb-print-target').forEach((c) => c.classList.remove('kb-print-target'));
-        card.classList.add('kb-print-target');
-        document.body.classList.add('workly-print-sop');
-
-        const cleanup = () => {
-          document.body.classList.remove('workly-print-sop');
-          card.classList.remove('kb-print-target');
-        };
-        window.addEventListener('afterprint', cleanup, { once: true });
-        window.setTimeout(() => {
-          window.print();
-          window.setTimeout(cleanup, 1000);
-        }, 60);
-      });
-    });
-
-    // Knowledge Base Height Clamp (400px Desktop / 300px Mobile) + "View More" Toggle
-    function measureKbClips() {
-      document.querySelectorAll('.kb-doc-card').forEach((card) => {
-        const clip = card.querySelector('.kb-rich-clip');
-        const btn = card.querySelector('[data-kb-expand]');
-        if (!clip || !btn) return;
-        if (clip.classList.contains('is-expanded')) {
-          btn.classList.remove('is-hidden');
-          return;
+      if (blockSel) blockSel.value = 'P';
+      if (fontSel) fontSel.value = '';
+      if (sizeSel) sizeSel.value = '';
+      savedRange = null;
+      updateStudioStats();
+      openModal('modal-kb-studio');
+      window.setTimeout(() => {
+        if (mode === 'create' && titleInp) {
+          titleInp.focus();
+        } else {
+          editor.focus();
         }
-        const hasOverflow = clip.scrollHeight > clip.clientHeight + 8;
-        clip.classList.toggle('has-overflow', hasOverflow);
-        btn.classList.toggle('is-hidden', !hasOverflow);
+      }, 40);
+    }
+
+    if (editor) {
+      editor.addEventListener('input', updateStudioStats);
+      editor.addEventListener('keyup', saveEditorSelection);
+      editor.addEventListener('mouseup', saveEditorSelection);
+      editor.addEventListener('blur', () => {
+        saveEditorSelection();
+        updateStudioStats();
       });
     }
 
-    document.querySelectorAll('[data-kb-expand]').forEach((btn) => {
+    document.querySelectorAll('#modal-kb-studio [data-kb-cmd]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        saveEditorSelection();
+      });
       btn.addEventListener('click', () => {
-        const card = btn.closest('.kb-doc-card');
-        const clip = card ? card.querySelector('.kb-rich-clip') : null;
-        if (!clip) return;
-        const expanded = clip.classList.toggle('is-expanded');
-        btn.textContent = expanded ? 'Show Less' : 'View More';
+        const cmd = btn.getAttribute('data-kb-cmd');
+        const val = btn.getAttribute('data-kb-val') || null;
+        restoreEditorSelection();
+        if (cmd) document.execCommand(cmd, false, val);
+        saveEditorSelection();
+        updateStudioStats();
       });
     });
 
-    window.setTimeout(measureKbClips, 260);
-    window.addEventListener('resize', measureKbClips);
+    if (blockSel) {
+      blockSel.addEventListener('change', () => {
+        const tag = blockSel.value || 'P';
+        restoreEditorSelection();
+        document.execCommand('formatBlock', false, '<' + tag + '>');
+        saveEditorSelection();
+        updateStudioStats();
+      });
+    }
+
+    if (fontSel) {
+      fontSel.addEventListener('change', () => {
+        if (!fontSel.value) return;
+        applySpanStyleToSelection('fontFamily', fontSel.value);
+      });
+    }
+
+    if (sizeSel) {
+      sizeSel.addEventListener('change', () => {
+        if (!sizeSel.value) return;
+        applySpanStyleToSelection('fontSize', sizeSel.value + 'px');
+      });
+    }
+
+    document.querySelectorAll('#modal-kb-studio [data-kb-scale]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        saveEditorSelection();
+      });
+      btn.addEventListener('click', () => {
+        scaleSelectedText(btn.getAttribute('data-kb-scale'));
+      });
+    });
+
+    document.querySelectorAll('#modal-kb-studio [data-kb-case]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        saveEditorSelection();
+      });
+      btn.addEventListener('click', () => {
+        transformSelectionCase(btn.getAttribute('data-kb-case'));
+      });
+    });
+
+    if (foreColorInp) {
+      foreColorInp.addEventListener('mousedown', saveEditorSelection);
+      foreColorInp.addEventListener('input', () => {
+        applySpanStyleToSelection('color', foreColorInp.value);
+      });
+    }
+
+    if (hiliteColorInp) {
+      hiliteColorInp.addEventListener('mousedown', saveEditorSelection);
+      hiliteColorInp.addEventListener('input', () => {
+        applySpanStyleToSelection('backgroundColor', hiliteColorInp.value);
+      });
+    }
+
+    document.querySelectorAll('#modal-kb-studio [data-kb-insert]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        saveEditorSelection();
+      });
+      btn.addEventListener('click', () => {
+        const kind = btn.getAttribute('data-kb-insert');
+        if (kind === 'hr') {
+          insertHtmlAtCursor('<hr><p><br></p>');
+        } else if (kind === 'table') {
+          insertHtmlAtCursor(
+            '<table>' +
+              '<thead><tr><th>Step / Owner</th><th>Action Detail</th><th>SLA Target</th></tr></thead>' +
+              '<tbody>' +
+                '<tr><td>1. Intake</td><td>Verify client instructions</td><td>Same day</td></tr>' +
+                '<tr><td>2. Execution</td><td>Complete deliverable checklist</td><td>Within 24h</td></tr>' +
+              '</tbody>' +
+            '</table><p><br></p>'
+          );
+        }
+      });
+    });
+
+    if (linkToggleBtn && linkBar) {
+      linkToggleBtn.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        saveEditorSelection();
+      });
+      linkToggleBtn.addEventListener('click', () => {
+        linkBar.classList.toggle('is-hidden');
+        if (!linkBar.classList.contains('is-hidden') && linkUrlInp) {
+          linkUrlInp.focus();
+        }
+      });
+    }
+
+    if (linkCancelBtn && linkBar) {
+      linkCancelBtn.addEventListener('click', () => {
+        linkBar.classList.add('is-hidden');
+        if (linkUrlInp) linkUrlInp.value = '';
+      });
+    }
+
+    if (linkApplyBtn && linkUrlInp) {
+      linkApplyBtn.addEventListener('click', () => {
+        const url = linkUrlInp.value.trim();
+        if (!url || !/^https?:\/\//i.test(url)) {
+          showToast('Enter a valid URL starting with https:// or http://', 'error');
+          return;
+        }
+        const range = restoreEditorSelection();
+        if (range && !range.collapsed) {
+          document.execCommand('createLink', false, url);
+        } else {
+          insertHtmlAtCursor('<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener noreferrer">' + escapeHtml(url) + '</a> ');
+        }
+        linkUrlInp.value = '';
+        if (linkBar) linkBar.classList.add('is-hidden');
+        updateStudioStats();
+      });
+    }
+
+    const newSopBtn = document.getElementById('btn-kb-new-sop');
+    if (newSopBtn) {
+      newSopBtn.addEventListener('click', () => openKbStudio('create', null));
+    }
+
+    if (readerEditBtn) {
+      readerEditBtn.addEventListener('click', () => {
+        if (activeReaderDocId && docsMap[activeReaderDocId]) {
+          openKbStudio('edit', docsMap[activeReaderDocId]);
+        }
+      });
+    }
+
+    document.querySelectorAll('[data-kb-edit]').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const docId = btn.getAttribute('data-kb-edit');
+        if (docId && docsMap[docId]) {
+          openKbStudio('edit', docsMap[docId]);
+        }
+      });
+    });
+
+    if (studioSavePdf && studioForm) {
+      studioSavePdf.addEventListener('click', () => {
+        studioForm.dataset.printAfterSave = '1';
+        if (typeof studioForm.requestSubmit === 'function') {
+          studioForm.requestSubmit();
+        } else {
+          studioForm.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+        }
+      });
+    }
   }
 
   // ------------------------------------------------------------------------
@@ -4518,13 +4984,14 @@
         const isMultipart = form.enctype === 'multipart/form-data';
         const submitBtn = form.querySelector('button[type="submit"]');
 
-        // Sync WYSIWYG editor before serializing
-        if (form.hasAttribute('data-wysiwyg-form')) {
-          const editor = form.querySelector('[data-wysiwyg-editor]');
-          const hiddenInp = form.querySelector('[data-wysiwyg-input]');
+        // Sync Knowledge Base Document Studio content before serializing
+        if (form.hasAttribute('data-kb-studio-form')) {
+          const editor = form.querySelector('[data-kb-editor]');
+          const hiddenInp = form.querySelector('[data-kb-input]');
           if (editor && hiddenInp) {
             hiddenInp.value = editor.innerHTML.trim();
             if (editor.textContent.trim() === '' && hiddenInp.value === '') {
+              form.dataset.printAfterSave = '0';
               showToast('Please enter SOP document content', 'error');
               return;
             }
@@ -4655,9 +5122,31 @@
             }
           }
 
+          if (form.hasAttribute('data-kb-studio-form') && form.dataset.printAfterSave === '1') {
+            form.dataset.printAfterSave = '0';
+            const clSel = form.querySelector('[name="client_id"]');
+            const clName = (clSel && clSel.value && clSel.selectedIndex >= 0) ? clSel.options[clSel.selectedIndex].text : '';
+            const savedDoc = {
+              title: (form.querySelector('[name="title"]') || {}).value || 'SOP Document',
+              category: (form.querySelector('[name="category"]') || {}).value || 'SOP',
+              client_name: clName,
+              author: 'Workly Operations',
+              last_updated: new Date().toISOString().slice(0, 10),
+              content: ((form.querySelector('[data-kb-input]') || {}).value) || ''
+            };
+            closeAllModals(true);
+            showToast('Document saved — preparing PDF export...', 'success');
+            printSopDocument(savedDoc);
+            window.addEventListener('afterprint', () => {
+              window.setTimeout(() => window.location.reload(), 250);
+            }, { once: true });
+            return;
+          }
+
           showToast('Saved successfully', 'success');
           window.setTimeout(() => window.location.reload(), 380);
         } catch (err) {
+          if (form.dataset) form.dataset.printAfterSave = '0';
           showToast(err.message, 'error');
           if (submitBtn) submitBtn.disabled = false;
         }

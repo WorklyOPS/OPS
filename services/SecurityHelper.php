@@ -436,16 +436,27 @@ final class SecurityHelper
         return mb_substr(trim($cleaned), 0, $maxLength, 'UTF-8');
     }
 
-    public static function sanitizeRichHtml(?string $html, int $maxLength = 30000): string
+    public static function sanitizeRichHtml(?string $html, int $maxLength = 60000): string
     {
         if ($html === null || trim($html) === '') {
             return '';
         }
         $raw = preg_replace('#<(script|style|iframe|object|embed|form|input|button|textarea|select)[^>]*>.*?</\1>#is', '', $html) ?? '';
         $raw = preg_replace('#<(script|style|iframe|object|embed|form|input|button|meta|link|base)[^>]*?/?>#is', '', $raw) ?? '';
-        $allowed = strip_tags($raw, '<p><br><b><strong><i><em><u><h3><h4><ul><ol><li><a><blockquote><code><pre>');
+        $allowed = strip_tags(
+            $raw,
+            '<p><br><div><span><b><strong><i><em><u><s><strike><del><h1><h2><h3><h4><h5><h6><ul><ol><li><a><blockquote><code><pre><hr><table><thead><tbody><tfoot><tr><th><td>'
+        );
         $allowed = preg_replace('/\son[a-z]+\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $allowed) ?? '';
-        $allowed = preg_replace('/\s(style|id|class)\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $allowed) ?? '';
+        $allowed = preg_replace('/\s(id|class|data-[a-z0-9_-]+)\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $allowed) ?? '';
+
+        // Preserve strictly whitelisted CSS properties inside style attributes
+        $allowed = preg_replace_callback('/\sstyle\s*=\s*(?:"([^"]*)"|\'([^\']*)\')/i', static function (array $m): string {
+            $rawStyle = $m[1] !== '' ? $m[1] : ($m[2] ?? '');
+            $cleanStyle = self::sanitizeInlineStyle($rawStyle);
+            return $cleanStyle !== '' ? ' style="' . self::e($cleanStyle) . '"' : '';
+        }, $allowed) ?? '';
+
         $allowed = preg_replace_callback('/<a\s+[^>]*href\s*=\s*(?:"([^"]*)"|\'([^\']*)\')[^>]*>/i', static function (array $m): string {
             $href = self::sanitizeUrl($m[1] !== '' ? $m[1] : ($m[2] ?? ''));
             if ($href === '') {
@@ -454,6 +465,63 @@ final class SecurityHelper
             return '<a href="' . self::e($href) . '" target="_blank" rel="noopener noreferrer">';
         }, $allowed) ?? '';
         return mb_substr(trim($allowed), 0, $maxLength, 'UTF-8');
+    }
+
+    private static function sanitizeInlineStyle(string $rawStyle): string
+    {
+        if (trim($rawStyle) === '') {
+            return '';
+        }
+        $allowedProps = [
+            'font-size'       => true,
+            'font-family'     => true,
+            'color'           => true,
+            'background-color'=> true,
+            'text-align'      => true,
+            'text-transform'  => true,
+            'font-weight'     => true,
+            'font-style'      => true,
+            'text-decoration' => true,
+            'line-height'     => true,
+            'margin-left'     => true,
+            'margin-top'      => true,
+            'margin-bottom'   => true,
+            'padding'         => true,
+            'padding-left'    => true,
+            'border'          => true,
+            'border-collapse' => true,
+            'width'           => true,
+        ];
+
+        $safeParts = [];
+        foreach (explode(';', $rawStyle) as $decl) {
+            if (!str_contains($decl, ':')) {
+                continue;
+            }
+            [$prop, $val] = explode(':', $decl, 2);
+            $prop = strtolower(trim($prop));
+            $val = trim($val);
+            if (!isset($allowedProps[$prop]) || $val === '') {
+                continue;
+            }
+            $valLow = strtolower($val);
+            if (
+                str_contains($valLow, 'url(') ||
+                str_contains($valLow, 'expression(') ||
+                str_contains($valLow, 'javascript:') ||
+                str_contains($valLow, 'vbscript:') ||
+                str_contains($valLow, '@import') ||
+                str_contains($valLow, 'behavior:') ||
+                preg_match('/[<>{}\\\\]/', $val)
+            ) {
+                continue;
+            }
+            if (!preg_match('/^[a-zA-Z0-9\s#%(),.\'"\-_+]+$/', $val)) {
+                continue;
+            }
+            $safeParts[] = $prop . ': ' . $val;
+        }
+        return implode('; ', $safeParts);
     }
 
     public static function sanitizeUrl(?string $url): string

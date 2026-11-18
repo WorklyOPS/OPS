@@ -32,7 +32,8 @@
     if (!rootEl || !dataEl) return;
 
     var sdk = window.WorklyChartsSDK;
-    if (!sdk || !sdk.React || !sdk.createRoot || !sdk.Recharts) {
+    var rc = (sdk && sdk.Recharts) ? sdk.Recharts : sdk;
+    if (!sdk || !sdk.React || !sdk.createRoot || !rc || !rc.ResponsiveContainer || !rc.ComposedChart || !rc.BarChart) {
       rootEl.innerHTML = '<div class="notice notice-warn" style="margin:0;">Performance visualization library is unavailable. Refresh the page to retry.</div>';
       return;
     }
@@ -46,7 +47,6 @@
 
     var React = sdk.React;
     var e = React.createElement;
-    var rc = sdk.Recharts;
     var trend = Array.isArray(payload.trend) ? payload.trend : [];
     var vaRates = Array.isArray(payload.va_rates) ? payload.va_rates : [];
     var roleBenchmarks = Array.isArray(payload.role_benchmarks) ? payload.role_benchmarks : [];
@@ -528,7 +528,8 @@
     if (!rootEl || !dataEl) return;
 
     var sdk = window.WorklyChartsSDK;
-    if (!sdk || !sdk.React || !sdk.createRoot || !sdk.Recharts) {
+    var rc = (sdk && sdk.Recharts) ? sdk.Recharts : sdk;
+    if (!sdk || !sdk.React || !sdk.createRoot || !rc || !rc.ResponsiveContainer || !rc.ComposedChart || !rc.BarChart) {
       rootEl.innerHTML = '<div class="notice notice-warn" style="margin:0;">Summary chart library is unavailable. Refresh the page to retry.</div>';
       return;
     }
@@ -542,7 +543,6 @@
 
     var React = sdk.React;
     var e = React.createElement;
-    var rc = sdk.Recharts;
     var vaRows = Array.isArray(payload.va_rates) ? payload.va_rates : [];
     var availableRoles = Array.isArray(payload.available_roles) ? payload.available_roles : [];
 

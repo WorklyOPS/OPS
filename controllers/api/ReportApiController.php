@@ -57,6 +57,15 @@ final class ReportApiController
         if ($user['role'] === 'va') {
             $scopeVaId = $user['id'];
         } elseif ($requestedVa !== '' && $requestedVa !== 'all') {
+            if ($user['role'] !== 'admin') {
+                $roleChk = $this->db->prepare('SELECT role FROM users WHERE id = :id LIMIT 1');
+                $roleChk->execute([':id' => $requestedVa]);
+                if ((string) $roleChk->fetchColumn() === 'admin') {
+                    http_response_code(403);
+                    echo json_encode(['error' => 'Forbidden: Staff filter is not available']);
+                    return;
+                }
+            }
             if ($user['role'] === 'team_leader' && $requestedVa !== $user['id']) {
                 $chk = $this->db->prepare('SELECT id FROM users WHERE id = :id AND team_leader_id = :tl LIMIT 1');
                 $chk->execute([':id' => $requestedVa, ':tl' => $user['id']]);
@@ -83,6 +92,9 @@ final class ReportApiController
                 JOIN clients c ON t.client_id = c.id
                 WHERE t.deadline BETWEEN :start_d AND :end_d
             ";
+            if ($user['role'] !== 'admin') {
+                $sql .= " AND u.role <> 'admin'";
+            }
             $params = [
                 ':start_d' => $startDate,
                 ':end_d'   => $endDate,
@@ -165,6 +177,21 @@ final class ReportApiController
             http_response_code(422);
             echo json_encode(['error' => 'Valid team leader / recipient email and report summary are required']);
             return;
+        }
+
+        if (($user['role'] ?? '') !== 'admin') {
+            $admStmt = $this->db->prepare("
+                SELECT 1 FROM users WHERE LOWER(email) = LOWER(:e1) AND role = 'admin'
+                UNION ALL
+                SELECT 1 FROM staff_connected_mailboxes m JOIN users u ON m.user_id = u.id WHERE LOWER(m.email) = LOWER(:e2) AND u.role = 'admin'
+                LIMIT 1
+            ");
+            $admStmt->execute([':e1' => $recipient, ':e2' => $recipient]);
+            if ($admStmt->fetchColumn()) {
+                http_response_code(403);
+                echo json_encode(['error' => 'Selected recipient is not available for report submission']);
+                return;
+            }
         }
 
         $threadId = 'th-' . bin2hex(random_bytes(5));

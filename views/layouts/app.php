@@ -522,7 +522,7 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
           <span class="kbd-hint">Inbox</span>
         </button>
         <button type="button" class="cmdk-item" data-cmdk-href="/knowledge">
-          <span><strong>Knowledge Base</strong> — SOP playbooks, WYSIWYG &amp; PDF export</span>
+          <span><strong>Knowledge Base</strong> — SOP playbooks, document studio &amp; PDF export</span>
           <span class="kbd-hint">SOPs</span>
         </button>
         <?php if (in_array($role, ['admin', 'team_leader', 'hrm'], true)): ?>

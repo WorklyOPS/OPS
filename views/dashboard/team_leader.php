@@ -494,7 +494,6 @@ $availableRoles = $data['available_roles'] ?? [];
 
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <a href="/tasks?va=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm" style="flex:1 1 110px;">Tasks</a>
-          <a href="/profile?va_id=<?= urlencode((string) $va['va_id']) ?>" class="btn btn-secondary btn-sm" style="flex:1 1 110px;">Inspect Profile</a>
         </div>
       </div>
     <?php endforeach; ?>

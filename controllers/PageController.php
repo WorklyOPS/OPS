@@ -820,12 +820,6 @@ final class PageController
 
         if ($role === 'admin' && $requestedId !== '') {
             $targetId = $requestedId;
-        } elseif ($role === 'team_leader' && $requestedId !== '' && $requestedId !== $user['id']) {
-            $podChk = $this->db->prepare("SELECT id FROM users WHERE id = :id AND role = 'va' AND team_leader_id = :tl AND is_active = TRUE LIMIT 1");
-            $podChk->execute([':id' => $requestedId, ':tl' => $user['id']]);
-            if ($podChk->fetchColumn()) {
-                $targetId = $requestedId;
-            }
         }
 
         $uStmt = $this->db->prepare('SELECT id, name, email, role, avatar_url, phone, bio, hire_date, hourly_rate, total_earnings, pto_balance_days, pto_taken_days, team_leader_id FROM users WHERE id = :id LIMIT 1');
@@ -939,16 +933,7 @@ final class PageController
             $allStaff = $this->db->query("SELECT id, name, role FROM users WHERE is_active = TRUE ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
             $allVas = $this->db->query("SELECT id, name, email, team_leader_id FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
         } elseif ($role === 'team_leader') {
-            $staffStmt = $this->db->prepare("
-                SELECT id, name, role
-                FROM users
-                WHERE is_active = TRUE
-                  AND (id = :self_id OR (role = 'va' AND team_leader_id = :tl_id))
-                ORDER BY CASE WHEN id = :self_order THEN 0 ELSE 1 END, name ASC
-            ");
-            $staffStmt->execute([':self_id' => $user['id'], ':tl_id' => $user['id'], ':self_order' => $user['id']]);
-            $allStaff = $staffStmt->fetchAll(PDO::FETCH_ASSOC);
-
+            $allStaff = [];
             $vasStmt = $this->db->query("SELECT id, name, email, team_leader_id FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC");
             $allVas = $vasStmt->fetchAll(PDO::FETCH_ASSOC);
         } else {
@@ -1232,6 +1217,9 @@ final class PageController
             WHERE t.deadline BETWEEN :sd AND :ed
         ";
         $repParams = [':sd' => $startDate, ':ed' => $endDate];
+        if ($role !== 'admin') {
+            $repSql .= " AND u.role <> 'admin'";
+        }
         if ($role === 'va') {
             $repSql .= ' AND t.assigned_va_id = :va';
             $repParams[':va'] = $uid;
@@ -1393,8 +1381,9 @@ final class PageController
             }
         }
 
-        // Team Leaders for VA SLA report submission recipient dropdown
-        $teamLeaders = $this->db->query("SELECT id, name, email FROM users WHERE role IN ('team_leader', 'admin') AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
+        // Team Leaders for VA SLA report submission recipient dropdown (hide Admin from non-admins)
+        $tlRoleFilter = $role === 'admin' ? "role IN ('team_leader', 'admin')" : "role = 'team_leader'";
+        $teamLeaders = $this->db->query("SELECT id, name, email FROM users WHERE {$tlRoleFilter} AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
         return [
             'cal_month'        => $calMonth,
@@ -1643,10 +1632,57 @@ final class PageController
         }
         $threads = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+        // Hide Admin users and admin-involved threads/messages from all non-admin users
+        $adminEmailLookup = [];
+        if (($user['role'] ?? '') !== 'admin') {
+            try {
+                $aeStmt = $this->db->query("
+                    SELECT LOWER(email) FROM users WHERE role = 'admin'
+                    UNION
+                    SELECT LOWER(m.email) FROM staff_connected_mailboxes m JOIN users u ON m.user_id = u.id WHERE u.role = 'admin'
+                ");
+                foreach ($aeStmt->fetchAll(PDO::FETCH_COLUMN) as $ae) {
+                    $ae = strtolower(trim((string) $ae));
+                    if ($ae !== '') {
+                        $adminEmailLookup[$ae] = true;
+                    }
+                }
+            } catch (Throwable) {
+                $adminEmailLookup = [];
+            }
+
+            $containsAdminEmail = static function (array $row) use ($adminEmailLookup): bool {
+                if (empty($adminEmailLookup)) {
+                    return false;
+                }
+                $sender = strtolower(trim((string) ($row['sender_email'] ?? '')));
+                $recip = strtolower(trim((string) ($row['recipient_email'] ?? '')));
+                if (isset($adminEmailLookup[$sender]) || isset($adminEmailLookup[$recip])) {
+                    return true;
+                }
+                $cc = strtolower(trim((string) ($row['cc_email'] ?? '')));
+                if ($cc !== '') {
+                    foreach (array_keys($adminEmailLookup) as $ae) {
+                        if (str_contains($cc, $ae)) {
+                            return true;
+                        }
+                    }
+                }
+                return false;
+            };
+
+            $threads = array_values(array_filter($threads, static fn(array $th): bool => !$containsAdminEmail($th)));
+        }
+
         usort($threads, static fn(array $a, array $b) => strcmp((string) $b['created_at'], (string) $a['created_at']));
 
         if ($selectedThread === '' && !empty($threads)) {
             $selectedThread = (string) $threads[0]['thread_id'];
+        } elseif ($selectedThread !== '' && ($user['role'] ?? '') !== 'admin') {
+            $visibleThreadIds = array_flip(array_map(static fn(array $th): string => (string) $th['thread_id'], $threads));
+            if (!isset($visibleThreadIds[$selectedThread])) {
+                $selectedThread = !empty($threads) ? (string) $threads[0]['thread_id'] : '';
+            }
         }
 
         $threadMessages = [];
@@ -1656,21 +1692,35 @@ final class PageController
             $mStmt->execute([':tid' => $selectedThread]);
             $threadMessages = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 
-            $markStmt = $this->db->prepare('UPDATE email_messages SET is_read = TRUE WHERE thread_id = :tid AND (LOWER(recipient_email) = LOWER(:email) OR LOWER(recipient_email) = LOWER(:lemail))');
-            $markStmt->execute([':tid' => $selectedThread, ':email' => $email, ':lemail' => $linkedEmail]);
+            if (($user['role'] ?? '') !== 'admin' && !empty($adminEmailLookup)) {
+                $threadMessages = array_values(array_filter($threadMessages, static function (array $m) use ($adminEmailLookup): bool {
+                    $sender = strtolower(trim((string) ($m['sender_email'] ?? '')));
+                    $recip = strtolower(trim((string) ($m['recipient_email'] ?? '')));
+                    return !isset($adminEmailLookup[$sender]) && !isset($adminEmailLookup[$recip]);
+                }));
+            }
 
-            $msgIds = array_column($threadMessages, 'id');
-            if (!empty($msgIds)) {
-                $ph = implode(',', array_fill(0, count($msgIds), '?'));
-                $aStmt = $this->db->prepare("SELECT id, email_id, filename, mime_type, size_bytes FROM email_attachments WHERE email_id IN ({$ph}) ORDER BY created_at ASC");
-                $aStmt->execute($msgIds);
-                foreach ($aStmt->fetchAll(PDO::FETCH_ASSOC) as $att) {
-                    $attachmentsByMsg[$att['email_id']][] = $att;
+            if (!empty($threadMessages)) {
+                $markStmt = $this->db->prepare('UPDATE email_messages SET is_read = TRUE WHERE thread_id = :tid AND (LOWER(recipient_email) = LOWER(:email) OR LOWER(recipient_email) = LOWER(:lemail))');
+                $markStmt->execute([':tid' => $selectedThread, ':email' => $email, ':lemail' => $linkedEmail]);
+
+                $msgIds = array_column($threadMessages, 'id');
+                if (!empty($msgIds)) {
+                    $ph = implode(',', array_fill(0, count($msgIds), '?'));
+                    $aStmt = $this->db->prepare("SELECT id, email_id, filename, mime_type, size_bytes FROM email_attachments WHERE email_id IN ({$ph}) ORDER BY created_at ASC");
+                    $aStmt->execute($msgIds);
+                    foreach ($aStmt->fetchAll(PDO::FETCH_ASSOC) as $att) {
+                        $attachmentsByMsg[$att['email_id']][] = $att;
+                    }
                 }
             }
         }
 
-        $contacts = $this->db->query("SELECT name, email, role FROM users WHERE is_active = TRUE ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
+        if (($user['role'] ?? '') === 'admin') {
+            $contacts = $this->db->query("SELECT name, email, role FROM users WHERE is_active = TRUE ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
+        } else {
+            $contacts = $this->db->query("SELECT name, email, role FROM users WHERE is_active = TRUE AND role <> 'admin' ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
+        }
 
         $firebaseCfg = null;
         $cfgPath = __DIR__ . '/../firebase-applet-config.json';

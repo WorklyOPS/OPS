@@ -543,7 +543,7 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
         <input type="hidden" name="end_date" value="<?= SecurityHelper::e($data['end_date']) ?>">
         <input type="hidden" name="summary_text" value="<?= SecurityHelper::e($summaryPlainText) ?>">
         <div class="form-group" style="margin-bottom:0;min-width:0;flex:1 1 240px;">
-          <label class="form-label">Recipient Team Leader / Admin</label>
+          <label class="form-label">Recipient Team Leader<?= $role === 'admin' ? ' / Admin' : '' ?></label>
           <select class="select" name="recipient_email" required>
             <?php foreach ($data['team_leaders'] as $tl): ?>
               <option value="<?= SecurityHelper::e($tl['email']) ?>"><?= SecurityHelper::e($tl['name']) ?> (<?= SecurityHelper::e($tl['email']) ?>)</option>
