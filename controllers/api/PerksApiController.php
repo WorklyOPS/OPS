@@ -344,8 +344,9 @@ final class PerksApiController
     private function grantPerk(string $perkId, array $user): void
     {
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $syncMode = !empty($input['sync_recipients']);
         $userIds = $this->extractTargetUserIds($input);
-        if (empty($userIds)) {
+        if (!$syncMode && empty($userIds)) {
             http_response_code(422);
             echo json_encode(['error' => 'Select at least one VA recipient']);
             return;
@@ -362,39 +363,79 @@ final class PerksApiController
         $perkTitle = (string) $perkRow['title'];
         $perkCategory = (string) ($perkRow['category'] ?? 'Benefit');
 
-        $targets = $this->resolveTargetVas($userIds);
-        if (empty($targets)) {
+        $targets = !empty($userIds) ? $this->resolveTargetVas($userIds) : [];
+        if (!$syncMode && empty($targets)) {
             http_response_code(422);
             echo json_encode(['error' => 'No active Virtual Assistants matched the selected recipients']);
             return;
         }
 
+        $targetMap = [];
+        foreach ($targets as $t) {
+            $targetMap[(string) $t['id']] = (string) $t['name'];
+        }
+
+        $newlyGranted = [];
+        $revokedList = [];
+
         try {
             $this->db->beginTransaction();
 
-            $chkStmt = $this->db->prepare('SELECT id FROM user_perks WHERE perk_id = :pid AND user_id = :uid LIMIT 1');
-            $updStmt = $this->db->prepare('UPDATE user_perks SET granted_at = NOW() WHERE id = :id');
+            $curStmt = $this->db->prepare("
+                SELECT up.user_id, u.name
+                FROM user_perks up
+                JOIN users u ON up.user_id = u.id
+                WHERE up.perk_id = :pid
+            ");
+            $curStmt->execute([':pid' => $perkId]);
+            $currentMap = [];
+            foreach ($curStmt->fetchAll(PDO::FETCH_ASSOC) as $cr) {
+                $currentMap[(string) $cr['user_id']] = (string) $cr['name'];
+            }
+
             $insStmt = $this->db->prepare('INSERT INTO user_perks (perk_id, user_id, granted_at) VALUES (:pid, :uid, NOW())');
+            $updStmt = $this->db->prepare('UPDATE user_perks SET granted_at = NOW() WHERE perk_id = :pid AND user_id = :uid');
+            $delStmt = $this->db->prepare('DELETE FROM user_perks WHERE perk_id = :pid AND user_id = :uid');
 
             foreach ($targets as $va) {
-                $chkStmt->execute([':pid' => $perkId, ':uid' => $va['id']]);
-                $existingId = $chkStmt->fetchColumn();
-                if ($existingId !== false && $existingId !== null) {
-                    $updStmt->execute([':id' => $existingId]);
-                } else {
-                    $insStmt->execute([':pid' => $perkId, ':uid' => $va['id']]);
+                $vid = (string) $va['id'];
+                if (isset($currentMap[$vid])) {
+                    if (!$syncMode) {
+                        $updStmt->execute([':pid' => $perkId, ':uid' => $vid]);
+                    }
+                    continue;
                 }
-
+                $insStmt->execute([':pid' => $perkId, ':uid' => $vid]);
+                $newlyGranted[] = $va;
                 $this->recordHistory(
                     'perk_granted',
                     'perk',
                     $perkId,
                     $perkTitle,
                     $perkCategory,
-                    (string) $va['id'],
+                    $vid,
                     (string) $va['name'],
                     $user
                 );
+            }
+
+            if ($syncMode) {
+                foreach ($currentMap as $curUid => $curName) {
+                    if (!isset($targetMap[$curUid])) {
+                        $delStmt->execute([':pid' => $perkId, ':uid' => $curUid]);
+                        $revokedList[] = ['id' => $curUid, 'name' => $curName];
+                        $this->recordHistory(
+                            'perk_revoked',
+                            'perk',
+                            $perkId,
+                            $perkTitle,
+                            $perkCategory,
+                            $curUid,
+                            $curName,
+                            $user
+                        );
+                    }
+                }
             }
 
             $this->db->commit();
@@ -407,7 +448,7 @@ final class PerksApiController
             return;
         }
 
-        foreach ($targets as $va) {
+        foreach ($newlyGranted as $va) {
             try {
                 NotificationApiController::notifyUser(
                     $this->db,
@@ -423,11 +464,20 @@ final class PerksApiController
         }
 
         $this->invalidate();
-        AuditLogger::log('PERK_GRANTED', 'success', "Granted perk {$perkTitle} ({$perkId}) to " . count($targets) . ' VA(s)', $user['id'], $user['role'], $this->db);
+        AuditLogger::log(
+            'PERK_GRANTED',
+            'success',
+            "Synced perk {$perkTitle} ({$perkId}): +" . count($newlyGranted) . ' granted, -' . count($revokedList) . ' revoked',
+            $user['id'],
+            $user['role'],
+            $this->db
+        );
 
         echo json_encode([
             'success'        => true,
             'count'          => count($targets),
+            'granted_count'  => count($newlyGranted),
+            'revoked_count'  => count($revokedList),
             'item_title'     => $perkTitle,
             'assigned_names' => array_column($targets, 'name'),
             'board'          => self::fetchBoardPayload($this->db, $user),
@@ -522,8 +572,9 @@ final class PerksApiController
     private function awardBadge(string $badgeId, array $user): void
     {
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $syncMode = !empty($input['sync_recipients']);
         $userIds = $this->extractTargetUserIds($input);
-        if (empty($userIds)) {
+        if (!$syncMode && empty($userIds)) {
             http_response_code(422);
             echo json_encode(['error' => 'Select at least one VA recipient']);
             return;
@@ -540,46 +591,72 @@ final class PerksApiController
         $badgeTitle = (string) $badgeRow['title'];
         $badgeTier = ucfirst(strtolower((string) ($badgeRow['tier'] ?? 'Silver'))) . ' Tier';
 
-        $targets = $this->resolveTargetVas($userIds);
-        if (empty($targets)) {
+        $targets = !empty($userIds) ? $this->resolveTargetVas($userIds) : [];
+        if (!$syncMode && empty($targets)) {
             http_response_code(422);
             echo json_encode(['error' => 'No active Virtual Assistants matched the selected recipients']);
             return;
         }
 
+        $targetMap = [];
+        foreach ($targets as $t) {
+            $targetMap[(string) $t['id']] = (string) $t['name'];
+        }
+
+        $newlyAwarded = [];
+        $revokedCount = 0;
+
         try {
             $this->db->beginTransaction();
 
-            $chkStmt = $this->db->prepare('SELECT id FROM user_badges WHERE user_id = :uid AND badge_id = :bid LIMIT 1');
-            $updStmt = $this->db->prepare('UPDATE user_badges SET earned_at = CURRENT_DATE WHERE id = :id');
+            $curStmt = $this->db->prepare("
+                SELECT ub.user_id, u.name
+                FROM user_badges ub
+                JOIN users u ON ub.user_id = u.id
+                WHERE ub.badge_id = :bid
+            ");
+            $curStmt->execute([':bid' => $badgeId]);
+            $currentMap = [];
+            foreach ($curStmt->fetchAll(PDO::FETCH_ASSOC) as $cr) {
+                $currentMap[(string) $cr['user_id']] = (string) $cr['name'];
+            }
+
             $insStmt = $this->db->prepare("
                 INSERT INTO user_badges (id, user_id, badge_id, earned_at)
                 VALUES (:id, :uid, :bid, CURRENT_DATE)
             ");
+            $delStmt = $this->db->prepare('DELETE FROM user_badges WHERE badge_id = :bid AND user_id = :uid');
 
             foreach ($targets as $va) {
-                $chkStmt->execute([':uid' => $va['id'], ':bid' => $badgeId]);
-                $existingId = $chkStmt->fetchColumn();
-                if ($existingId !== false && $existingId !== null) {
-                    $updStmt->execute([':id' => $existingId]);
-                } else {
-                    $insStmt->execute([
-                        ':id'  => 'ubdg-' . bin2hex(random_bytes(5)),
-                        ':uid' => $va['id'],
-                        ':bid' => $badgeId,
-                    ]);
+                $vid = (string) $va['id'];
+                if (isset($currentMap[$vid])) {
+                    continue;
                 }
-
+                $insStmt->execute([
+                    ':id'  => 'ubdg-' . bin2hex(random_bytes(5)),
+                    ':uid' => $vid,
+                    ':bid' => $badgeId,
+                ]);
+                $newlyAwarded[] = $va;
                 $this->recordHistory(
                     'badge_awarded',
                     'badge',
                     $badgeId,
                     $badgeTitle,
                     $badgeTier,
-                    (string) $va['id'],
+                    $vid,
                     (string) $va['name'],
                     $user
                 );
+            }
+
+            if ($syncMode) {
+                foreach ($currentMap as $curUid => $curName) {
+                    if (!isset($targetMap[$curUid])) {
+                        $delStmt->execute([':bid' => $badgeId, ':uid' => $curUid]);
+                        $revokedCount++;
+                    }
+                }
             }
 
             $this->db->commit();
@@ -592,7 +669,7 @@ final class PerksApiController
             return;
         }
 
-        foreach ($targets as $va) {
+        foreach ($newlyAwarded as $va) {
             try {
                 NotificationApiController::notifyUser(
                     $this->db,
@@ -608,11 +685,20 @@ final class PerksApiController
         }
 
         $this->invalidate();
-        AuditLogger::log('BADGE_AWARDED', 'success', "Awarded badge {$badgeTitle} ({$badgeId}) to " . count($targets) . ' VA(s)', $user['id'], $user['role'], $this->db);
+        AuditLogger::log(
+            'BADGE_AWARDED',
+            'success',
+            "Synced badge {$badgeTitle} ({$badgeId}): +" . count($newlyAwarded) . ' awarded, -' . $revokedCount . ' removed',
+            $user['id'],
+            $user['role'],
+            $this->db
+        );
 
         echo json_encode([
             'success'        => true,
             'count'          => count($targets),
+            'granted_count'  => count($newlyAwarded),
+            'revoked_count'  => $revokedCount,
             'item_title'     => $badgeTitle,
             'assigned_names' => array_column($targets, 'name'),
             'board'          => self::fetchBoardPayload($this->db, $user),

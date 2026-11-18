@@ -11,6 +11,14 @@ $statusCounts = $data['kanban_status_counts'] ?? [
 ];
 $byVa = $data['kanban_by_va'] ?? [];
 $vaRates = $data['va_completion_rates'] ?? [];
+$vaSummaryTotals = $data['va_summary_totals'] ?? [
+    'pod_completion_rate'      => 0.0,
+    'pod_avg_turnaround_hours' => 0.0,
+    'pod_avg_turnaround_days'  => 0.0,
+    'pod_completed_tasks'      => (int) ($statusCounts['completed'] ?? 0),
+    'pod_total_tasks'          => array_sum(array_map('intval', $statusCounts)),
+    'assigned_va_count'        => count($vaRates),
+];
 $overdueTotal = (int) ($data['overdue_total'] ?? 0);
 $activeDeliverables = $data['active_deliverables'] ?? [];
 
@@ -80,6 +88,42 @@ $urgentOpenCount = count(array_filter($activeDeliverables, static fn(array $d): 
     <div class="kpi-sub"><?= (int) ($alerts['pending_pto'] ?? 0) ?> pending PTO alert(s)</div>
   </div>
 </div>
+
+<!-- Recharts Visual Summary Component: Assigned VA Completion Rates & Average Turnaround Time -->
+<section class="card" style="margin-bottom:22px;" aria-label="Assigned VA Completion Rate and Average Turnaround Summary">
+  <div class="tl-perf-head">
+    <div>
+      <h3>Assigned VA Completion &amp; Turnaround Summary</h3>
+      <p class="muted" style="font-size:12.5px;">Aggregated task completion rate (%) and average turnaround time across your assigned Virtual Assistants.</p>
+    </div>
+
+    <div class="tl-perf-summary">
+      <div class="tl-perf-stat">
+        <span class="muted">Pod Completion Rate</span>
+        <strong class="tabular-nums" style="color:var(--brand-secondary);"><?= number_format((float) ($vaSummaryTotals['pod_completion_rate'] ?? $overallCompRate), 1) ?>%</strong>
+      </div>
+      <div class="tl-perf-stat">
+        <span class="muted">Avg Turnaround Time</span>
+        <strong class="tabular-nums" style="color:var(--warn);">
+          <?= number_format((float) ($vaSummaryTotals['pod_avg_turnaround_hours'] ?? 0), 1) ?>h
+          <span class="muted" style="font-size:12px;font-weight:600;">(<?= number_format((float) ($vaSummaryTotals['pod_avg_turnaround_days'] ?? 0), 1) ?>d)</span>
+        </strong>
+      </div>
+      <div class="tl-perf-stat">
+        <span class="muted">Completed / Total</span>
+        <strong class="tabular-nums"><?= (int) ($vaSummaryTotals['pod_completed_tasks'] ?? 0) ?> / <?= (int) ($vaSummaryTotals['pod_total_tasks'] ?? 0) ?></strong>
+      </div>
+    </div>
+  </div>
+
+  <script type="application/json" id="tl-va-summary-json"><?= json_encode([
+      'va_rates' => $vaRates,
+      'totals'   => $vaSummaryTotals,
+  ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
+  <div id="tl-recharts-va-summary-root" class="tl-recharts-host">
+    <div class="skeleton-bar" style="height:290px;border-radius:12px;"></div>
+  </div>
+</section>
 
 <!-- Recharts Performance Dashboard Component: Team Completion Rates & Overdue Trends -->
 <section class="card" style="margin-bottom:22px;" aria-label="Team Task Completion & Overdue Trends">

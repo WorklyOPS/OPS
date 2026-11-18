@@ -649,6 +649,7 @@ final class ClientApiController
     {
         try {
             $this->db->exec('ALTER TABLE clients ADD COLUMN IF NOT EXISTS availability_slots TEXT DEFAULT NULL');
+            $this->db->exec('ALTER TABLE clients ALTER COLUMN focus_va_id DROP NOT NULL');
         } catch (Throwable) {
         }
     }
@@ -686,6 +687,16 @@ final class ClientApiController
     {
         $this->ensureAvailabilityColumn();
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+
+        $prevStmt = $this->db->prepare('SELECT focus_va_id, contract_status FROM clients WHERE id = :id LIMIT 1');
+        $prevStmt->execute([':id' => $clientId]);
+        $prevRow = $prevStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$prevRow) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Client account not found']);
+            return;
+        }
+
         $allowed = [
             'agency_name', 'name', 'email', 'phone', 'state', 'country', 'website', 'linkedin',
             'additional_email', 'additional_phone', 'description', 'focus_va_id', 'team_leader_id',
@@ -701,6 +712,9 @@ final class ClientApiController
             $fields[] = "{$col} = :{$col}";
             if ($col === 'availability_slots') {
                 $params[':availability_slots'] = self::normalizeAvailabilitySlots($input[$col]);
+            } elseif ($col === 'focus_va_id' || $col === 'team_leader_id') {
+                $cleanRef = SecurityHelper::sanitizePlainText((string) ($input[$col] ?? ''), 64);
+                $params[":{$col}"] = $cleanRef !== '' ? $cleanRef : null;
             } elseif ($col === 'website' || $col === 'linkedin') {
                 $params[":{$col}"] = SecurityHelper::sanitizeUrl((string) $input[$col]);
             } elseif ($col === 'contract_status') {
@@ -721,9 +735,55 @@ final class ClientApiController
         $stmt = $this->db->prepare('UPDATE clients SET ' . implode(', ', $fields) . ', updated_at = NOW() WHERE id = :id');
         $stmt->execute($params);
 
+        $rowStmt = $this->db->prepare("
+            SELECT c.id, c.focus_va_id, c.contract_status,
+                   u.name AS focus_va_name, u.email AS focus_va_email, COALESCE(u.avatar_url, '') AS focus_va_avatar
+            FROM clients c
+            LEFT JOIN users u ON c.focus_va_id = u.id
+            WHERE c.id = :id
+            LIMIT 1
+        ");
+        $rowStmt->execute([':id' => $clientId]);
+        $updated = $rowStmt->fetch(PDO::FETCH_ASSOC) ?: [];
+
+        $loggedActivity = null;
+        if (array_key_exists('focus_va_id', $input) && (string) ($prevRow['focus_va_id'] ?? '') !== (string) ($updated['focus_va_id'] ?? '')) {
+            $vaLabel = $updated['focus_va_name'] ? (string) $updated['focus_va_name'] : 'Unassigned';
+            $actId = 'act-' . bin2hex(random_bytes(5));
+            $actDesc = "Assigned Virtual Assistant updated to {$vaLabel} by {$user['name']}.";
+            $this->db->prepare("
+                INSERT INTO client_activities (id, client_id, author_id, author_name, description, type)
+                VALUES (:id, :cid, :aid, :aname, :desc, 'update')
+            ")->execute([
+                ':id'    => $actId,
+                ':cid'   => $clientId,
+                ':aid'   => $user['id'],
+                ':aname' => $user['name'],
+                ':desc'  => $actDesc,
+            ]);
+            $loggedActivity = [
+                'id'          => $actId,
+                'client_id'   => $clientId,
+                'author_id'   => $user['id'],
+                'author_name' => $user['name'],
+                'description' => $actDesc,
+                'type'        => 'update',
+                'created_at'  => gmdate('Y-m-d H:i:s'),
+            ];
+        }
+
         $this->invalidate();
         AuditLogger::log('CLIENT_UPDATED', 'success', "Updated client {$clientId}", $user['id'], $user['role'], $this->db);
-        echo json_encode(['success' => true, 'id' => $clientId]);
+        echo json_encode([
+            'success'         => true,
+            'id'              => $clientId,
+            'focus_va_id'     => $updated['focus_va_id'] ?? '',
+            'focus_va_name'   => $updated['focus_va_name'] ?? '',
+            'focus_va_email'  => $updated['focus_va_email'] ?? '',
+            'focus_va_avatar' => $updated['focus_va_avatar'] ?? '',
+            'contract_status' => $updated['contract_status'] ?? 'active',
+            'activity'        => $loggedActivity,
+        ]);
     }
 
     private function addActivity(string $clientId, array $user): void
@@ -752,7 +812,19 @@ final class ClientApiController
         ]);
 
         $this->invalidate();
-        echo json_encode(['success' => true, 'id' => $id]);
+        echo json_encode([
+            'success'  => true,
+            'id'       => $id,
+            'activity' => [
+                'id'          => $id,
+                'client_id'   => $clientId,
+                'author_id'   => $user['id'],
+                'author_name' => $user['name'],
+                'description' => $desc,
+                'type'        => $type,
+                'created_at'  => gmdate('Y-m-d H:i:s'),
+            ],
+        ]);
     }
 
     private function deleteClient(string $clientId, array $user): void

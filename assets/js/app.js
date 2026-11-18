@@ -612,12 +612,15 @@
     }
   }
 
+  let activeEditTaskId = null;
+
   function openTaskEditModal(taskId) {
     const allData = getTaskDataset();
     const task = allData && allData.tasks ? allData.tasks[taskId] : null;
     const modal = document.getElementById('modal-task-edit');
     if (!task || !modal) return;
 
+    activeEditTaskId = taskId;
     const tEl = modal.querySelector('#modal-edit-task-title');
     const mEl = modal.querySelector('#modal-edit-task-meta');
     if (tEl) tEl.textContent = task.title || 'Edit Deliverable Details';
@@ -639,6 +642,7 @@
       setVal('[name="description"]', task.description || '');
     }
 
+    renderSubtasksForTask(taskId, allData);
     openModal('modal-task-edit');
   }
 
@@ -676,10 +680,197 @@
     }
   }
 
+  function collectTaskMentionNames(taskId, allData) {
+    const seen = new Set();
+    const names = [];
+    const pushName = (n) => {
+      const clean = String(n || '').trim();
+      if (!clean) return;
+      const key = clean.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      names.push(clean);
+    };
+
+    const data = allData || {};
+    ((data.mention_candidates || {})[taskId] || []).forEach((c) => pushName(c.name));
+    const task = (data.tasks || {})[taskId];
+    if (task && task.va_name) pushName(task.va_name);
+    ((data.comment_authors || {})[taskId] || []).forEach((a) => pushName(a.name));
+    ((data.notes || {})[taskId] || []).forEach((n) => pushName(n.author_name));
+    ((data.comments || {})[taskId] || []).forEach((c) => pushName(c.author_name));
+    if (data.current_user_name) pushName(data.current_user_name);
+
+    names.sort((a, b) => b.length - a.length);
+    return names;
+  }
+
+  function formatTextWithMentionsHtml(rawText, taskId, allData) {
+    const text = String(rawText || '');
+    if (!text.includes('@')) return escapeHtml(text);
+
+    const knownNames = collectTaskMentionNames(taskId, allData);
+    const selfLower = String((allData && allData.current_user_name) || '').trim().toLowerCase();
+    const lowerText = text.toLowerCase();
+
+    let out = '';
+    let i = 0;
+    let plainStart = 0;
+
+    while (i < text.length) {
+      if (text[i] === '@') {
+        const prevChar = i > 0 ? text[i - 1] : '';
+        const validBoundaryBefore = i === 0 || /[\s(\[{"',:;]/.test(prevChar);
+
+        if (validBoundaryBefore) {
+          let matchedLen = 0;
+          let matchedText = '';
+
+          for (let k = 0; k < knownNames.length; k++) {
+            const candidate = knownNames[k];
+            const candLower = candidate.toLowerCase();
+            if (lowerText.startsWith(candLower, i + 1)) {
+              const nextIdx = i + 1 + candidate.length;
+              const nextChar = nextIdx < text.length ? text[nextIdx] : '';
+              if (nextIdx === text.length || /[\s.,!?:;)\]}"']/.test(nextChar)) {
+                matchedLen = 1 + candidate.length;
+                matchedText = text.slice(i, i + matchedLen);
+                break;
+              }
+            }
+          }
+
+          if (!matchedLen) {
+            const rest = text.slice(i + 1);
+            const m = rest.match(/^([A-Za-z\u00C0-\u024F0-9_-]{2,32})/);
+            if (m) {
+              matchedLen = 1 + m[1].length;
+              matchedText = '@' + m[1];
+            }
+          }
+
+          if (matchedLen > 1) {
+            if (i > plainStart) {
+              out += escapeHtml(text.slice(plainStart, i));
+            }
+            const mentionBody = matchedText.slice(1).trim().toLowerCase();
+            const isSelf = selfLower !== '' && (
+              mentionBody === selfLower ||
+              selfLower.split(/\s+/)[0] === mentionBody
+            );
+            out += '<span class="mention-tag' + (isSelf ? ' is-self' : '') + '">' + escapeHtml(matchedText) + '</span>';
+            i += matchedLen;
+            plainStart = i;
+            continue;
+          }
+        }
+      }
+      i++;
+    }
+
+    if (plainStart < text.length) {
+      out += escapeHtml(text.slice(plainStart));
+    }
+    return out;
+  }
+
+  function renderSubtaskContainer(taskId, listEl, counterEl, progressEl, subtasks) {
+    const items = Array.isArray(subtasks) ? subtasks : [];
+    const total = items.length;
+    const done = items.filter((s) => Boolean(s.is_completed)).length;
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+
+    if (counterEl) {
+      counterEl.textContent = done + ' / ' + total + ' done';
+    }
+    if (progressEl) {
+      progressEl.style.width = pct + '%';
+    }
+    if (!listEl) return;
+
+    listEl.innerHTML = '';
+    if (total === 0) {
+      listEl.innerHTML = '<div class="collab-empty">No sub-tasks yet. Break this deliverable into smaller steps below.</div>';
+      return;
+    }
+
+    items.forEach((st) => {
+      const row = document.createElement('div');
+      row.className = 'subtask-item' + (st.is_completed ? ' is-done' : '');
+      row.setAttribute('data-subtask-id', st.id || '');
+      row.setAttribute('data-subtask-task-id', taskId);
+
+      const label = document.createElement('label');
+      label.className = 'subtask-check-label';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.className = 'subtask-checkbox';
+      cb.checked = Boolean(st.is_completed);
+      cb.setAttribute('data-subtask-toggle', st.id || '');
+      cb.setAttribute('data-subtask-task-id', taskId);
+
+      const titleSpan = document.createElement('span');
+      titleSpan.className = 'subtask-title';
+      titleSpan.textContent = st.title || '';
+
+      label.appendChild(cb);
+      label.appendChild(titleSpan);
+
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'subtask-del-btn';
+      delBtn.setAttribute('data-subtask-delete', st.id || '');
+      delBtn.setAttribute('data-subtask-task-id', taskId);
+      delBtn.setAttribute('title', 'Delete sub-task');
+      delBtn.setAttribute('aria-label', 'Delete sub-task');
+      delBtn.textContent = '×';
+
+      row.appendChild(label);
+      row.appendChild(delBtn);
+      listEl.appendChild(row);
+    });
+  }
+
+  function renderSubtasksForTask(taskId, allData) {
+    const subtasks = ((allData && allData.subtasks) ? allData.subtasks[taskId] : null) || [];
+
+    const modal = document.getElementById('modal-task-edit');
+    if (modal && activeEditTaskId === taskId) {
+      renderSubtaskContainer(
+        taskId,
+        modal.querySelector('#modal-subtasks-list'),
+        modal.querySelector('#modal-subtasks-counter'),
+        modal.querySelector('#modal-subtasks-progress'),
+        subtasks
+      );
+    }
+
+    const drawer = document.getElementById('drawer-task-collab');
+    if (drawer && (activeCollabTaskId === taskId || !drawer.classList.contains('is-hidden'))) {
+      renderSubtaskContainer(
+        taskId,
+        drawer.querySelector('#collab-subtasks-list'),
+        drawer.querySelector('#collab-subtasks-counter'),
+        drawer.querySelector('#collab-subtasks-progress'),
+        subtasks
+      );
+      const tabCount = drawer.querySelector('[data-collab-subtask-tab-count]');
+      if (tabCount) {
+        const done = subtasks.filter((s) => Boolean(s.is_completed)).length;
+        tabCount.textContent = done + '/' + subtasks.length;
+      }
+    }
+  }
+
   function syncTaskCardIndicators(taskId, allData) {
     const notes = ((allData.notes || {})[taskId]) || [];
     const comments = ((allData.comments || {})[taskId]) || [];
     const authors = ((allData.comment_authors || {})[taskId]) || [];
+    const subtasks = ((allData.subtasks || {})[taskId]) || [];
+    const subTotal = subtasks.length;
+    const subDone = subtasks.filter((s) => Boolean(s.is_completed)).length;
+    const subPct = subTotal > 0 ? Math.round((subDone / subTotal) * 100) : 0;
 
     document.querySelectorAll('[data-task-note-count="' + taskId + '"]').forEach((el) => {
       el.textContent = String(notes.length);
@@ -687,6 +878,22 @@
     document.querySelectorAll('[data-task-comment-count="' + taskId + '"]').forEach((el) => {
       el.textContent = String(comments.length);
     });
+    document.querySelectorAll('[data-task-subtask-count="' + taskId + '"]').forEach((el) => {
+      el.textContent = subDone + '/' + subTotal;
+    });
+    document.querySelectorAll('[data-task-subtask-bar="' + taskId + '"]').forEach((bar) => {
+      bar.classList.toggle('is-hidden', subTotal === 0);
+    });
+    document.querySelectorAll('[data-task-subtask-fill="' + taskId + '"]').forEach((fill) => {
+      fill.style.width = subPct + '%';
+    });
+    document.querySelectorAll('[data-task-subtask-pct="' + taskId + '"]').forEach((pctEl) => {
+      pctEl.textContent = subPct + '%';
+    });
+    const drawerTabBadge = document.querySelector('#drawer-task-collab [data-collab-subtask-tab-count]');
+    if (drawerTabBadge && activeCollabTaskId === taskId) {
+      drawerTabBadge.textContent = subDone + '/' + subTotal;
+    }
     document.querySelectorAll('[data-task-commenter-avatars="' + taskId + '"]').forEach((wrap) => {
       wrap.innerHTML = '';
       authors.slice(0, 3).forEach((ca) => {
@@ -790,7 +997,7 @@
                     buildCollabActionBtn('Copy', 'copy', 'data-copy-text', item.text) +
                   '</div>' +
                 '</div>' +
-                '<p class="collab-entry-text">' + escapeHtml(item.text) + '</p>' +
+                '<p class="collab-entry-text">' + formatTextWithMentionsHtml(item.text, taskId, allData) + '</p>' +
               '</div>';
           } else {
             el.className = 'collab-comment-item';
@@ -810,7 +1017,7 @@
                     buildCollabActionBtn('Copy', 'copy', 'data-copy-text', item.text) +
                   '</div>' +
                 '</div>' +
-                '<p class="collab-entry-text">' + escapeHtml(item.text) + '</p>' +
+                '<p class="collab-entry-text">' + formatTextWithMentionsHtml(item.text, taskId, allData) + '</p>' +
               '</div>';
           }
           combinedList.appendChild(el);
@@ -841,7 +1048,7 @@
                   buildCollabActionBtn('Copy', 'copy', 'data-copy-text', n.content) +
                 '</div>' +
               '</div>' +
-              '<p class="collab-entry-text">' + escapeHtml(n.content) + '</p>' +
+              '<p class="collab-entry-text">' + formatTextWithMentionsHtml(n.content, taskId, allData) + '</p>' +
             '</div>';
           notesList.appendChild(div);
         });
@@ -875,7 +1082,7 @@
                   buildCollabActionBtn('Copy', 'copy', 'data-copy-text', c.message) +
                 '</div>' +
               '</div>' +
-              '<p class="collab-entry-text">' + escapeHtml(c.message) + '</p>' +
+              '<p class="collab-entry-text">' + formatTextWithMentionsHtml(c.message, taskId, allData) + '</p>' +
             '</div>';
           commentsList.appendChild(div);
         });
@@ -900,19 +1107,28 @@
       allData.comments = allData.comments || {};
       allData.comment_authors = allData.comment_authors || {};
       allData.mention_candidates = allData.mention_candidates || {};
+      allData.subtasks = allData.subtasks || {};
 
       const prevN = (allData.notes[taskId] || []).length;
       const prevC = (allData.comments[taskId] || []).length;
+      const prevS = JSON.stringify(allData.subtasks[taskId] || []);
       allData.notes[taskId] = Array.isArray(data.notes) ? data.notes : [];
       allData.comments[taskId] = Array.isArray(data.comments) ? data.comments : [];
       allData.comment_authors[taskId] = Array.isArray(data.comment_authors) ? data.comment_authors : [];
       if (Array.isArray(data.mention_candidates)) {
         allData.mention_candidates[taskId] = data.mention_candidates;
       }
+      if (Array.isArray(data.subtasks)) {
+        allData.subtasks[taskId] = data.subtasks;
+      }
 
       saveTaskDataset(allData);
       if (allData.notes[taskId].length !== prevN || allData.comments[taskId].length !== prevC) {
         renderTaskCollabLists(taskId, allData);
+      }
+      if (JSON.stringify(allData.subtasks[taskId]) !== prevS) {
+        renderSubtasksForTask(taskId, allData);
+        syncTaskCardIndicators(taskId, allData);
       }
     } catch (_err) {
     }
@@ -957,13 +1173,14 @@
     if (tEl) tEl.textContent = task.title || 'Deliverable Conversation';
     if (mEl) mEl.textContent = (task.client_name || '') + ' · ' + (task.va_name || '') + ' · Due ' + (task.deadline || '');
 
+    activeCollabTaskId = taskId;
     renderTaskCollabLists(taskId, allData);
+    renderSubtasksForTask(taskId, allData);
 
     drawer.querySelectorAll('input[name="task_id"]').forEach((inp) => { inp.value = taskId; });
     openDrawer('drawer-task-collab');
 
-    activeCollabTaskId = taskId;
-    const tabKey = (initialTab === 'comments' || initialTab === 'notes') ? initialTab : 'combined';
+    const tabKey = (initialTab === 'comments' || initialTab === 'notes' || initialTab === 'subtasks') ? initialTab : 'combined';
     activateTab('task-collab', tabKey);
 
     refreshTaskActivityLive(taskId);
@@ -1235,6 +1452,8 @@
 
         if (action === 'open-edit') {
           openTaskEditModal(tid);
+        } else if (action === 'open-subtasks') {
+          openTaskCollabDrawer(tid, 'subtasks');
         } else if (action === 'status') {
           const status = btn.getAttribute('data-status');
           try {
@@ -1527,6 +1746,174 @@
         }
       });
     }
+
+    // Sub-Tasks Breakdown Live Checklist CRUD (Create Drafts + Edit Modal + Collab Drawer)
+    const addSubtaskToTask = async (taskId, inputEl, btnEl) => {
+      const title = inputEl ? inputEl.value.trim() : '';
+      if (!taskId || !title) {
+        if (inputEl) inputEl.focus();
+        return;
+      }
+      if (btnEl) btnEl.disabled = true;
+      try {
+        const res = await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId) + '/subtasks', {
+          method: 'POST',
+          body: JSON.stringify({ title })
+        });
+        if (res && Array.isArray(res.subtasks)) {
+          const allData = getTaskDataset() || {};
+          allData.subtasks = allData.subtasks || {};
+          allData.subtasks[taskId] = res.subtasks;
+          saveTaskDataset(allData);
+          renderSubtasksForTask(taskId, allData);
+          syncTaskCardIndicators(taskId, allData);
+        }
+        if (inputEl) {
+          inputEl.value = '';
+          inputEl.focus();
+        }
+        showToast('Sub-task added', 'success');
+      } catch (err) {
+        showToast(err.message, 'error');
+      } finally {
+        if (btnEl) btnEl.disabled = false;
+      }
+    };
+
+    const modalSubInput = document.getElementById('modal-subtask-input');
+    const modalSubBtn = document.getElementById('modal-subtask-add-btn');
+    if (modalSubBtn && modalSubInput) {
+      modalSubBtn.addEventListener('click', () => addSubtaskToTask(activeEditTaskId, modalSubInput, modalSubBtn));
+      modalSubInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          addSubtaskToTask(activeEditTaskId, modalSubInput, modalSubBtn);
+        }
+      });
+    }
+
+    const collabSubInput = document.getElementById('collab-subtask-input');
+    const collabSubBtn = document.getElementById('collab-subtask-add-btn');
+    if (collabSubBtn && collabSubInput) {
+      collabSubBtn.addEventListener('click', () => addSubtaskToTask(activeCollabTaskId, collabSubInput, collabSubBtn));
+      collabSubInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          addSubtaskToTask(activeCollabTaskId, collabSubInput, collabSubBtn);
+        }
+      });
+    }
+
+    document.addEventListener('change', async (e) => {
+      const cb = e.target.closest('.subtask-checkbox[data-subtask-toggle]');
+      if (!cb) return;
+      const subId = cb.getAttribute('data-subtask-toggle');
+      const taskId = cb.getAttribute('data-subtask-task-id');
+      if (!subId || !taskId) return;
+
+      const nextChecked = cb.checked;
+      const allData = getTaskDataset() || {};
+      allData.subtasks = allData.subtasks || {};
+      const list = allData.subtasks[taskId] || [];
+      const idx = list.findIndex((s) => String(s.id) === String(subId));
+      if (idx !== -1) {
+        list[idx].is_completed = nextChecked;
+        saveTaskDataset(allData);
+        renderSubtasksForTask(taskId, allData);
+        syncTaskCardIndicators(taskId, allData);
+      }
+
+      try {
+        const res = await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId) + '/subtasks/' + encodeURIComponent(subId), {
+          method: 'PATCH',
+          body: JSON.stringify({ is_completed: nextChecked })
+        });
+        if (res && Array.isArray(res.subtasks)) {
+          allData.subtasks[taskId] = res.subtasks;
+          saveTaskDataset(allData);
+          renderSubtasksForTask(taskId, allData);
+          syncTaskCardIndicators(taskId, allData);
+        }
+      } catch (err) {
+        if (idx !== -1) {
+          list[idx].is_completed = !nextChecked;
+          saveTaskDataset(allData);
+          renderSubtasksForTask(taskId, allData);
+          syncTaskCardIndicators(taskId, allData);
+        }
+        showToast(err.message, 'error');
+      }
+    });
+
+    document.addEventListener('click', async (e) => {
+      const delBtn = e.target.closest('[data-subtask-delete]');
+      if (!delBtn) return;
+      const subId = delBtn.getAttribute('data-subtask-delete');
+      const taskId = delBtn.getAttribute('data-subtask-task-id');
+      if (!subId || !taskId) return;
+      delBtn.disabled = true;
+
+      try {
+        const res = await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId) + '/subtasks/' + encodeURIComponent(subId), {
+          method: 'DELETE'
+        });
+        const allData = getTaskDataset() || {};
+        allData.subtasks = allData.subtasks || {};
+        if (res && Array.isArray(res.subtasks)) {
+          allData.subtasks[taskId] = res.subtasks;
+        } else {
+          allData.subtasks[taskId] = (allData.subtasks[taskId] || []).filter((s) => String(s.id) !== String(subId));
+        }
+        saveTaskDataset(allData);
+        renderSubtasksForTask(taskId, allData);
+        syncTaskCardIndicators(taskId, allData);
+        showToast('Sub-task removed', 'success');
+      } catch (err) {
+        delBtn.disabled = false;
+        showToast(err.message, 'error');
+      }
+    });
+
+    // Optional Sub-Tasks Draft Builder inside Create Deliverable Drawer
+    const createSubInput = document.getElementById('create-subtask-draft-input');
+    const createSubBtn = document.getElementById('btn-add-create-subtask');
+    const createSubList = document.getElementById('create-subtasks-list');
+    if (createSubInput && createSubBtn && createSubList) {
+      const addDraftStep = () => {
+        const val = createSubInput.value.trim();
+        if (!val) {
+          createSubInput.focus();
+          return;
+        }
+        const chip = document.createElement('div');
+        chip.className = 'subtask-draft-chip';
+        const label = document.createElement('span');
+        label.textContent = val;
+        const hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'subtasks[]';
+        hidden.value = val;
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'subtask-del-btn';
+        rm.setAttribute('aria-label', 'Remove draft step');
+        rm.textContent = '×';
+        rm.addEventListener('click', () => chip.remove());
+        chip.appendChild(label);
+        chip.appendChild(hidden);
+        chip.appendChild(rm);
+        createSubList.appendChild(chip);
+        createSubInput.value = '';
+        createSubInput.focus();
+      };
+      createSubBtn.addEventListener('click', addDraftStep);
+      createSubInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          addDraftStep();
+        }
+      });
+    }
   }
 
   // ------------------------------------------------------------------------
@@ -1753,22 +2140,196 @@
   }
 
   function initClientDossiers() {
-    // Live text filter starting from 2nd character typed
-    const searchInput = document.getElementById('client-live-search');
-    if (searchInput) {
-      const applyFilter = () => {
-        const q = searchInput.value.trim().toLowerCase();
-        document.querySelectorAll('.client-card-item').forEach((card) => {
-          if (q.length < 2) {
-            card.style.display = '';
-            return;
-          }
-          const hay = (card.getAttribute('data-client-search') || '').toLowerCase();
-          card.style.display = hay.includes(q) ? '' : 'none';
-        });
-      };
-      searchInput.addEventListener('input', applyFilter);
+    const store = document.getElementById('clients-dossier-json');
+    let dossierData = { clients: {}, activities: {}, emails: {}, tasks: {}, vas: {} };
+    if (store) {
+      try {
+        dossierData = JSON.parse(store.textContent || '{}') || dossierData;
+      } catch (_err) {
+      }
     }
+    const userRole = store ? (store.getAttribute('data-user-role') || 'va') : 'va';
+    const userId = store ? (store.getAttribute('data-user-id') || '') : '';
+    const canEdit = store ? (store.getAttribute('data-can-edit') === '1') : false;
+
+    const searchInput = document.getElementById('crm-contact-search');
+    const vaFilter = document.getElementById('crm-va-filter');
+    const sortSelect = document.getElementById('crm-sort-select');
+    const visibleCountEl = document.getElementById('crm-visible-count');
+    const resetFiltersBtn = document.getElementById('crm-reset-filters');
+    const emptyClearBtn = document.getElementById('crm-empty-clear-btn');
+    const filterEmptyEl = document.getElementById('crm-filter-empty');
+    const contactsTable = document.getElementById('crm-contacts-table');
+    const contactsTbody = document.getElementById('crm-contacts-tbody');
+    const statusFilterBtns = Array.from(document.querySelectorAll('[data-crm-status-filter]'));
+
+    let activeStatusFilter = 'all';
+
+    function formatShortDate(raw) {
+      if (!raw) return '';
+      return String(raw).slice(0, 10);
+    }
+
+    function smallCrmAvatarHtml(url, name) {
+      if (url) {
+        return '<img src="' + escapeHtml(url) + '" alt="' + escapeHtml(name || 'VA') + '" class="avatar-xs">';
+      }
+      const init = String(name || 'UA').trim().slice(0, 2).toUpperCase() || 'UA';
+      return '<span class="avatar-xs">' + escapeHtml(init) + '</span>';
+    }
+
+    function applyCrmFiltersAndSort() {
+      if (!contactsTbody) return;
+      const rows = Array.from(contactsTbody.querySelectorAll('.crm-contact-row'));
+      const q = searchInput ? searchInput.value.trim().toLowerCase() : '';
+      const vaVal = vaFilter ? vaFilter.value : 'all';
+      const sortVal = sortSelect ? sortSelect.value : 'name_asc';
+
+      rows.sort((a, b) => {
+        if (sortVal === 'util_desc') {
+          return (parseFloat(b.getAttribute('data-util') || '0') || 0) - (parseFloat(a.getAttribute('data-util') || '0') || 0);
+        }
+        if (sortVal === 'hours_desc') {
+          return (parseFloat(b.getAttribute('data-hours') || '0') || 0) - (parseFloat(a.getAttribute('data-hours') || '0') || 0);
+        }
+        if (sortVal === 'activity_desc') {
+          const aa = a.getAttribute('data-activity') || '';
+          const ba = b.getAttribute('data-activity') || '';
+          if (aa !== ba) return ba.localeCompare(aa);
+        }
+        return (a.getAttribute('data-name') || '').localeCompare(b.getAttribute('data-name') || '');
+      });
+
+      let visibleCount = 0;
+      rows.forEach((row) => {
+        contactsTbody.appendChild(row);
+        const hay = (row.getAttribute('data-search') || '').toLowerCase();
+        const st = row.getAttribute('data-status') || 'active';
+        const rVa = row.getAttribute('data-va-id') || 'unassigned';
+
+        const matchQ = q === '' || hay.includes(q);
+        const matchSt = activeStatusFilter === 'all' || st === activeStatusFilter;
+        const matchVa = vaVal === 'all' || rVa === vaVal;
+
+        const show = matchQ && matchSt && matchVa;
+        row.style.display = show ? '' : 'none';
+        if (show) visibleCount++;
+      });
+
+      if (visibleCountEl) {
+        visibleCountEl.textContent = visibleCount + ' of ' + rows.length;
+      }
+      const hasFilters = q !== '' || activeStatusFilter !== 'all' || vaVal !== 'all';
+      if (resetFiltersBtn) resetFiltersBtn.classList.toggle('is-hidden', !hasFilters);
+      if (filterEmptyEl) filterEmptyEl.classList.toggle('is-hidden', visibleCount > 0 || rows.length === 0);
+      if (contactsTable) contactsTable.classList.toggle('is-hidden', visibleCount === 0 && rows.length > 0);
+    }
+
+    function clearCrmFilters() {
+      if (searchInput) searchInput.value = '';
+      if (vaFilter) vaFilter.value = 'all';
+      activeStatusFilter = 'all';
+      statusFilterBtns.forEach((b) => b.classList.toggle('is-active', b.getAttribute('data-crm-status-filter') === 'all'));
+      applyCrmFiltersAndSort();
+    }
+
+    if (searchInput) searchInput.addEventListener('input', applyCrmFiltersAndSort);
+    if (vaFilter) vaFilter.addEventListener('change', applyCrmFiltersAndSort);
+    if (sortSelect) sortSelect.addEventListener('change', applyCrmFiltersAndSort);
+    statusFilterBtns.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        activeStatusFilter = btn.getAttribute('data-crm-status-filter') || 'all';
+        statusFilterBtns.forEach((b) => b.classList.toggle('is-active', b === btn));
+        applyCrmFiltersAndSort();
+      });
+    });
+    if (resetFiltersBtn) resetFiltersBtn.addEventListener('click', clearCrmFilters);
+    if (emptyClearBtn) emptyClearBtn.addEventListener('click', clearCrmFilters);
+    if (contactsTbody) applyCrmFiltersAndSort();
+
+    function updateRowLastActivity(cid, activityItem) {
+      if (!contactsTbody || !activityItem) return;
+      const row = contactsTbody.querySelector('.crm-contact-row[data-client-row="' + CSS.escape(cid) + '"]');
+      if (!row) return;
+      const ts = String(activityItem.created_at || new Date().toISOString().slice(0, 19).replace('T', ' '));
+      row.setAttribute('data-activity', ts);
+      const cell = row.cells[5];
+      if (cell) {
+        cell.innerHTML =
+          '<div class="crm-cell-stack">' +
+            '<span class="mono tabular-nums" style="font-size:11.5px;font-weight:600;color:var(--ink);">' + escapeHtml(ts.slice(0, 10)) + '</span>' +
+            '<div class="muted crm-subline" style="max-width:200px;">' + escapeHtml(activityItem.description || activityItem.summary || 'Logged activity') + '</div>' +
+          '</div>';
+      }
+    }
+
+    // Direct Inline VA Reassignment inside Contact List table
+    document.querySelectorAll('.crm-inline-va-select[data-inline-va-client]').forEach((sel) => {
+      sel.addEventListener('change', async () => {
+        const cid = sel.getAttribute('data-inline-va-client') || '';
+        const prevVa = sel.getAttribute('data-prev-va') || '';
+        const nextVa = sel.value || '';
+        if (!cid) return;
+
+        sel.disabled = true;
+        try {
+          const res = await apiFetch('/api/v1/clients/' + encodeURIComponent(cid), {
+            method: 'PUT',
+            body: JSON.stringify({ focus_va_id: nextVa })
+          });
+
+          const vaName = (res && res.focus_va_name) ? res.focus_va_name : '';
+          const vaAvatar = (res && res.focus_va_avatar) ? res.focus_va_avatar : '';
+          const vaEmail = (res && res.focus_va_email) ? res.focus_va_email : '';
+          sel.setAttribute('data-prev-va', nextVa);
+
+          const avatarWrap = document.querySelector('[data-row-va-avatar="' + CSS.escape(cid) + '"]');
+          if (avatarWrap) {
+            avatarWrap.innerHTML = smallCrmAvatarHtml(vaAvatar, vaName || 'Unassigned');
+          }
+
+          const row = contactsTbody ? contactsTbody.querySelector('.crm-contact-row[data-client-row="' + CSS.escape(cid) + '"]') : null;
+          if (row) {
+            row.setAttribute('data-va-id', nextVa !== '' ? nextVa : 'unassigned');
+            const cl = (dossierData.clients || {})[cid] || {};
+            const hayParts = [
+              cl.agency_name || '',
+              cl.name || '',
+              cl.email || '',
+              cl.additional_email || '',
+              cl.phone || '',
+              vaName,
+              cl.tl_name || '',
+              cl.state || '',
+              cl.country || ''
+            ];
+            row.setAttribute('data-search', hayParts.join(' ').toLowerCase());
+          }
+
+          if (dossierData.clients && dossierData.clients[cid]) {
+            dossierData.clients[cid].focus_va_id = nextVa;
+            dossierData.clients[cid].focus_va_name = vaName;
+            dossierData.clients[cid].focus_va_email = vaEmail;
+            dossierData.clients[cid].focus_va_avatar = vaAvatar;
+          }
+
+          if (res && res.activity) {
+            if (!dossierData.activities) dossierData.activities = {};
+            if (!Array.isArray(dossierData.activities[cid])) dossierData.activities[cid] = [];
+            dossierData.activities[cid].unshift(res.activity);
+            updateRowLastActivity(cid, res.activity);
+          }
+
+          applyCrmFiltersAndSort();
+          showToast(vaName ? ('Assigned to ' + vaName) : 'Client marked unassigned', 'success');
+        } catch (err) {
+          sel.value = prevVa;
+          showToast(err.message || 'Unable to update VA assignment', 'error');
+        } finally {
+          sel.disabled = false;
+        }
+      });
+    });
 
     // "+ Secondary Email / Phone" reveal toggles
     document.querySelectorAll('[data-toggle-extra]').forEach((btn) => {
@@ -1828,18 +2389,134 @@
       });
     }
 
-    // Open Client Dossier Drawer
+    function renderClientTimeline(cid) {
+      const actList = document.getElementById('dossier-activities');
+      const commsBadge = document.getElementById('dossier-comms-badge');
+      const acts = ((dossierData.activities || {})[cid] || []).map((a) => ({
+        kind: 'activity',
+        badge: String(a.type || 'note'),
+        title: String(a.author_name || 'Staff'),
+        body: String(a.description || ''),
+        created_at: String(a.created_at || '')
+      }));
+      const emails = ((dossierData.emails || {})[cid] || []).map((em) => ({
+        kind: 'email',
+        badge: 'email',
+        title: String(em.subject || 'Email Message'),
+        subtitle: String(em.actor || ''),
+        body: String(em.summary || ''),
+        created_at: String(em.created_at || '')
+      }));
+
+      const combined = acts.concat(emails).sort((a, b) => b.created_at.localeCompare(a.created_at));
+      if (commsBadge) commsBadge.textContent = String(combined.length);
+      if (!actList) return;
+
+      if (combined.length === 0) {
+        actList.innerHTML = '<div class="crm-empty-state" style="padding:20px 14px;"><strong>No timeline activity yet</strong><p class="muted">Log a call, meeting, or account note above to start tracking this client\'s history.</p></div>';
+        return;
+      }
+
+      actList.innerHTML = combined.map((item) => {
+        const badgeCls = item.kind === 'email'
+          ? 'badge-info'
+          : (item.badge === 'meeting' ? 'badge-brand' : (item.badge === 'contract' ? 'badge-success' : 'badge-neutral'));
+        const badgeLabel = item.kind === 'email' ? 'Email' : item.badge;
+        const subLine = item.subtitle ? '<div class="muted" style="font-size:11.5px;margin-top:2px;">' + escapeHtml(item.subtitle) + '</div>' : '';
+        return '<div class="crm-timeline-item">' +
+          '<div class="crm-timeline-head">' +
+            '<div><strong>' + escapeHtml(item.title) + '</strong>' + subLine + '</div>' +
+            '<div style="display:flex;align-items:center;gap:8px;">' +
+              '<span class="badge ' + badgeCls + '">' + escapeHtml(badgeLabel) + '</span>' +
+              '<span class="muted mono tabular-nums" style="font-size:11px;">' + escapeHtml(formatShortDate(item.created_at)) + '</span>' +
+            '</div>' +
+          '</div>' +
+          '<p class="crm-timeline-body">' + escapeHtml(item.body) + '</p>' +
+        '</div>';
+      }).join('');
+    }
+
+    function renderClientTeamAndTasks(cid) {
+      const vaCard = document.getElementById('dossier-va-card');
+      const tasksList = document.getElementById('dossier-tasks-list');
+      const tasksBadge = document.getElementById('dossier-tasks-badge');
+      const cl = (dossierData.clients || {})[cid] || {};
+      const vaId = String(cl.focus_va_id || '');
+      const va = vaId && dossierData.vas ? dossierData.vas[vaId] : null;
+
+      if (vaCard) {
+        if (!va && !cl.focus_va_name) {
+          vaCard.innerHTML = '<div class="crm-va-card"><div class="muted" style="font-size:13px;">No Virtual Assistant currently assigned to this client. ' +
+            (canEdit ? 'Select a VA directly from the contact table or edit tab to assign coverage.' : '') + '</div></div>';
+        } else {
+          const vaName = va ? va.name : (cl.focus_va_name || 'Assigned VA');
+          const vaEmail = va ? (va.email || '') : (cl.focus_va_email || '');
+          const vaAvatar = va ? (va.avatar_url || '') : (cl.focus_va_avatar || '');
+          const specs = va && Array.isArray(va.specialties) ? va.specialties : [];
+          const canViewProfile = va && (
+            userRole === 'admin' ||
+            (userRole === 'team_leader' && String(va.team_leader_id || '') === String(userId))
+          );
+          const profileBtn = canViewProfile
+            ? '<a href="/profile?va_id=' + encodeURIComponent(va.id) + '" class="btn btn-secondary btn-sm">View VA Profile</a>'
+            : '';
+          const specsHtml = specs.length > 0
+            ? '<div class="muted" style="font-size:12px;margin-top:6px;">Specialties: ' + specs.map((s) => escapeHtml(s)).join(' · ') + '</div>'
+            : '';
+
+          vaCard.innerHTML =
+            '<div class="crm-va-card">' +
+              '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">' +
+                '<div style="display:flex;align-items:center;gap:10px;min-width:0;">' +
+                  smallCrmAvatarHtml(vaAvatar, vaName) +
+                  '<div style="min-width:0;">' +
+                    '<strong style="display:block;">' + escapeHtml(vaName) + '</strong>' +
+                    '<div class="muted" style="font-size:12px;">' + escapeHtml(vaEmail || 'Assigned Virtual Assistant') + '</div>' +
+                  '</div>' +
+                '</div>' +
+                profileBtn +
+              '</div>' +
+              specsHtml +
+            '</div>';
+        }
+      }
+
+      const clientTasks = (dossierData.tasks || {})[cid] || [];
+      if (tasksBadge) tasksBadge.textContent = String(clientTasks.length);
+      if (tasksList) {
+        if (clientTasks.length === 0) {
+          tasksList.innerHTML = '<div class="muted" style="font-size:12.5px;padding:10px 0;">No deliverables linked to this client account yet.</div>';
+        } else {
+          tasksList.innerHTML = clientTasks.map((tk) => {
+            const st = String(tk.status || 'todo').replace(/_/g, ' ');
+            const stCls = tk.status === 'completed' ? 'badge-success' : (tk.status === 'in_progress' ? 'badge-brand' : 'badge-neutral');
+            return '<div class="crm-task-mini-row">' +
+              '<div style="min-width:0;">' +
+                '<strong style="display:block;font-size:13px;">' + escapeHtml(tk.title) + '</strong>' +
+                '<div class="muted" style="font-size:11.5px;">' +
+                  escapeHtml(tk.va_name || 'Unassigned') + ' · Due <span class="mono tabular-nums">' + escapeHtml(formatShortDate(tk.deadline)) + '</span>' +
+                '</div>' +
+              '</div>' +
+              '<span class="badge ' + stCls + '">' + escapeHtml(st) + '</span>' +
+            '</div>';
+          }).join('');
+        }
+      }
+    }
+
+    // Open Tabbed Client Record Drawer
     document.querySelectorAll('[data-open-client]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const cid = btn.getAttribute('data-open-client');
-        const store = document.getElementById('clients-dossier-json');
-        if (!store || !cid) return;
-        const data = JSON.parse(store.textContent || '{}');
-        const cl = (data.clients || {})[cid];
+        if (!cid) return;
+        const cl = (dossierData.clients || {})[cid];
         if (!cl) return;
 
         const drawer = document.getElementById('drawer-client-dossier');
         if (!drawer) return;
+
+        const headAvatar = drawer.querySelector('#dossier-header-avatar');
+        if (headAvatar) headAvatar.innerHTML = smallCrmAvatarHtml(cl.avatar_url, cl.agency_name);
 
         const agencyEl = drawer.querySelector('#dossier-agency');
         const contactEl = drawer.querySelector('#dossier-contact');
@@ -1870,7 +2547,7 @@
           setVal('[name="website"]', cl.website || '');
           setVal('[name="contracted_hours_per_month"]', cl.contracted_hours_per_month || 40);
           setVal('[name="consumed_hours_month"]', cl.consumed_hours_month || 0);
-          if (cl.focus_va_id) setVal('[name="focus_va_id"]', cl.focus_va_id);
+          setVal('[name="focus_va_id"]', cl.focus_va_id || '');
           setVal('[name="internal_notes"]', cl.internal_notes || '');
 
           const addEmWrap = document.getElementById('edit-add-email-wrap');
@@ -1937,60 +2614,58 @@
 
         const actForm = drawer.querySelector('#form-client-activity');
         if (actForm) {
-          actForm.setAttribute('data-api-form', '/api/v1/clients/' + encodeURIComponent(cid) + '/activities');
+          const cidHidden = actForm.querySelector('[name="client_id"]');
+          if (cidHidden) cidHidden.value = cid;
         }
 
-        const actList = drawer.querySelector('#dossier-activities');
-        if (actList) {
-          actList.innerHTML = '';
-          const acts = (data.activities || {})[cid] || [];
-          if (acts.length === 0) {
-            actList.innerHTML = '<p class="muted">No activity entries yet.</p>';
-          } else {
-            acts.forEach((a) => {
-              const div = document.createElement('div');
-              div.className = 'comment-card';
-              div.innerHTML = '<div style="display:flex;justify-content:space-between;"><strong>' +
-                escapeHtml(a.author_name) + '</strong><span class="badge badge-neutral">' +
-                escapeHtml(a.type) + '</span></div><p style="margin-top:4px;">' +
-                escapeHtml(a.description) + '</p>';
-              actList.appendChild(div);
-            });
-          }
-        }
-
+        renderClientTimeline(cid);
+        renderClientTeamAndTasks(cid);
+        activateTab('crm-dossier', 'details');
         openDrawer('drawer-client-dossier');
       });
     });
 
-    // CRM Left Sidebar Navigation (Directory / Associated VAs / Communication Logs)
-    document.querySelectorAll('[data-crm-tab]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const target = btn.getAttribute('data-crm-tab');
-        document.querySelectorAll('[data-crm-tab]').forEach((b) => b.classList.toggle('active', b === btn));
-        document.querySelectorAll('[data-crm-panel]').forEach((panel) => {
-          panel.classList.toggle('is-hidden', panel.getAttribute('data-crm-panel') !== target);
-        });
-      });
-    });
+    // Live No-Reload Client Activity Timeline Submission
+    const activityForm = document.getElementById('form-client-activity');
+    if (activityForm) {
+      activityForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const cidInput = activityForm.querySelector('[name="client_id"]');
+        const typeInput = activityForm.querySelector('[name="type"]');
+        const descInput = activityForm.querySelector('[name="description"]');
+        const submitBtn = activityForm.querySelector('button[type="submit"]');
+        const cid = cidInput ? cidInput.value : '';
+        const desc = descInput ? descInput.value.trim() : '';
+        const typeVal = typeInput ? typeInput.value : 'note';
+        if (!cid || !desc) return;
 
-    // Communication Logs Filter
-    const commSearch = document.getElementById('crm-comm-search');
-    const commClientSel = document.getElementById('crm-comm-client-filter');
-    if (commSearch || commClientSel) {
-      const filterComms = () => {
-        const q = commSearch ? commSearch.value.trim().toLowerCase() : '';
-        const cid = commClientSel ? commClientSel.value : '';
-        document.querySelectorAll('.crm-comm-row').forEach((row) => {
-          const hay = (row.getAttribute('data-comm-search') || '').toLowerCase();
-          const rc = row.getAttribute('data-comm-client') || '';
-          const matchQ = (q === '' || hay.includes(q));
-          const matchC = (cid === '' || rc === cid);
-          row.style.display = (matchQ && matchC) ? '' : 'none';
-        });
-      };
-      if (commSearch) commSearch.addEventListener('input', filterComms);
-      if (commClientSel) commClientSel.addEventListener('change', filterComms);
+        if (submitBtn) submitBtn.disabled = true;
+        try {
+          const res = await apiFetch('/api/v1/clients/' + encodeURIComponent(cid) + '/activities', {
+            method: 'POST',
+            body: JSON.stringify({ type: typeVal, description: desc })
+          });
+          if (descInput) descInput.value = '';
+          const newAct = (res && res.activity) ? res.activity : {
+            id: (res && res.id) ? res.id : ('act-' + Date.now()),
+            client_id: cid,
+            author_name: 'You',
+            type: typeVal,
+            description: desc,
+            created_at: new Date().toISOString().slice(0, 19).replace('T', ' ')
+          };
+          if (!dossierData.activities) dossierData.activities = {};
+          if (!Array.isArray(dossierData.activities[cid])) dossierData.activities[cid] = [];
+          dossierData.activities[cid].unshift(newAct);
+          renderClientTimeline(cid);
+          updateRowLastActivity(cid, newAct);
+          showToast('CRM entry logged', 'success');
+        } catch (err) {
+          showToast(err.message || 'Unable to log activity', 'error');
+        } finally {
+          if (submitBtn) submitBtn.disabled = false;
+        }
+      });
     }
 
     // 3-Step Queued Bulk CSV Import Wizard (Analyze -> Verify Mapping -> Batched Queue Worker)
@@ -2827,6 +3502,19 @@
         });
       }
 
+      ms.addEventListener('workly:sync-ms', (ev) => {
+        const detail = (ev && ev.detail) || {};
+        const selectedSet = new Set(Array.isArray(detail.userIds) ? detail.userIds.map((id) => String(id)) : []);
+        checkboxes.forEach((cb) => {
+          cb.checked = selectedSet.has(String(cb.value));
+        });
+        if (detail.closeMenu && menu && trigger) {
+          menu.classList.add('is-hidden');
+          trigger.setAttribute('aria-expanded', 'false');
+        }
+        syncMultiselectUi();
+      });
+
       ms.addEventListener('workly:reset-ms', () => {
         checkboxes.forEach((cb) => { cb.checked = false; });
         if (searchInp) {
@@ -2870,12 +3558,17 @@
     const perksView = document.getElementById('workly-perks-view');
     if (!perksView) return;
 
+    const kpiProgramsEl = document.getElementById('perks-kpi-programs');
+    const kpiGrantsEl = document.getElementById('perks-kpi-grants');
+    const kpiBadgesEl = document.getElementById('perks-kpi-badges');
+    const kpiAwardsEl = document.getElementById('perks-kpi-awards');
     const grantsCountEl = document.getElementById('perks-grants-count');
     const grantsBoxEl = document.getElementById('perks-grants-container');
     const awardsCountEl = document.getElementById('perks-awards-count');
     const awardsBoxEl = document.getElementById('perks-awards-container');
     const historyCountEl = document.getElementById('perks-history-count');
     const historyBoxEl = document.getElementById('perks-history-container');
+    const historySearchEl = document.getElementById('perks-history-search');
 
     let historyTypeFilter = 'all';
     let lastBoardPayload = null;
@@ -2916,13 +3609,102 @@
       }
     }
 
-    function renderPerksBoard(board) {
+    function renderPerksBoard(board, opts) {
       if (!board) return;
+      const options = opts || {};
       lastBoardPayload = board;
       const canManage = perksView.getAttribute('data-can-manage') === '1' || !!board.can_manage;
+      const perksList = Array.isArray(board.perks) ? board.perks : [];
+      const badgesList = Array.isArray(board.badges) ? board.badges : [];
       const grants = Array.isArray(board.grants) ? board.grants : [];
       const awards = Array.isArray(board.awards) ? board.awards : [];
       const historyAll = Array.isArray(board.history) ? board.history : [];
+
+      if (kpiProgramsEl) kpiProgramsEl.textContent = String(perksList.length);
+      if (kpiGrantsEl) kpiGrantsEl.textContent = String(grants.length);
+      if (kpiBadgesEl) kpiBadgesEl.textContent = String(badgesList.length);
+      if (kpiAwardsEl) kpiAwardsEl.textContent = String(awards.length);
+
+      const tabCountPerks = perksView.querySelector('[data-perks-tab-count="perks"]');
+      const tabCountBadges = perksView.querySelector('[data-perks-tab-count="badges"]');
+      const tabCountGrants = perksView.querySelector('[data-perks-tab-count="grants"]');
+      const tabCountHistory = perksView.querySelector('[data-perks-tab-count="history"]');
+      if (tabCountPerks) tabCountPerks.textContent = String(perksList.length);
+      if (tabCountBadges) tabCountBadges.textContent = String(badgesList.length);
+      if (tabCountGrants) tabCountGrants.textContent = String(grants.length + awards.length);
+      if (tabCountHistory) tabCountHistory.textContent = String(historyAll.length);
+
+      const grantsByPerk = {};
+      grants.forEach((g) => {
+        const pid = String(g.perk_id || '');
+        if (!pid) return;
+        if (!grantsByPerk[pid]) grantsByPerk[pid] = [];
+        grantsByPerk[pid].push(g);
+      });
+
+      const awardsByBadge = {};
+      awards.forEach((aw) => {
+        const bid = String(aw.badge_id || '');
+        if (!bid) return;
+        if (!awardsByBadge[bid]) awardsByBadge[bid] = [];
+        awardsByBadge[bid].push(aw);
+      });
+
+      // Update inside-card Active Recipients avatar strips for every Perk card
+      perksView.querySelectorAll('[data-perk-holders]').forEach((strip) => {
+        const pid = strip.getAttribute('data-perk-holders') || '';
+        const holders = grantsByPerk[pid] || [];
+        const cntEl = perksView.querySelector('[data-perk-holder-count="' + CSS.escape(pid) + '"]');
+        if (cntEl) cntEl.textContent = holders.length + ' active';
+        if (holders.length === 0) {
+          strip.innerHTML = '<span class="perk-holders-empty">No VAs currently hold this perk</span>';
+        } else {
+          strip.innerHTML = holders.map((g) => {
+            const rmBtn = canManage
+              ? '<button type="button" class="perk-holder-revoke" title="Revoke perk from ' + escapeHtml(g.va_name) + '" aria-label="Revoke perk from ' + escapeHtml(g.va_name) + '" data-perk-revoke="/api/v1/perks/' + encodeURIComponent(pid) + '/grant?user_id=' + encodeURIComponent(g.user_id) + '">×</button>'
+              : '';
+            return '<span class="perk-holder-chip" title="' + escapeHtml(g.va_name) + '">' +
+              smallAvatarHtml(g.va_avatar, g.va_name) + rmBtn +
+            '</span>';
+          }).join('');
+        }
+      });
+
+      // Update inside-card Awarded To avatar strips for every Badge card
+      perksView.querySelectorAll('[data-badge-holders]').forEach((strip) => {
+        const bid = strip.getAttribute('data-badge-holders') || '';
+        const holders = awardsByBadge[bid] || [];
+        const cntEl = perksView.querySelector('[data-badge-holder-count="' + CSS.escape(bid) + '"]');
+        if (cntEl) cntEl.textContent = holders.length + ' earned';
+        if (holders.length === 0) {
+          strip.innerHTML = '<span class="perk-holders-empty">No VAs have earned this badge yet</span>';
+        } else {
+          strip.innerHTML = holders.map((aw) => {
+            const dt = String(aw.earned_at || '').slice(0, 10);
+            const tip = aw.va_name + (dt ? ' · Earned ' + dt : '');
+            return '<span class="perk-holder-chip" title="' + escapeHtml(tip) + '">' +
+              smallAvatarHtml(aw.va_avatar, aw.va_name) +
+            '</span>';
+          }).join('');
+        }
+      });
+
+      // Keep "Select VA Recipients" checkboxes & photo tray synced with persisted DB state
+      // (skip overwriting if user currently has that specific dropdown menu open)
+      allSelects.forEach((ms) => {
+        const kind = ms.getAttribute('data-ms-kind') || '';
+        const itemId = ms.getAttribute('data-ms-item-id') || '';
+        if (!kind || !itemId) return;
+        const menu = ms.querySelector('[data-va-ms-menu]');
+        const isMenuOpen = menu && !menu.classList.contains('is-hidden');
+        if (isMenuOpen && !options.forceSyncOpenMenus) return;
+
+        const targetList = kind === 'badge' ? (awardsByBadge[itemId] || []) : (grantsByPerk[itemId] || []);
+        const userIds = targetList.map((row) => String(row.user_id));
+        ms.dispatchEvent(new CustomEvent('workly:sync-ms', {
+          detail: { userIds, closeMenu: !!options.closeMenus }
+        }));
+      });
 
       if (grantsCountEl) grantsCountEl.textContent = grants.length + ' active';
       if (grantsBoxEl) {
@@ -2960,16 +3742,21 @@
                     '<span class="badge tier-' + escapeHtml(tierSlug) + '">' + badgeIconSvg(aw.icon_name || 'Medal', 12) + ' ' + escapeHtml(aw.badge_title) + '</span>' +
                   '</span>' +
                 '</div>' +
-                '<span class="muted mono" style="font-size:11px;">' + escapeHtml(dateLabel) + '</span>' +
+                '<span class="muted mono tabular-nums" style="font-size:11px;">' + escapeHtml(dateLabel) + '</span>' +
               '</div>';
             }).join('') +
             '</div>';
         }
       }
 
-      const filteredHistory = historyTypeFilter === 'all'
-        ? historyAll
-        : historyAll.filter((ev) => String(ev.item_type || '') === historyTypeFilter);
+      const hQuery = historySearchEl ? historySearchEl.value.trim().toLowerCase() : '';
+      const filteredHistory = historyAll.filter((ev) => {
+        const matchType = historyTypeFilter === 'all' || String(ev.item_type || '') === historyTypeFilter;
+        if (!matchType) return false;
+        if (hQuery === '') return true;
+        const hay = ((ev.item_title || '') + ' ' + (ev.va_name || '') + ' ' + (ev.actor_name || '')).toLowerCase();
+        return hay.includes(hQuery);
+      });
 
       if (historyCountEl) historyCountEl.textContent = filteredHistory.length + ' event(s)';
       if (historyBoxEl) {
@@ -2985,12 +3772,13 @@
               const subMeta = ev.item_meta
                 ? '<div class="muted" style="font-size:11px;">' + escapeHtml(ev.item_meta) + '</div>'
                 : '';
-              return '<tr data-history-item-type="' + escapeHtml(ev.item_type || 'perk') + '">' +
+              const hay = ((ev.item_title || '') + ' ' + (ev.va_name || '') + ' ' + (ev.actor_name || '')).toLowerCase();
+              return '<tr data-history-item-type="' + escapeHtml(ev.item_type || 'perk') + '" data-history-search="' + escapeHtml(hay) + '">' +
                 '<td><span class="badge ' + meta[1] + '">' + escapeHtml(meta[0]) + '</span></td>' +
                 '<td><strong>' + escapeHtml(ev.item_title) + '</strong>' + subMeta + '</td>' +
                 '<td>' + vaCell + '</td>' +
                 '<td>' + escapeHtml(ev.actor_name || 'Staff') + '</td>' +
-                '<td class="muted mono" style="font-size:11.5px;">' + escapeHtml(String(ev.created_at || '').slice(0, 16)) + '</td>' +
+                '<td class="muted mono tabular-nums" style="font-size:11.5px;">' + escapeHtml(String(ev.created_at || '').slice(0, 16)) + '</td>' +
               '</tr>';
             }).join('') +
             '</tbody></table></div>';
@@ -3000,42 +3788,76 @@
 
     window.worklyRenderPerksBoard = renderPerksBoard;
 
-    if (grantsBoxEl) {
-      grantsBoxEl.addEventListener('click', async (e) => {
-        const btn = e.target.closest('[data-perk-revoke]');
-        if (!btn) return;
-        const url = btn.getAttribute('data-perk-revoke');
+    // Unified click delegation inside #workly-perks-view for inline card revoke, table revoke, and perk deletion
+    perksView.addEventListener('click', async (e) => {
+      const revokeBtn = e.target.closest('[data-perk-revoke]');
+      if (revokeBtn) {
+        const url = revokeBtn.getAttribute('data-perk-revoke');
         if (!url) return;
         try {
-          btn.disabled = true;
+          revokeBtn.disabled = true;
           const res = await apiFetch(url, { method: 'DELETE' });
-          if (res && res.board) renderPerksBoard(res.board);
+          if (res && res.board) renderPerksBoard(res.board, { forceSyncOpenMenus: true });
           showToast('Perk revoked and logged to history', 'success');
         } catch (err) {
           showToast(err.message, 'error');
-          btn.disabled = false;
+          revokeBtn.disabled = false;
         }
+        return;
+      }
+
+      const delPerkBtn = e.target.closest('[data-perk-delete-url]');
+      if (delPerkBtn) {
+        const url = delPerkBtn.getAttribute('data-perk-delete-url');
+        const pid = delPerkBtn.getAttribute('data-perk-delete-id');
+        if (!url) return;
+        try {
+          delPerkBtn.disabled = true;
+          const res = await apiFetch(url, { method: 'DELETE' });
+          if (pid) {
+            const card = perksView.querySelector('[data-perk-card="' + CSS.escape(pid) + '"]');
+            if (card) card.remove();
+          }
+          if (res && res.board) renderPerksBoard(res.board, { forceSyncOpenMenus: true });
+          showToast('Perk program deleted', 'success');
+        } catch (err) {
+          showToast(err.message, 'error');
+          delPerkBtn.disabled = false;
+        }
+      }
+    });
+
+    function applyDomHistoryFilter() {
+      if (lastBoardPayload) {
+        renderPerksBoard(lastBoardPayload);
+        return;
+      }
+      if (!historyBoxEl) return;
+      const q = historySearchEl ? historySearchEl.value.trim().toLowerCase() : '';
+      const rows = Array.from(historyBoxEl.querySelectorAll('tr[data-history-item-type]'));
+      let visibleCount = 0;
+      rows.forEach((tr) => {
+        const matchType = historyTypeFilter === 'all' || tr.getAttribute('data-history-item-type') === historyTypeFilter;
+        const hay = (tr.getAttribute('data-history-search') || '').toLowerCase();
+        const matchQuery = q === '' || hay.includes(q);
+        const show = matchType && matchQuery;
+        tr.style.display = show ? '' : 'none';
+        if (show) visibleCount++;
       });
+      if (historyCountEl) historyCountEl.textContent = visibleCount + ' event(s)';
     }
 
     perksView.querySelectorAll('[data-perks-history-filter]').forEach((chip) => {
       chip.addEventListener('click', () => {
         historyTypeFilter = chip.getAttribute('data-perks-history-filter') || 'all';
         perksView.querySelectorAll('[data-perks-history-filter]').forEach((c) => c.classList.toggle('is-active', c === chip));
-        if (lastBoardPayload) {
-          renderPerksBoard(lastBoardPayload);
-        } else if (historyBoxEl) {
-          const rows = Array.from(historyBoxEl.querySelectorAll('tr[data-history-item-type]'));
-          let visibleCount = 0;
-          rows.forEach((tr) => {
-            const match = historyTypeFilter === 'all' || tr.getAttribute('data-history-item-type') === historyTypeFilter;
-            tr.style.display = match ? '' : 'none';
-            if (match) visibleCount++;
-          });
-          if (historyCountEl) historyCountEl.textContent = visibleCount + ' event(s)';
-        }
+        applyDomHistoryFilter();
       });
     });
+
+    if (historySearchEl) {
+      historySearchEl.addEventListener('input', applyDomHistoryFilter);
+    }
 
     async function refreshPerksLive() {
       if (document.hidden) return;
@@ -3454,7 +4276,7 @@
               targetUrl = targetUrl.replace('{task_id}', encodeURIComponent(resolvedTid));
             }
 
-            if (form.hasAttribute('data-perk-assign-form') && (!Array.isArray(payload.user_ids) || payload.user_ids.length === 0)) {
+            if (form.hasAttribute('data-perk-assign-form') && !payload.sync_recipients && (!Array.isArray(payload.user_ids) || payload.user_ids.length === 0)) {
               showToast('Select at least one Virtual Assistant recipient first', 'error');
               if (submitBtn) submitBtn.disabled = false;
               return;
@@ -3479,16 +4301,19 @@
               }
             }
 
-            // Real-time no-reload update for Perks & Badges assignments
+            // Real-time no-reload update for Perks & Badges assignments (keeps synced recipients checked!)
             if (form.hasAttribute('data-no-reload') && form.hasAttribute('data-perk-assign-form')) {
-              const msEl = form.querySelector('[data-va-multiselect]');
-              if (msEl) msEl.dispatchEvent(new CustomEvent('workly:reset-ms'));
               if (res && res.board && typeof window.worklyRenderPerksBoard === 'function') {
-                window.worklyRenderPerksBoard(res.board);
+                window.worklyRenderPerksBoard(res.board, { forceSyncOpenMenus: true, closeMenus: true });
               }
-              const kind = form.getAttribute('data-perk-assign-form') === 'badge' ? 'Badge awarded' : 'Perk granted';
-              const count = (res && res.count) ? res.count : 1;
-              showToast(kind + ' to ' + count + ' VA(s) in real time', 'success');
+              const added = res && typeof res.granted_count === 'number' ? res.granted_count : 0;
+              const removed = res && typeof res.revoked_count === 'number' ? res.revoked_count : 0;
+              const total = res && typeof res.count === 'number' ? res.count : 0;
+              const kind = form.getAttribute('data-perk-assign-form') === 'badge' ? 'Badge recipients' : 'Perk recipients';
+              const msg = (added > 0 || removed > 0)
+                ? (kind + ' updated (' + total + ' active)')
+                : (kind + ' synchronized (' + total + ' active)');
+              showToast(msg, 'success');
               if (submitBtn) submitBtn.disabled = false;
               return;
             }

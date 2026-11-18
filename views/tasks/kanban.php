@@ -53,6 +53,7 @@ $notesMap = $data['notes_by_task'] ?? [];
 $commentsMap = $data['comments_by_task'] ?? [];
 $commentAuthorsMap = $data['comment_authors_by_task'] ?? [];
 $extraHoursMap = $data['extra_hours_by_task'] ?? [];
+$subtasksMap = $data['subtasks_by_task'] ?? [];
 $mentionCandidatesMap = $data['mention_candidates_by_task'] ?? [];
 $dueToday = (int) ($data['due_today_count'] ?? 0);
 $overdue = (int) ($data['overdue_count'] ?? 0);
@@ -62,7 +63,7 @@ $todayYmd = date('Y-m-d');
 $vaDistinctClientCount = max(count($data['clients'] ?? []), count($swimlanes));
 $showSwimlanes = !($role === 'va' && $vaDistinctClientCount <= 1);
 
-$renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $commentAuthorsMap, $todayYmd): string {
+$renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $commentAuthorsMap, $subtasksMap, $todayYmd): string {
     $prioKey = strtolower((string) ($task['priority'] ?? 'medium'));
     $pMeta = match ($prioKey) {
         'urgent' => ['Urgent', 'priority-urgent', 'Zap'],
@@ -73,6 +74,15 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
     $noteCount = count($notesMap[$task['id']] ?? []);
     $commentCount = count($commentsMap[$task['id']] ?? []);
     $commentAuthors = $commentAuthorsMap[$task['id']] ?? [];
+    $subtasksList = $subtasksMap[$task['id']] ?? [];
+    $subTotal = count($subtasksList);
+    $subDone = 0;
+    foreach ($subtasksList as $stItem) {
+        if (!empty($stItem['is_completed'])) {
+            $subDone++;
+        }
+    }
+    $subPct = $subTotal > 0 ? (int) round(($subDone / $subTotal) * 100) : 0;
     $extraHrs = (float) ($task['extra_hours_logged'] ?? 0);
     $vaInitials = strtoupper(substr((string) ($task['va_name'] ?? 'VA'), 0, 2));
     $isOverdueCard = ($task['status'] !== 'completed' && (string) $task['deadline'] < $todayYmd);
@@ -109,8 +119,19 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
         <span class="mono" style="font-size:11px;color:<?= $isOverdueCard ? 'var(--danger)' : 'var(--muted)' ?>;"><?= SecurityHelper::e($task['deadline']) ?></span>
       </div>
 
+      <div class="task-subtask-bar-wrap<?= $subTotal === 0 ? ' is-hidden' : '' ?>" data-task-subtask-bar="<?= SecurityHelper::e($task['id']) ?>">
+        <div class="progress-track" style="height:4px;flex:1;">
+          <div class="progress-fill" data-task-subtask-fill="<?= SecurityHelper::e($task['id']) ?>" style="width:<?= $subPct ?>%;"></div>
+        </div>
+        <span class="mono muted" style="font-size:10.5px;" data-task-subtask-pct="<?= SecurityHelper::e($task['id']) ?>"><?= $subPct ?>%</span>
+      </div>
+
       <div class="task-card-actions">
         <div style="display:flex;align-items:center;gap:4px;">
+          <button type="button" class="icon-chip-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="subtasks" title="Sub-Tasks Checklist">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="6" height="6" rx="1.5"/><path d="m4.5 8 1.2 1.2 2-2.2"/><path d="M12 8h9"/><rect x="3" y="14" width="6" height="6" rx="1.5"/><path d="M12 17h9"/></svg>
+            <span class="tabular-nums" data-task-subtask-count="<?= SecurityHelper::e($task['id']) ?>"><?= $subDone ?>/<?= $subTotal ?></span>
+          </button>
           <button type="button" class="icon-chip-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="combined" title="Notes &amp; Comments Timeline">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
             <span data-task-note-count="<?= SecurityHelper::e($task['id']) ?>"><?= $noteCount ?></span>
@@ -140,17 +161,15 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
             <?php endif; ?>
           </div>
 
-          <!-- Avatar task owner 
-           
+<!-- Avatar task owner 
           <span style="display:inline-flex;align-items:center;" title="Assigned VA: <?= SecurityHelper::e($task['va_name']) ?>">
             <?php if (!empty($task['va_avatar'])): ?>
               <img src="<?= SecurityHelper::e($task['va_avatar']) ?>" alt="<?= SecurityHelper::e($task['va_name']) ?>" class="avatar avatar-sm">
             <?php else: ?>
               <span class="avatar avatar-sm"><?= SecurityHelper::e($vaInitials) ?></span>
             <?php endif; ?>
-          </span> 
-
-          -->
+          </span>
+-->
         </div>
       </div>
     </article>
@@ -353,6 +372,9 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
   <button type="button" data-cm-action="open-edit">
     <?= workly_icon_svg('Edit', 14) ?> <span>Edit Details</span>
   </button>
+  <button type="button" data-cm-action="open-subtasks">
+    <?= workly_icon_svg('Check', 14) ?> <span>Sub-Tasks Checklist</span>
+  </button>
 
   <div class="context-menu-divider"></div>
   <div class="context-menu-label">Move Stage</div>
@@ -381,7 +403,9 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
     'comments'           => $commentsMap,
     'comment_authors'    => $commentAuthorsMap,
     'extra_hours'        => $extraHoursMap,
+    'subtasks'           => $subtasksMap,
     'mention_candidates' => $mentionCandidatesMap,
+    'current_user_name'  => (string) ($user['name'] ?? ''),
 ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
 
 <!-- Right-Side Drawer: Create Deliverable -->
@@ -461,6 +485,15 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
             <input class="input" name="initial_note" placeholder="Pinned guidance note...">
           </div>
 
+          <div class="form-group">
+            <label class="form-label">Sub-Tasks Breakdown (optional)</label>
+            <div class="subtask-draft-row">
+              <input type="text" class="input" id="create-subtask-draft-input" placeholder="Break deliverable into a smaller step...">
+              <button type="button" class="btn btn-secondary btn-sm" id="btn-add-create-subtask">+ Add Step</button>
+            </div>
+            <div id="create-subtasks-list" class="subtask-draft-list"></div>
+          </div>
+
           <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;">
             <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
             <button type="submit" class="btn btn-primary">Create Deliverable</button>
@@ -538,13 +571,31 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
           <button type="submit" class="btn btn-primary">Save Task Changes</button>
         </div>
       </form>
+
+      <section class="subtasks-panel" id="modal-subtasks-section" aria-label="Task Sub-Tasks Breakdown">
+        <div class="subtasks-head">
+          <div>
+            <h4>Sub-Tasks Checklist</h4>
+            <span class="muted" style="font-size:12px;">Break complex work into trackable action items.</span>
+          </div>
+          <span id="modal-subtasks-counter" class="muted tabular-nums" style="font-size:12px;font-weight:700;">0 / 0 done</span>
+        </div>
+        <div class="progress-track" style="height:6px;margin-bottom:12px;">
+          <div id="modal-subtasks-progress" class="progress-fill" style="width:0%;"></div>
+        </div>
+        <div id="modal-subtasks-list" class="subtasks-list"></div>
+        <div class="subtask-add-row">
+          <input type="text" class="input" id="modal-subtask-input" placeholder="Add a sub-task step...">
+          <button type="button" class="btn btn-secondary btn-sm" id="modal-subtask-add-btn">+ Add Sub-Task</button>
+        </div>
+      </section>
     </div>
   </div>
 </div>
 
-<!-- Window 2: Right-Side Drawer for Combined Timeline, VA Notes & Comments (Live No-Reload) -->
+<!-- Window 2: Right-Side Drawer for Sub-Tasks, Combined Timeline, VA Notes & Comments (Live No-Reload) -->
 <div id="drawer-task-collab" class="drawer-backdrop is-hidden">
-  <aside class="drawer-panel" role="dialog" aria-label="Task Notes and Comments">
+  <aside class="drawer-panel" role="dialog" aria-label="Task Sub-Tasks, Notes and Comments">
     <div class="drawer-head">
       <div>
         <h3 id="collab-task-title">Deliverable Conversation</h3>
@@ -559,6 +610,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
     <div class="drawer-body">
       <div class="tab-strip">
         <button type="button" class="tab-btn active" data-tab-group="task-collab" data-tab-btn="combined">Combined Timeline</button>
+        <button type="button" class="tab-btn" data-tab-group="task-collab" data-tab-btn="subtasks">Sub-Tasks <span class="tabular-nums" data-collab-subtask-tab-count>0/0</span></button>
         <button type="button" class="tab-btn" data-tab-group="task-collab" data-tab-btn="notes">VA Notes</button>
         <button type="button" class="tab-btn" data-tab-group="task-collab" data-tab-btn="comments">Comments</button>
       </div>
@@ -604,7 +656,26 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
         </form>
       </div>
 
-      <!-- Tab 2: Execution Notes -->
+      <!-- Tab 2: Interactive Sub-Tasks Checklist -->
+      <div class="is-hidden" data-tab-group="task-collab" data-tab-panel="subtasks">
+        <div class="subtasks-head" style="margin-bottom:10px;">
+          <div>
+            <h4>Deliverable Sub-Tasks</h4>
+            <span class="muted" style="font-size:12px;">Check off sub-tasks in real time as work progresses.</span>
+          </div>
+          <span id="collab-subtasks-counter" class="muted tabular-nums" style="font-size:12px;font-weight:700;">0 / 0 done</span>
+        </div>
+        <div class="progress-track" style="height:6px;margin-bottom:14px;">
+          <div id="collab-subtasks-progress" class="progress-fill" style="width:0%;"></div>
+        </div>
+        <div id="collab-subtasks-list" class="subtasks-list" style="margin-bottom:14px;"></div>
+        <div class="subtask-add-row">
+          <input type="text" class="input" id="collab-subtask-input" placeholder="Break into a new sub-task step...">
+          <button type="button" class="btn btn-primary btn-sm" id="collab-subtask-add-btn">+ Add Step</button>
+        </div>
+      </div>
+
+      <!-- Tab 3: Execution Notes -->
       <div class="is-hidden" data-tab-group="task-collab" data-tab-panel="notes">
         <div id="detail-notes-list" style="margin-bottom:14px;"></div>
         <form id="form-task-note" data-no-reload="1" data-api-form="/api/v1/tasks/{task_id}/notes" data-api-method="POST">
@@ -618,7 +689,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
         </form>
       </div>
 
-      <!-- Tab 3: Comments -->
+      <!-- Tab 4: Comments -->
       <div class="is-hidden" data-tab-group="task-collab" data-tab-panel="comments">
         <div id="detail-comments-list" style="margin-bottom:14px;"></div>
         <form id="form-task-comment" data-no-reload="1" data-api-form="/api/v1/tasks/{task_id}/comments" data-api-method="POST">

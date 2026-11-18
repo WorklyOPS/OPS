@@ -373,18 +373,20 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
             <div class="grid-4">
               <?php for ($i = 0; $i < 4; $i++): ?><div class="skeleton-card" style="height:106px;"></div><?php endfor; ?>
             </div>
-            <div class="crm-shell">
-              <div class="card" style="display:grid;gap:10px;align-content:start;">
-                <?php for ($s = 0; $s < 3; $s++): ?><div class="skeleton-bar" style="height:40px;border-radius:10px;"></div><?php endfor; ?>
-              </div>
-              <div style="display:grid;gap:14px;">
-                <div class="skeleton-bar" style="height:56px;border-radius:14px;"></div>
-                <div class="grid-2">
-                  <?php for ($c = 0; $c < 4; $c++): ?>
-                    <div class="skeleton-card" style="height:190px;"></div>
-                  <?php endfor; ?>
+            <div class="card" style="display:grid;gap:14px;">
+              <div class="skeleton-bar" style="height:44px;border-radius:10px;"></div>
+              <?php for ($c = 0; $c < 6; $c++): ?>
+                <div style="display:flex;align-items:center;gap:14px;padding:10px 0;border-bottom:1px solid var(--border);">
+                  <div class="skeleton-circle"></div>
+                  <div style="flex:1;display:grid;gap:6px;">
+                    <div class="skeleton-bar" style="width:36%;height:15px;"></div>
+                    <div class="skeleton-bar" style="width:24%;height:11px;"></div>
+                  </div>
+                  <div class="skeleton-bar" style="width:140px;height:30px;border-radius:8px;"></div>
+                  <div class="skeleton-bar" style="width:90px;height:14px;border-radius:6px;"></div>
+                  <div class="skeleton-bar" style="width:84px;height:30px;border-radius:8px;"></div>
                 </div>
-              </div>
+              <?php endfor; ?>
             </div>
 
           <?php elseif ($activeSection === 'calendar_reports'): ?>
@@ -422,7 +424,16 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
               <div class="skeleton-card" style="height:520px;"></div>
             </div>
 
-          <?php elseif ($activeSection === 'knowledge' || $activeSection === 'perks'): ?>
+          <?php elseif ($activeSection === 'perks'): ?>
+            <div class="grid-4">
+              <?php for ($i = 0; $i < 4; $i++): ?><div class="skeleton-card" style="height:98px;"></div><?php endfor; ?>
+            </div>
+            <div class="skeleton-bar" style="width:440px;max-width:100%;height:42px;border-radius:12px;"></div>
+            <div class="grid-2">
+              <?php for ($k = 0; $k < 4; $k++): ?><div class="skeleton-card" style="height:240px;"></div><?php endfor; ?>
+            </div>
+
+          <?php elseif ($activeSection === 'knowledge'): ?>
             <div class="skeleton-bar" style="height:56px;border-radius:12px;"></div>
             <div class="grid-3">
               <?php for ($k = 0; $k < 6; $k++): ?><div class="skeleton-card" style="height:175px;"></div><?php endfor; ?>

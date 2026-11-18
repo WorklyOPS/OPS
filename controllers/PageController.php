@@ -206,12 +206,14 @@ final class PageController
         $stmt->execute($params);
         $tasks = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Fetch notes, comments & extra hours indexed by task_id (with commenter profile photos)
+        // Fetch notes, comments, extra hours & sub-tasks indexed by task_id
+        TaskApiController::ensureTaskSchemaConstraints($this->db);
         $taskIds = array_column($tasks, 'id');
         $notesByTask = [];
         $commentsByTask = [];
         $commentAuthorsByTask = [];
         $extraHoursByTask = [];
+        $subtasksByTask = [];
         if (!empty($taskIds)) {
             $placeholders = implode(',', array_fill(0, count($taskIds), '?'));
             $nStmt = $this->db->prepare("
@@ -253,6 +255,23 @@ final class PageController
             $ehStmt->execute($taskIds);
             foreach ($ehStmt->fetchAll(PDO::FETCH_ASSOC) as $eh) {
                 $extraHoursByTask[$eh['task_id']][] = $eh;
+            }
+
+            try {
+                $stStmt = $this->db->prepare("
+                    SELECT id, task_id, title, is_completed, position, created_by_id, completed_at, created_at, updated_at
+                    FROM task_subtasks
+                    WHERE task_id IN ({$placeholders})
+                    ORDER BY position ASC, created_at ASC
+                ");
+                $stStmt->execute($taskIds);
+                foreach ($stStmt->fetchAll(PDO::FETCH_ASSOC) as $st) {
+                    $st['is_completed'] = filter_var($st['is_completed'], FILTER_VALIDATE_BOOLEAN);
+                    $st['position'] = (int) ($st['position'] ?? 0);
+                    $subtasksByTask[$st['task_id']][] = $st;
+                }
+            } catch (Throwable) {
+                $subtasksByTask = [];
             }
         }
 
@@ -326,6 +345,7 @@ final class PageController
             'comments_by_task'           => $commentsByTask,
             'comment_authors_by_task'    => $commentAuthorsByTask,
             'extra_hours_by_task'        => $extraHoursByTask,
+            'subtasks_by_task'           => $subtasksByTask,
             'mention_candidates_by_task' => $mentionCandidatesByTask,
             'status_counts'              => $statusCounts,
             'due_today_count'            => $dueTodayCount,
@@ -466,65 +486,99 @@ final class PageController
                 unset($tr);
                 $res['completion_trend'] = $trendRows;
 
-                // Kanban distribution per status & per VA assignee (including completion_rate & overdue_count)
+                // Kanban distribution per status & per VA assignee (including completion_rate, overdue_count & avg turnaround hours)
                 $kDistStmt = $this->db->prepare("
                     SELECT u.id AS va_id,
                            u.name AS va_name,
                            u.avatar_url,
                            COALESCE(m.on_time_rate, 100.0) AS on_time_rate,
-                            COUNT(t.id) FILTER (WHERE t.status = 'backlog')::INTEGER AS backlog,
-                            COUNT(t.id) FILTER (WHERE t.status = 'todo')::INTEGER AS todo,
-                            COUNT(t.id) FILTER (WHERE t.status = 'in_progress')::INTEGER AS in_progress,
-                            COUNT(t.id) FILTER (WHERE t.status = 'completed')::INTEGER AS completed,
-                            COUNT(t.id) FILTER (WHERE t.status <> 'completed' AND t.deadline < CURRENT_DATE)::INTEGER AS overdue_count,
-                            COUNT(t.id)::INTEGER AS total_tasks,
-                            COALESCE(SUM(t.estimated_hours + COALESCE(t.extra_hours_logged, 0)), 0)::NUMERIC AS total_hours
-                     FROM users u
-                     LEFT JOIN va_task_metrics m ON u.id = m.va_id
-                     LEFT JOIN tasks t ON t.assigned_va_id = u.id
-                     WHERE u.is_active = TRUE
-                       AND (u.team_leader_id = :tl OR t.created_by_id = :tl2)
-                     GROUP BY u.id, u.name, u.avatar_url, m.on_time_rate
-                     ORDER BY total_tasks DESC, u.name ASC
-                 ");
-                 $kDistStmt->execute([':tl' => $uid, ':tl2' => $uid]);
-                 $kanbanByVa = $kDistStmt->fetchAll(PDO::FETCH_ASSOC);
+                           COUNT(t.id) FILTER (WHERE t.status = 'backlog')::INTEGER AS backlog,
+                           COUNT(t.id) FILTER (WHERE t.status = 'todo')::INTEGER AS todo,
+                           COUNT(t.id) FILTER (WHERE t.status = 'in_progress')::INTEGER AS in_progress,
+                           COUNT(t.id) FILTER (WHERE t.status = 'completed')::INTEGER AS completed,
+                           COUNT(t.id) FILTER (WHERE t.status <> 'completed' AND t.deadline < CURRENT_DATE)::INTEGER AS overdue_count,
+                           COUNT(t.id)::INTEGER AS total_tasks,
+                           COALESCE(SUM(t.estimated_hours + COALESCE(t.extra_hours_logged, 0)), 0)::NUMERIC AS total_hours,
+                           ROUND(
+                             COALESCE(
+                               AVG(GREATEST(0.0, EXTRACT(EPOCH FROM (COALESCE(t.completed_at, t.updated_at) - t.created_at)) / 3600.0))
+                               FILTER (WHERE t.status = 'completed'),
+                               0
+                             )::NUMERIC,
+                             1
+                           ) AS avg_turnaround_hours
+                    FROM users u
+                    LEFT JOIN va_task_metrics m ON u.id = m.va_id
+                    LEFT JOIN tasks t ON t.assigned_va_id = u.id
+                    WHERE u.is_active = TRUE
+                      AND (u.team_leader_id = :tl OR t.created_by_id = :tl2)
+                    GROUP BY u.id, u.name, u.avatar_url, m.on_time_rate
+                    ORDER BY total_tasks DESC, u.name ASC
+                ");
+                $kDistStmt->execute([':tl' => $uid, ':tl2' => $uid]);
+                $kanbanByVa = $kDistStmt->fetchAll(PDO::FETCH_ASSOC);
 
-                 $kanbanStatusCounts = [
-                     'backlog'     => 0,
-                     'todo'        => 0,
-                     'in_progress' => 0,
-                     'completed'   => 0,
-                 ];
-                 $overdueTotal = 0;
-                 $vaPerfRows = [];
-                 foreach ($kanbanByVa as &$vaRow) {
-                     foreach (array_keys($kanbanStatusCounts) as $stKey) {
-                         $kanbanStatusCounts[$stKey] += (int) ($vaRow[$stKey] ?? 0);
-                     }
-                     $totVa = (int) ($vaRow['total_tasks'] ?? 0);
-                     $doneVa = (int) ($vaRow['completed'] ?? 0);
-                     $ovdVa = (int) ($vaRow['overdue_count'] ?? 0);
-                     $overdueTotal += $ovdVa;
-                     $compRate = $totVa > 0 ? round(($doneVa / $totVa) * 100, 1) : 0.0;
-                     $vaRow['completion_rate'] = $compRate;
-                     $firstName = explode(' ', trim((string) $vaRow['va_name']))[0] ?: 'VA';
-                     $vaPerfRows[] = [
-                         'va_id'           => (string) $vaRow['va_id'],
-                         'name'            => $firstName,
-                         'full_name'       => (string) $vaRow['va_name'],
-                         'completion_rate' => $compRate,
-                         'on_time_rate'    => round((float) ($vaRow['on_time_rate'] ?? 100), 1),
-                         'completed'       => $doneVa,
-                         'overdue_count'   => $ovdVa,
-                         'total_tasks'     => $totVa,
-                     ];
-                 }
-                 unset($vaRow);
-                 $res['kanban_status_counts'] = $kanbanStatusCounts;
-                 $res['kanban_by_va'] = $kanbanByVa;
-                 $res['va_completion_rates'] = $vaPerfRows;
-                 $res['overdue_total'] = $overdueTotal;
+                $kanbanStatusCounts = [
+                    'backlog'     => 0,
+                    'todo'        => 0,
+                    'in_progress' => 0,
+                    'completed'   => 0,
+                ];
+                $overdueTotal = 0;
+                $vaPerfRows = [];
+                $tatWeightedSum = 0.0;
+                $tatCompletedSum = 0;
+                foreach ($kanbanByVa as &$vaRow) {
+                    foreach (array_keys($kanbanStatusCounts) as $stKey) {
+                        $kanbanStatusCounts[$stKey] += (int) ($vaRow[$stKey] ?? 0);
+                    }
+                    $totVa = (int) ($vaRow['total_tasks'] ?? 0);
+                    $doneVa = (int) ($vaRow['completed'] ?? 0);
+                    $ovdVa = (int) ($vaRow['overdue_count'] ?? 0);
+                    $tatHours = round((float) ($vaRow['avg_turnaround_hours'] ?? 0), 1);
+                    $tatDays = round($tatHours / 24.0, 2);
+                    $overdueTotal += $ovdVa;
+                    if ($doneVa > 0) {
+                        $tatWeightedSum += ($tatHours * $doneVa);
+                        $tatCompletedSum += $doneVa;
+                    }
+                    $compRate = $totVa > 0 ? round(($doneVa / $totVa) * 100, 1) : 0.0;
+                    $vaRow['completion_rate'] = $compRate;
+                    $vaRow['avg_turnaround_hours'] = $tatHours;
+                    $vaRow['avg_turnaround_days'] = $tatDays;
+                    $firstName = explode(' ', trim((string) $vaRow['va_name']))[0] ?: 'VA';
+                    $vaPerfRows[] = [
+                        'va_id'                => (string) $vaRow['va_id'],
+                        'name'                 => $firstName,
+                        'full_name'            => (string) $vaRow['va_name'],
+                        'avatar_url'           => (string) ($vaRow['avatar_url'] ?? ''),
+                        'completion_rate'      => $compRate,
+                        'on_time_rate'         => round((float) ($vaRow['on_time_rate'] ?? 100), 1),
+                        'avg_turnaround_hours' => $tatHours,
+                        'avg_turnaround_days'  => $tatDays,
+                        'completed'            => $doneVa,
+                        'in_progress'          => (int) ($vaRow['in_progress'] ?? 0),
+                        'overdue_count'        => $ovdVa,
+                        'total_tasks'          => $totVa,
+                    ];
+                }
+                unset($vaRow);
+                $podTotalTasks = array_sum($kanbanStatusCounts);
+                $podCompletedTasks = (int) ($kanbanStatusCounts['completed'] ?? 0);
+                $podAvgTatHours = $tatCompletedSum > 0 ? round($tatWeightedSum / $tatCompletedSum, 1) : 0.0;
+
+                $res['kanban_status_counts'] = $kanbanStatusCounts;
+                $res['kanban_by_va'] = $kanbanByVa;
+                $res['va_completion_rates'] = $vaPerfRows;
+                $res['overdue_total'] = $overdueTotal;
+                $res['va_summary_totals'] = [
+                    'pod_completion_rate'      => $podTotalTasks > 0 ? round(($podCompletedTasks / $podTotalTasks) * 100, 1) : 0.0,
+                    'pod_avg_turnaround_hours' => $podAvgTatHours,
+                    'pod_avg_turnaround_days'  => round($podAvgTatHours / 24.0, 2),
+                    'pod_completed_tasks'      => $podCompletedTasks,
+                    'pod_total_tasks'          => $podTotalTasks,
+                    'assigned_va_count'        => count($vaPerfRows),
+                ];
 
                  // Priority & active pod deliverables queue (Urgent/High first)
                  $actStmt = $this->db->prepare("
@@ -799,7 +853,13 @@ final class PageController
         $search = trim((string) ($_GET['q'] ?? ''));
 
         $sql = "
-            SELECT c.*, u.name AS focus_va_name, tl.name AS tl_name
+            SELECT c.*,
+                   u.name AS focus_va_name,
+                   u.email AS focus_va_email,
+                   COALESCE(u.avatar_url, '') AS focus_va_avatar,
+                   tl.name AS tl_name,
+                   COALESCE((SELECT COUNT(*) FROM tasks t WHERE t.client_id = c.id), 0)::INTEGER AS task_count,
+                   COALESCE((SELECT COUNT(*) FROM tasks t WHERE t.client_id = c.id AND t.status != 'completed'), 0)::INTEGER AS open_task_count
             FROM clients c
             LEFT JOIN users u ON c.focus_va_id = u.id
             LEFT JOIN users tl ON c.team_leader_id = tl.id
@@ -815,7 +875,7 @@ final class PageController
             $params[':tl'] = $uid;
         }
         if ($search !== '') {
-            $sql .= ' AND (c.agency_name ILIKE :q OR c.name ILIKE :q OR c.email ILIKE :q)';
+            $sql .= ' AND (c.agency_name ILIKE :q OR c.name ILIKE :q OR c.email ILIKE :q OR COALESCE(u.name, \'\') ILIKE :q)';
             $params[':q'] = "%{$search}%";
         }
         $sql .= ' ORDER BY c.agency_name ASC';
@@ -825,7 +885,10 @@ final class PageController
         $clients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         $actByClient = [];
+        $emailsByClient = [];
+        $tasksByClient = [];
         $commLogs = [];
+        $lastCommByClient = [];
         $clientIds = array_column($clients, 'id');
         $clientNameMap = [];
         $clientEmailMap = [];
@@ -844,17 +907,42 @@ final class PageController
             $aStmt = $this->db->prepare("SELECT * FROM client_activities WHERE client_id IN ({$ph}) ORDER BY created_at DESC");
             $aStmt->execute($clientIds);
             foreach ($aStmt->fetchAll(PDO::FETCH_ASSOC) as $a) {
-                $actByClient[$a['client_id']][] = $a;
-                $commLogs[] = [
+                $cid = (string) $a['client_id'];
+                $actByClient[$cid][] = $a;
+                $entry = [
                     'source'      => 'activity',
                     'type'        => (string) ($a['type'] ?? 'note'),
-                    'client_id'   => (string) $a['client_id'],
-                    'client_name' => (string) ($clientNameMap[$a['client_id']] ?? 'Account'),
+                    'client_id'   => $cid,
+                    'client_name' => (string) ($clientNameMap[$cid] ?? 'Account'),
                     'actor'       => (string) $a['author_name'],
                     'subject'     => ucfirst((string) ($a['type'] ?? 'note')) . ' Log',
                     'summary'     => (string) $a['description'],
                     'created_at'  => (string) $a['created_at'],
                 ];
+                $commLogs[] = $entry;
+                if (!isset($lastCommByClient[$cid]) || strcmp($entry['created_at'], $lastCommByClient[$cid]['created_at']) > 0) {
+                    $lastCommByClient[$cid] = $entry;
+                }
+            }
+
+            try {
+                $tStmt = $this->db->prepare("
+                    SELECT t.id, t.client_id, t.title, t.status, t.priority, t.deadline, t.estimated_hours,
+                           u.name AS va_name
+                    FROM tasks t
+                    LEFT JOIN users u ON t.assigned_va_id = u.id
+                    WHERE t.client_id IN ({$ph})
+                    ORDER BY CASE t.status WHEN 'in_progress' THEN 0 WHEN 'todo' THEN 1 WHEN 'backlog' THEN 2 ELSE 3 END,
+                             t.deadline ASC
+                ");
+                $tStmt->execute($clientIds);
+                foreach ($tStmt->fetchAll(PDO::FETCH_ASSOC) as $tr) {
+                    $cid = (string) $tr['client_id'];
+                    if (count($tasksByClient[$cid] ?? []) < 12) {
+                        $tasksByClient[$cid][] = $tr;
+                    }
+                }
+            } catch (Throwable) {
             }
 
             try {
@@ -862,7 +950,7 @@ final class PageController
                     SELECT id, thread_id, sender_name, sender_email, recipient_email, subject, COALESCE(snippet, LEFT(body, 140)) AS excerpt, client_ref_id, created_at
                     FROM email_messages
                     ORDER BY created_at DESC
-                    LIMIT 120
+                    LIMIT 150
                 ");
                 foreach ($emStmt->fetchAll(PDO::FETCH_ASSOC) as $em) {
                     $matchedCl = null;
@@ -878,10 +966,11 @@ final class PageController
                         }
                     }
                     if ($matchedCl) {
-                        $commLogs[] = [
+                        $cid = (string) $matchedCl['id'];
+                        $entry = [
                             'source'      => 'email',
                             'type'        => 'email',
-                            'client_id'   => (string) $matchedCl['id'],
+                            'client_id'   => $cid,
                             'client_name' => (string) $matchedCl['agency_name'],
                             'actor'       => (string) $em['sender_name'] . ' → ' . (string) $em['recipient_email'],
                             'subject'     => (string) $em['subject'],
@@ -889,6 +978,13 @@ final class PageController
                             'thread_id'   => (string) $em['thread_id'],
                             'created_at'  => (string) $em['created_at'],
                         ];
+                        $commLogs[] = $entry;
+                        if (count($emailsByClient[$cid] ?? []) < 25) {
+                            $emailsByClient[$cid][] = $entry;
+                        }
+                        if (!isset($lastCommByClient[$cid]) || strcmp($entry['created_at'], $lastCommByClient[$cid]['created_at']) > 0) {
+                            $lastCommByClient[$cid] = $entry;
+                        }
                     }
                 }
             } catch (Throwable) {
@@ -898,39 +994,46 @@ final class PageController
         usort($commLogs, static fn(array $a, array $b): int => strcmp((string) $b['created_at'], (string) $a['created_at']));
         $commLogs = array_slice($commLogs, 0, 120);
 
-        // Associated Virtual Assistants mapped to scoped clients
-        $associatedVas = [];
-        $vaIds = array_values(array_unique(array_filter(array_column($clients, 'focus_va_id'))));
-        if (!empty($vaIds)) {
-            $vPh = implode(',', array_fill(0, count($vaIds), '?'));
-            $avStmt = $this->db->prepare("
-                SELECT u.id, u.name, u.email, u.avatar_url, u.hourly_rate, u.phone, u.team_leader_id,
-                       COALESCE(STRING_AGG(DISTINCT sp.specialty, ', '), '') AS specialties_csv
+        foreach ($clients as &$clRef) {
+            $cid = (string) $clRef['id'];
+            $last = $lastCommByClient[$cid] ?? null;
+            $clRef['last_comm_at'] = $last ? (string) $last['created_at'] : '';
+            $clRef['last_comm_summary'] = $last ? (string) $last['summary'] : '';
+            $clRef['last_comm_source'] = $last ? (string) $last['source'] : '';
+            $clRef['comm_count'] = count($actByClient[$cid] ?? []) + count($emailsByClient[$cid] ?? []);
+        }
+        unset($clRef);
+
+        try {
+            $vas = $this->db->query("
+                SELECT u.id, u.name, u.email, COALESCE(u.avatar_url, '') AS avatar_url, u.team_leader_id,
+                       COALESCE(STRING_AGG(DISTINCT sp.specialty, '||'), '') AS specialties_joined
                 FROM users u
                 LEFT JOIN va_specialties sp ON u.id = sp.va_id
-                WHERE u.id IN ({$vPh})
-                GROUP BY u.id
+                WHERE u.role = 'va' AND u.is_active = TRUE
+                GROUP BY u.id, u.name, u.email, u.avatar_url, u.team_leader_id
                 ORDER BY u.name ASC
-            ");
-            $avStmt->execute($vaIds);
-            $associatedVas = $avStmt->fetchAll(PDO::FETCH_ASSOC);
-            foreach ($associatedVas as &$av) {
-                $mappedClients = array_values(array_filter($clients, static fn(array $c): bool => (string) ($c['focus_va_id'] ?? '') === (string) $av['id']));
-                $av['client_count'] = count($mappedClients);
-                $av['clients'] = $mappedClients;
-                $av['total_retainer_hours'] = array_sum(array_map(static fn(array $c): float => (float) ($c['contracted_hours_per_month'] ?? 0), $mappedClients));
+            ")->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($vas as &$vRef) {
+                $vRef['specialties'] = $vRef['specialties_joined'] !== '' ? explode('||', (string) $vRef['specialties_joined']) : [];
+                unset($vRef['specialties_joined']);
             }
-            unset($av);
+            unset($vRef);
+        } catch (Throwable) {
+            $vas = $this->db->query("SELECT id, name, email, COALESCE(avatar_url, '') AS avatar_url, team_leader_id FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($vas as &$vRef) {
+                $vRef['specialties'] = [];
+            }
+            unset($vRef);
         }
-
-        $vas = $this->db->query("SELECT id, name FROM users WHERE role = 'va' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
         $tls = $this->db->query("SELECT id, name FROM users WHERE role = 'team_leader' AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
         return [
             'clients'        => $clients,
             'activities'     => $actByClient,
+            'emails'         => $emailsByClient,
+            'tasks'          => $tasksByClient,
             'comm_logs'      => $commLogs,
-            'associated_vas' => $associatedVas,
             'vas'            => $vas,
             'team_leaders'   => $tls,
             'search'         => $search,

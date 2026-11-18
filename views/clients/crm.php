@@ -2,22 +2,27 @@
 require_once __DIR__ . '/../partials/icons.php';
 
 $clients = $data['clients'] ?? [];
-$associatedVas = $data['associated_vas'] ?? [];
-$commLogs = $data['comm_logs'] ?? [];
+$vas = $data['vas'] ?? [];
 $canEditClients = in_array($role, ['admin', 'team_leader', 'hrm'], true);
 $canCreateClients = in_array($role, ['admin', 'team_leader'], true);
+
 $totalClients = count($clients);
 $activeClients = 0;
 $totalContractedHrs = 0.0;
 $totalConsumedHrs = 0.0;
 $clientsMap = [];
+$vasMap = [];
+
+foreach ($vas as $v) {
+    $vasMap[(string) $v['id']] = $v;
+}
 
 foreach ($clients as $cl) {
-    if ($cl['contract_status'] === 'active') {
+    if (($cl['contract_status'] ?? 'active') === 'active') {
         $activeClients++;
     }
-    $totalContractedHrs += (float) $cl['contracted_hours_per_month'];
-    $totalConsumedHrs += (float) $cl['consumed_hours_month'];
+    $totalContractedHrs += (float) ($cl['contracted_hours_per_month'] ?? 0);
+    $totalConsumedHrs += (float) ($cl['consumed_hours_month'] ?? 0);
     $slots = [];
     if (!empty($cl['availability_slots'])) {
         $decodedSlots = json_decode((string) $cl['availability_slots'], true);
@@ -26,18 +31,18 @@ foreach ($clients as $cl) {
         }
     }
     $cl['availability_slots_list'] = $slots;
-    $clientsMap[$cl['id']] = $cl;
+    $clientsMap[(string) $cl['id']] = $cl;
 }
 $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalContractedHrs) * 100, 1) : 0.0;
 ?>
 
 <div class="page-header">
   <div>
-    <h1>Client CRM &amp; Contracts</h1>
-    <p class="muted">Active executive accounts, associated Virtual Assistants, communication history logs, and interactive dossiers.</p>
+    <h1>Client CRM &amp; Contacts</h1>
+    <p class="muted">Manage executive client accounts, live VA associations, retainer utilization, and per-client communication timelines.</p>
   </div>
   <?php if ($canCreateClients): ?>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+    <div class="page-header-actions">
       <button type="button" class="btn btn-secondary" data-open-drawer="drawer-bulk-clients">Bulk CSV Import</button>
       <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-client">+ Add Client Account</button>
     </div>
@@ -47,440 +52,468 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
 <div class="grid-4" style="margin-bottom:20px;">
   <div class="card card-hover">
     <div class="kpi-label">Scoped Client Roster</div>
-    <div class="kpi-value"><?= $totalClients ?></div>
+    <div class="kpi-value tabular-nums"><?= $totalClients ?></div>
     <div class="kpi-sub"><?= $activeClients ?> active contract(s)</div>
   </div>
   <div class="card card-hover">
     <div class="kpi-label">Contracted Capacity</div>
-    <div class="kpi-value"><?= number_format($totalContractedHrs, 0) ?>h</div>
+    <div class="kpi-value tabular-nums"><?= number_format($totalContractedHrs, 0) ?>h</div>
     <div class="kpi-sub">Monthly retainer hours</div>
   </div>
   <div class="card card-hover">
     <div class="kpi-label">Consumed Hours</div>
-    <div class="kpi-value"><?= number_format($totalConsumedHrs, 1) ?>h</div>
+    <div class="kpi-value tabular-nums"><?= number_format($totalConsumedHrs, 1) ?>h</div>
     <div class="kpi-sub">Logged deliverables</div>
   </div>
   <div class="card card-hover">
     <div class="kpi-label">Portfolio Utilization</div>
-    <div class="kpi-value"><?= $portfolioUtil ?>%</div>
+    <div class="kpi-value tabular-nums"><?= $portfolioUtil ?>%</div>
     <div class="kpi-sub">Retainer capacity used</div>
   </div>
 </div>
 
-<div class="crm-shell">
-  <aside class="crm-sidebar card" aria-label="CRM Navigation">
-    <div class="kpi-label" style="margin-bottom:8px;">CRM Workspace</div>
-    <button type="button" class="crm-nav-btn active" data-crm-tab="directory">
-      <span style="display:inline-flex;align-items:center;gap:8px;">
-        <?= workly_icon_svg('Shield', 15) ?>
-        <span>Clients Directory</span>
-      </span>
-      <span class="badge badge-brand tabular-nums"><?= $totalClients ?></span>
-    </button>
-    <button type="button" class="crm-nav-btn" data-crm-tab="vas">
-      <span style="display:inline-flex;align-items:center;gap:8px;">
-        <?= workly_icon_svg('Award', 15) ?>
-        <span>Associated VAs</span>
-      </span>
-      <span class="badge badge-neutral tabular-nums"><?= count($associatedVas) ?></span>
-    </button>
-    <button type="button" class="crm-nav-btn" data-crm-tab="comms">
-      <span style="display:inline-flex;align-items:center;gap:8px;">
-        <?= workly_icon_svg('Message', 15) ?>
-        <span>Communication Logs</span>
-      </span>
-      <span class="badge badge-neutral tabular-nums"><?= count($commLogs) ?></span>
-    </button>
-  </aside>
-
-  <div class="crm-main">
-    <!-- Panel 1: Clients Directory -->
-    <section data-crm-panel="directory">
-      <div class="card" style="margin-bottom:16px;padding:14px;">
-        <form method="GET" action="/clients" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-          <input id="client-live-search"
-                 class="input"
-                 type="search"
-                 name="q"
-                 autocomplete="off"
-                 value="<?= SecurityHelper::e($data['search'] ?? '') ?>"
-                 placeholder="Type 2+ letters to filter by agency, contact, or email..."
-                 style="flex:1 1 220px;min-width:0;max-width:420px;">
-          <button type="submit" class="btn btn-secondary">Search Clients</button>
-          <?php if (!empty($data['search'])): ?>
-            <a href="/clients" class="btn btn-secondary">Reset</a>
-          <?php endif; ?>
-        </form>
+<!-- Conventional Modern CRM Contact List Workspace -->
+<section class="card crm-board-card" aria-label="Client CRM Contact List">
+  <div class="crm-toolbar">
+    <div class="crm-toolbar-left">
+      <div class="crm-search-wrap">
+        <?= workly_icon_svg('Search', 15) ?>
+        <input id="crm-contact-search"
+               type="search"
+               class="input crm-search-input"
+               autocomplete="off"
+               value="<?= SecurityHelper::e($data['search'] ?? '') ?>"
+               placeholder="Search company, contact, email, phone, or assigned VA...">
       </div>
 
-      <?php if (empty($clients)): ?>
-        <div class="card">
-          <p class="muted">No client accounts found for your scope.</p>
-        </div>
-      <?php else: ?>
-        <div class="grid-2" id="clients-cards-grid">
+      <div class="crm-status-tabs" role="group" aria-label="Filter by contract status">
+        <button type="button" class="crm-status-tab is-active" data-crm-status-filter="all">All</button>
+        <button type="button" class="crm-status-tab" data-crm-status-filter="active">Active</button>
+        <button type="button" class="crm-status-tab" data-crm-status-filter="pending">Pending</button>
+        <button type="button" class="crm-status-tab" data-crm-status-filter="cancelled">Cancelled</button>
+      </div>
+    </div>
+
+    <div class="crm-toolbar-right">
+      <select id="crm-va-filter" class="select crm-filter-select" aria-label="Filter by assigned Virtual Assistant">
+        <option value="all">All Assigned VAs</option>
+        <option value="unassigned">Unassigned Only</option>
+        <?php foreach ($vas as $v): ?>
+          <option value="<?= SecurityHelper::e($v['id']) ?>"><?= SecurityHelper::e($v['name']) ?></option>
+        <?php endforeach; ?>
+      </select>
+
+      <select id="crm-sort-select" class="select crm-filter-select" aria-label="Sort contacts">
+        <option value="name_asc">Sort: Company (A–Z)</option>
+        <option value="util_desc">Sort: Highest Utilization</option>
+        <option value="hours_desc">Sort: Retainer Hours</option>
+        <option value="activity_desc">Sort: Latest Activity</option>
+      </select>
+
+      <span id="crm-visible-count" class="muted tabular-nums crm-count-label"><?= $totalClients ?> of <?= $totalClients ?></span>
+      <button type="button" id="crm-reset-filters" class="btn btn-secondary btn-sm is-hidden">Reset</button>
+    </div>
+  </div>
+
+  <?php if (empty($clients)): ?>
+    <div class="crm-empty-state">
+      <strong>No client accounts found</strong>
+      <p class="muted">Onboard a new client account or import a CSV batch to start managing VA associations and retainer timelines.</p>
+      <?php if ($canCreateClients): ?>
+        <button type="button" class="btn btn-primary btn-sm" data-open-drawer="drawer-create-client">+ Add Client Account</button>
+      <?php endif; ?>
+    </div>
+  <?php else: ?>
+    <div class="table-wrap crm-table-wrap">
+      <table class="table crm-contacts-table" id="crm-contacts-table">
+        <thead>
+          <tr>
+            <th>Client Account</th>
+            <th>Primary Contact</th>
+            <th>Assigned VA</th>
+            <th>Status</th>
+            <th>Retainer Usage</th>
+            <th>Last Activity</th>
+            <th style="text-align:right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="crm-contacts-tbody">
           <?php foreach ($clients as $cl): ?>
             <?php
-              $pct = (float) $cl['contracted_hours_per_month'] > 0
-                  ? min(100, round(((float) $cl['consumed_hours_month'] / (float) $cl['contracted_hours_per_month']) * 100, 1))
-                  : 0;
-              $acts = $data['activities'][$cl['id']] ?? [];
-              $searchHay = trim(implode(' ', [
+              $cid = (string) $cl['id'];
+              $contracted = (float) ($cl['contracted_hours_per_month'] ?? 0);
+              $consumed = (float) ($cl['consumed_hours_month'] ?? 0);
+              $pct = $contracted > 0 ? min(100, round(($consumed / $contracted) * 100, 1)) : 0.0;
+              $statusVal = (string) ($cl['contract_status'] ?? 'active');
+              $statusLabel = ucfirst($statusVal);
+              $statusClass = $statusVal === 'active'
+                  ? 'crm-st-active'
+                  : ($statusVal === 'pending' ? 'crm-st-pending' : 'crm-st-cancelled');
+              $focusVaId = (string) ($cl['focus_va_id'] ?? '');
+              $focusVaName = (string) ($cl['focus_va_name'] ?? '');
+              $focusVaAvatar = (string) ($cl['focus_va_avatar'] ?? '');
+              $vaInitials = strtoupper(substr($focusVaName !== '' ? $focusVaName : 'UA', 0, 2));
+              $locText = trim((!empty($cl['state']) ? $cl['state'] . ', ' : '') . (string) ($cl['country'] ?? ''));
+              $lastCommAt = (string) ($cl['last_comm_at'] ?? '');
+              $lastCommPreview = (string) ($cl['last_comm_summary'] ?? '');
+              $commCount = (int) ($cl['comm_count'] ?? 0);
+              $openTasks = (int) ($cl['open_task_count'] ?? 0);
+
+              $searchHay = strtolower(trim(implode(' ', [
                   (string) $cl['agency_name'],
                   (string) $cl['name'],
                   (string) $cl['email'],
                   (string) ($cl['additional_email'] ?? ''),
-              ]));
+                  (string) ($cl['phone'] ?? ''),
+                  $focusVaName,
+                  (string) ($cl['tl_name'] ?? ''),
+                  $locText,
+              ])));
             ?>
-            <article class="card card-hover client-card-item" data-client-search="<?= SecurityHelper::e($searchHay) ?>">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px;">
-                <div style="display:flex;align-items:center;gap:11px;min-width:0;">
+            <tr class="crm-contact-row"
+                data-client-row="<?= SecurityHelper::e($cid) ?>"
+                data-search="<?= SecurityHelper::e($searchHay) ?>"
+                data-status="<?= SecurityHelper::e($statusVal) ?>"
+                data-va-id="<?= SecurityHelper::e($focusVaId !== '' ? $focusVaId : 'unassigned') ?>"
+                data-name="<?= SecurityHelper::e(strtolower((string) $cl['agency_name'])) ?>"
+                data-util="<?= SecurityHelper::e((string) $pct) ?>"
+                data-hours="<?= SecurityHelper::e((string) $contracted) ?>"
+                data-activity="<?= SecurityHelper::e($lastCommAt) ?>">
+              <td>
+                <div class="crm-account-cell">
                   <?php if (!empty($cl['avatar_url'])): ?>
                     <img src="<?= SecurityHelper::e($cl['avatar_url']) ?>" alt="<?= SecurityHelper::e($cl['agency_name']) ?>" class="avatar">
                   <?php else: ?>
                     <span class="avatar"><?= SecurityHelper::e(strtoupper(substr((string) $cl['agency_name'], 0, 2))) ?></span>
                   <?php endif; ?>
-                  <div style="min-width:0;">
-                    <h3 style="font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"><?= SecurityHelper::e($cl['agency_name']) ?></h3>
-                    <div class="muted" style="font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                      <?= SecurityHelper::e($cl['name']) ?> • <?= SecurityHelper::e($cl['email']) ?>
-                    </div>
-                  </div>
-                </div>
-                <span class="badge <?= $cl['contract_status'] === 'active' ? 'badge-success' : ($cl['contract_status'] === 'pending' ? 'badge-warn' : 'badge-danger') ?>">
-                  <?= SecurityHelper::e(ucfirst($cl['contract_status'])) ?>
-                </span>
-              </div>
-
-              <div class="crm-card-meta-grid">
-                <div>Assigned VA: <strong><?= SecurityHelper::e($cl['focus_va_name'] ?: 'Unassigned') ?></strong></div>
-                <div>Team Leader: <strong><?= SecurityHelper::e($cl['tl_name'] ?: 'Unassigned') ?></strong></div>
-                <div>Location: <?= SecurityHelper::e(trim(($cl['state'] ? $cl['state'] . ', ' : '') . $cl['country'])) ?></div>
-                <div>Signed: <?= SecurityHelper::e($cl['contract_signed_date']) ?></div>
-              </div>
-
-              <div style="margin-bottom:14px;">
-                <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px;">
-                  <span class="muted">Monthly Utilization</span>
-                  <strong><?= number_format((float) $cl['consumed_hours_month'], 1) ?> / <?= number_format((float) $cl['contracted_hours_per_month'], 1) ?> hrs (<?= $pct ?>%)</strong>
-                </div>
-                <div class="progress-track">
-                  <div class="progress-fill" style="width:<?= $pct ?>%;"></div>
-                </div>
-              </div>
-
-              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding-top:12px;border-top:1px solid var(--border);">
-                <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                  <button type="button" class="btn btn-primary btn-sm" data-open-client="<?= SecurityHelper::e($cl['id']) ?>">
-                    <?= $canEditClients ? 'Open Dossier & Edit' : 'View Dossier' ?>
-                  </button>
-                  <?php if (!empty($cl['contract_pdf_url'])): ?>
-                    <a class="btn btn-secondary btn-sm" href="<?= SecurityHelper::e(SecurityHelper::sanitizeUrl($cl['contract_pdf_url'])) ?>" target="_blank" rel="noopener">Signed PDF</a>
-                  <?php endif; ?>
-                  <?php if (!empty($cl['website'])): ?>
-                    <a class="btn btn-secondary btn-sm" href="<?= SecurityHelper::e(SecurityHelper::sanitizeUrl($cl['website'])) ?>" target="_blank" rel="noopener">Website</a>
-                  <?php endif; ?>
-                </div>
-
-                <div style="display:flex;gap:8px;align-items:center;">
-                  <span class="badge badge-neutral"><?= count($acts) ?> log(s)</span>
-                  <?php if ($role === 'admin'): ?>
-                    <button type="button"
-                            class="btn btn-danger btn-sm"
-                            data-action-url="/api/v1/clients/<?= SecurityHelper::e($cl['id']) ?>"
-                            data-action-method="DELETE">Delete</button>
-                  <?php endif; ?>
-                </div>
-              </div>
-            </article>
-          <?php endforeach; ?>
-        </div>
-      <?php endif; ?>
-    </section>
-
-    <!-- Panel 2: Associated Virtual Assistants -->
-    <section class="is-hidden" data-crm-panel="vas">
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
-          <div>
-            <h3>Associated Virtual Assistants</h3>
-            <p class="muted" style="font-size:12.5px;">Specialists mapped directly to the executive client accounts in your scope.</p>
-          </div>
-          <span class="badge badge-brand"><?= count($associatedVas) ?> mapped VA(s)</span>
-        </div>
-
-        <?php if (empty($associatedVas)): ?>
-          <p class="muted">No Virtual Assistants assigned to scoped client accounts yet.</p>
-        <?php else: ?>
-          <div style="display:grid;gap:12px;">
-            <?php foreach ($associatedVas as $av): ?>
-              <article class="va-dir-row card" style="padding:14px 16px;">
-                <div class="va-dir-identity">
-                  <?php if (!empty($av['avatar_url'])): ?>
-                    <img src="<?= SecurityHelper::e($av['avatar_url']) ?>" alt="<?= SecurityHelper::e($av['name']) ?>" class="avatar avatar-lg">
-                  <?php else: ?>
-                    <span class="avatar avatar-lg"><?= SecurityHelper::e(strtoupper(substr((string) $av['name'], 0, 2))) ?></span>
-                  <?php endif; ?>
-                  <div style="min-width:0;">
-                    <strong style="font-size:15px;display:block;"><?= SecurityHelper::e($av['name']) ?></strong>
-                    <div class="muted" style="font-size:12px;"><?= SecurityHelper::e($av['email']) ?></div>
-                    <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;">
-                      <?php if (!empty($av['specialties_csv'])): ?>
-                        <?php foreach (explode(', ', (string) $av['specialties_csv']) as $sp): ?>
-                          <span class="badge badge-brand"><?= SecurityHelper::e($sp) ?></span>
-                        <?php endforeach; ?>
-                      <?php else: ?>
-                        <span class="badge badge-neutral">General Operations</span>
+                  <div class="crm-cell-stack">
+                    <button type="button" class="crm-company-btn" data-open-client="<?= SecurityHelper::e($cid) ?>">
+                      <?= SecurityHelper::e($cl['agency_name']) ?>
+                    </button>
+                    <div class="muted crm-subline">
+                      <span><?= SecurityHelper::e($locText !== '' ? $locText : 'Remote Account') ?></span>
+                      <?php if ($openTasks > 0): ?>
+                        <span>·</span>
+                        <span class="tabular-nums"><?= $openTasks ?> open task<?= $openTasks === 1 ? '' : 's' ?></span>
+                      <?php endif; ?>
+                      <?php if (!empty($cl['website'])): ?>
+                        <span>·</span>
+                        <a href="<?= SecurityHelper::e(SecurityHelper::sanitizeUrl($cl['website'])) ?>" target="_blank" rel="noopener">Site</a>
                       <?php endif; ?>
                     </div>
                   </div>
                 </div>
+              </td>
 
-                <div class="crm-va-accounts-col">
-                  <div class="muted" style="font-size:11px;font-weight:700;text-transform:uppercase;margin-bottom:5px;">
-                    Assigned Accounts (<?= (int) $av['client_count'] ?> • <?= number_format((float) $av['total_retainer_hours'], 0) ?>h/mo)
-                  </div>
-                  <div style="display:flex;flex-wrap:wrap;gap:5px;">
-                    <?php foreach ($av['clients'] as $mc): ?>
-                      <button type="button" class="badge badge-info" style="border:none;cursor:pointer;" data-open-client="<?= SecurityHelper::e($mc['id']) ?>">
-                        <?= SecurityHelper::e($mc['agency_name']) ?>
-                      </button>
-                    <?php endforeach; ?>
+              <td>
+                <div class="crm-cell-stack">
+                  <strong class="crm-contact-name"><?= SecurityHelper::e($cl['name']) ?></strong>
+                  <div class="muted crm-subline">
+                    <a href="mailto:<?= SecurityHelper::e($cl['email']) ?>"><?= SecurityHelper::e($cl['email']) ?></a>
+                    <?php if (!empty($cl['phone'])): ?>
+                      <span>·</span>
+                      <span class="tabular-nums"><?= SecurityHelper::e($cl['phone']) ?></span>
+                    <?php endif; ?>
                   </div>
                 </div>
+              </td>
 
-                <?php if ($role === 'admin' || ($role === 'team_leader' && (string) ($av['team_leader_id'] ?? '') === (string) $user['id'])): ?>
-                  <div class="va-dir-actions">
-                    <a href="/profile?va_id=<?= urlencode((string) $av['id']) ?>" class="btn btn-secondary btn-sm">View Profile</a>
-                  </div>
-                <?php endif; ?>
-              </article>
-            <?php endforeach; ?>
-          </div>
-        <?php endif; ?>
-      </div>
-    </section>
-
-    <!-- Panel 3: Communication History Logs -->
-    <section class="is-hidden" data-crm-panel="comms">
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:14px;">
-          <div>
-            <h3>Communication History Logs</h3>
-            <p class="muted" style="font-size:12.5px;">Unified timeline combining client email correspondence and logged CRM dossier notes.</p>
-          </div>
-          <div class="crm-comm-controls">
-            <input id="crm-comm-search" type="search" class="input crm-comm-filter-input" placeholder="Filter messages or contacts...">
-            <select id="crm-comm-client-filter" class="select crm-comm-filter-select">
-              <option value="">All Client Accounts</option>
-              <?php foreach ($clients as $cl): ?>
-                <option value="<?= SecurityHelper::e($cl['id']) ?>"><?= SecurityHelper::e($cl['agency_name']) ?></option>
-              <?php endforeach; ?>
-            </select>
-          </div>
-        </div>
-
-        <?php if (empty($commLogs)): ?>
-          <p class="muted">No communication logs or email threads matched your active accounts yet.</p>
-        <?php else: ?>
-          <div id="crm-comm-feed" style="display:grid;gap:10px;">
-            <?php foreach ($commLogs as $log): ?>
-              <?php
-                $isEmail = ($log['source'] ?? '') === 'email';
-                $logHay = strtolower(trim(($log['client_name'] ?? '') . ' ' . ($log['actor'] ?? '') . ' ' . ($log['subject'] ?? '') . ' ' . ($log['summary'] ?? '')));
-              ?>
-              <article class="crm-comm-row"
-                       data-comm-client="<?= SecurityHelper::e($log['client_id']) ?>"
-                       data-comm-search="<?= SecurityHelper::e($logHay) ?>">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
-                  <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">
-                    <span class="badge <?= $isEmail ? 'badge-brand' : 'badge-neutral' ?>">
-                      <?= $isEmail ? 'Email Thread' : SecurityHelper::e(ucfirst((string) ($log['type'] ?? 'Activity'))) ?>
-                    </span>
-                    <span class="badge badge-info"><?= SecurityHelper::e($log['client_name']) ?></span>
-                    <strong style="font-size:13.5px;"><?= SecurityHelper::e($log['subject']) ?></strong>
-                  </div>
-                  <span class="muted mono" style="font-size:11.5px;"><?= SecurityHelper::e(substr((string) $log['created_at'], 0, 16)) ?></span>
-                </div>
-                <div style="font-size:13px;color:var(--ink-soft);margin-bottom:6px;"><?= SecurityHelper::e($log['summary']) ?></div>
-                <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;">
-                  <span class="muted">Actor: <strong><?= SecurityHelper::e($log['actor']) ?></strong></span>
-                  <?php if ($isEmail && !empty($log['thread_id'])): ?>
-                    <a href="/email?thread=<?= urlencode((string) $log['thread_id']) ?>" class="btn btn-secondary btn-sm">Open Email Thread</a>
+              <td>
+                <div class="crm-va-assoc-cell">
+                  <span data-row-va-avatar="<?= SecurityHelper::e($cid) ?>">
+                    <?php if ($focusVaAvatar !== ''): ?>
+                      <img src="<?= SecurityHelper::e($focusVaAvatar) ?>" alt="<?= SecurityHelper::e($focusVaName) ?>" class="avatar-xs">
+                    <?php else: ?>
+                      <span class="avatar-xs"><?= SecurityHelper::e($vaInitials) ?></span>
+                    <?php endif; ?>
+                  </span>
+                  <?php if ($canEditClients): ?>
+                    <select class="select crm-inline-va-select"
+                            data-inline-va-client="<?= SecurityHelper::e($cid) ?>"
+                            data-prev-va="<?= SecurityHelper::e($focusVaId) ?>"
+                            aria-label="Assigned VA for <?= SecurityHelper::e($cl['agency_name']) ?>">
+                      <option value="" <?= $focusVaId === '' ? 'selected' : '' ?>>Unassigned</option>
+                      <?php foreach ($vas as $v): ?>
+                        <option value="<?= SecurityHelper::e($v['id']) ?>" <?= $focusVaId === (string) $v['id'] ? 'selected' : '' ?>>
+                          <?= SecurityHelper::e($v['name']) ?>
+                        </option>
+                      <?php endforeach; ?>
+                    </select>
                   <?php else: ?>
-                    <button type="button" class="btn btn-secondary btn-sm" data-open-client="<?= SecurityHelper::e($log['client_id']) ?>">View Account Dossier</button>
+                    <span class="crm-va-readonly-name"><?= SecurityHelper::e($focusVaName !== '' ? $focusVaName : 'Unassigned') ?></span>
                   <?php endif; ?>
                 </div>
-              </article>
-            <?php endforeach; ?>
-          </div>
-        <?php endif; ?>
-      </div>
-    </section>
-  </div>
-</div>
+              </td>
 
-<script type="application/json" id="clients-dossier-json" data-can-edit="<?= $canEditClients ? '1' : '0' ?>"><?= json_encode([
+              <td>
+                <span class="crm-status-label <?= SecurityHelper::e($statusClass) ?>">
+                  <span class="crm-status-dot" aria-hidden="true"></span>
+                  <span><?= SecurityHelper::e($statusLabel) ?></span>
+                </span>
+              </td>
+
+              <td>
+                <div class="crm-retainer-cell">
+                  <div class="crm-retainer-top tabular-nums">
+                    <strong><?= number_format($consumed, 1) ?> / <?= number_format($contracted, 0) ?>h</strong>
+                    <span class="muted"><?= $pct ?>%</span>
+                  </div>
+                  <div class="progress-track" style="height:5px;">
+                    <div class="progress-fill" style="width:<?= $pct ?>%;"></div>
+                  </div>
+                </div>
+              </td>
+
+              <td>
+                <div class="crm-cell-stack">
+                  <?php if ($lastCommAt !== ''): ?>
+                    <span class="mono tabular-nums" style="font-size:11.5px;font-weight:600;color:var(--ink);">
+                      <?= SecurityHelper::e(substr($lastCommAt, 0, 10)) ?>
+                    </span>
+                    <div class="muted crm-subline" style="max-width:200px;">
+                      <?= SecurityHelper::e($lastCommPreview !== '' ? $lastCommPreview : ($commCount . ' recorded log(s)')) ?>
+                    </div>
+                  <?php else: ?>
+                    <span class="muted" style="font-size:12px;">No activity yet</span>
+                  <?php endif; ?>
+                </div>
+              </td>
+
+              <td style="text-align:right;white-space:nowrap;">
+                <div style="display:inline-flex;align-items:center;gap:6px;">
+                  <button type="button" class="btn btn-secondary btn-sm" data-open-client="<?= SecurityHelper::e($cid) ?>">
+                    <?= $canEditClients ? 'Manage' : 'Open' ?>
+                  </button>
+                  <?php if ($role === 'admin'): ?>
+                    <button type="button"
+                            class="btn btn-danger btn-sm"
+                            data-action-url="/api/v1/clients/<?= SecurityHelper::e($cid) ?>"
+                            data-action-method="DELETE">Delete</button>
+                  <?php endif; ?>
+                </div>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+
+    <div id="crm-filter-empty" class="crm-empty-state is-hidden">
+      <strong>No accounts match your active filters</strong>
+      <p class="muted">Adjust your search query, contract status, or assigned Virtual Assistant filter.</p>
+      <button type="button" id="crm-empty-clear-btn" class="btn btn-secondary btn-sm">Clear Filters</button>
+    </div>
+  <?php endif; ?>
+</section>
+
+<script type="application/json" id="clients-dossier-json" data-can-edit="<?= $canEditClients ? '1' : '0' ?>" data-user-role="<?= SecurityHelper::e($role) ?>" data-user-id="<?= SecurityHelper::e((string) $user['id']) ?>"><?= json_encode([
     'clients'    => $clientsMap,
     'activities' => $data['activities'] ?? [],
+    'emails'     => $data['emails'] ?? [],
+    'tasks'      => $data['tasks'] ?? [],
+    'vas'        => $vasMap,
 ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
 
-<!-- Right-Side Drawer: Client Dossier (Read-Only for VA; Full Edit + Top Photo Preview + Bottom Save for Admin/TL/HRM) -->
+<!-- Right-Side Tabbed Client Record Drawer -->
 <div id="drawer-client-dossier" class="drawer-backdrop is-hidden">
-  <aside class="drawer-panel" role="dialog" aria-label="Client Dossier">
+  <aside class="drawer-panel" role="dialog" aria-label="Client Account Record">
     <div class="drawer-head">
-      <div>
-        <h3 id="dossier-agency">Client Dossier</h3>
-        <div id="dossier-contact" class="muted" style="font-size:12px;margin-top:2px;"></div>
+      <div style="display:flex;align-items:center;gap:11px;min-width:0;">
+        <div id="dossier-header-avatar">
+          <span class="avatar">CL</span>
+        </div>
+        <div style="min-width:0;">
+          <h3 id="dossier-agency" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Client Record</h3>
+          <div id="dossier-contact" class="muted" style="font-size:12px;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;"></div>
+        </div>
       </div>
-      <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+        <a id="dossier-pdf-link" class="btn btn-secondary btn-sm is-hidden" href="#" target="_blank" rel="noopener">Contract PDF</a>
+        <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
+      </div>
     </div>
 
     <div class="drawer-body">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-        <strong><?= $canEditClients ? 'Account Logo & Profile Configuration' : 'Read-Only Account Overview' ?></strong>
-        <a id="dossier-pdf-link" class="btn btn-secondary btn-sm is-hidden" href="#" target="_blank" rel="noopener">View Signed Contract PDF</a>
+      <div class="tab-strip" style="margin-bottom:16px;">
+        <button type="button" class="tab-btn active" data-tab-group="crm-dossier" data-tab-btn="details">
+          <?= $canEditClients ? 'Details &amp; Edit' : 'Account Details' ?>
+        </button>
+        <button type="button" class="tab-btn" data-tab-group="crm-dossier" data-tab-btn="timeline">
+          Comms &amp; Timeline <span class="tabular-nums" id="dossier-comms-badge">0</span>
+        </button>
+        <button type="button" class="tab-btn" data-tab-group="crm-dossier" data-tab-btn="team">
+          VA &amp; Deliverables <span class="tabular-nums" id="dossier-tasks-badge">0</span>
+        </button>
       </div>
 
-      <?php if ($canEditClients): ?>
-        <div class="photo-preview-box">
-          <div id="dossier-avatar-preview" class="photo-preview-thumb">
-            <span class="avatar avatar-lg">CL</span>
-          </div>
-          <div class="photo-preview-meta">
-            <h4>Client Logo / Avatar</h4>
-            <p>Optional company logo (JPG, PNG, WEBP max 5MB).</p>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-              <form id="form-upload-client-avatar" data-api-form="/api/v1/uploads/client-avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-                <input type="hidden" name="client_id" value="">
-                <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="flex:1 1 180px;min-width:0;max-width:100%;padding:6px 10px;">
-                <button type="submit" class="btn btn-secondary btn-sm">Upload</button>
-              </form>
-              <button type="button" id="btn-delete-client-avatar" class="btn btn-danger btn-sm">Delete Photo</button>
+      <!-- Tab 1: Account Details & Edit -->
+      <div data-tab-group="crm-dossier" data-tab-panel="details">
+        <?php if ($canEditClients): ?>
+          <div class="photo-preview-box">
+            <div id="dossier-avatar-preview" class="photo-preview-thumb">
+              <span class="avatar avatar-lg">CL</span>
             </div>
-          </div>
-        </div>
-
-        <form id="form-edit-client" data-api-form="/api/v1/clients" data-api-method="PUT" style="margin-bottom:20px;">
-          <div class="grid-2">
-            <div class="form-group">
-              <label class="form-label">Agency / Company</label>
-              <input class="input" name="agency_name" required>
-            </div>
-            <div class="form-group">
-              <label class="form-label">Executive Contact</label>
-              <input class="input" name="name" required>
-            </div>
-          </div>
-
-          <div class="grid-2">
-            <div class="form-group">
-              <label class="form-label" style="display:flex;justify-content:space-between;align-items:center;">
-                <span>Primary Email</span>
-                <button type="button" class="icon-chip-btn" data-toggle-extra="edit-add-email" title="Add Secondary Email">+ Secondary Email</button>
-              </label>
-              <input class="input" type="email" name="email" required>
-              <div id="edit-add-email-wrap" class="is-hidden" style="margin-top:8px;">
-                <input class="input" type="email" name="additional_email" placeholder="secondary@agency.com">
-              </div>
-            </div>
-            <div class="form-group">
-              <label class="form-label" style="display:flex;justify-content:space-between;align-items:center;">
-                <span>Primary Phone</span>
-                <button type="button" class="icon-chip-btn" data-toggle-extra="edit-add-phone" title="Add Secondary Phone">+ Secondary Phone</button>
-              </label>
-              <input class="input" name="phone" placeholder="+1 ...">
-              <div id="edit-add-phone-wrap" class="is-hidden" style="margin-top:8px;">
-                <input class="input" name="additional_phone" placeholder="+1 (secondary phone)">
+            <div class="photo-preview-meta">
+              <h4>Client Logo / Avatar</h4>
+              <p>Optional company logo (JPG, PNG, WEBP max 5MB).</p>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                <form id="form-upload-client-avatar" data-api-form="/api/v1/uploads/client-avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                  <input type="hidden" name="client_id" value="">
+                  <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="flex:1 1 180px;min-width:0;max-width:100%;padding:6px 10px;">
+                  <button type="submit" class="btn btn-secondary btn-sm">Upload</button>
+                </form>
+                <button type="button" id="btn-delete-client-avatar" class="btn btn-danger btn-sm">Delete Photo</button>
               </div>
             </div>
           </div>
 
-          <div class="grid-2">
-            <div class="form-group">
-              <label class="form-label">Website</label>
-              <input class="input" name="website" placeholder="https://agency.com">
+          <form id="form-edit-client" data-api-form="/api/v1/clients" data-api-method="PUT" style="margin-bottom:20px;">
+            <div class="grid-2">
+              <div class="form-group">
+                <label class="form-label">Agency / Company</label>
+                <input class="input" name="agency_name" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Executive Contact</label>
+                <input class="input" name="name" required>
+              </div>
             </div>
-            <div class="form-group">
-              <label class="form-label">Assigned Focus VA</label>
-              <select class="select" name="focus_va_id">
-                <?php foreach ($data['vas'] as $v): ?>
-                  <option value="<?= SecurityHelper::e($v['id']) ?>"><?= SecurityHelper::e($v['name']) ?></option>
-                <?php endforeach; ?>
-              </select>
-            </div>
-          </div>
 
-          <div class="form-group">
-            <label class="form-label">Contract Status</label>
-            <div class="status-radio-grid">
-              <label class="status-pill status-active" data-status-tone="active">
-                <input type="radio" name="contract_status" value="active">
-                <span class="status-dot"></span>
-                <span>Active</span>
+            <div class="grid-2">
+              <div class="form-group">
+                <label class="form-label" style="display:flex;justify-content:space-between;align-items:center;">
+                  <span>Primary Email</span>
+                  <button type="button" class="icon-chip-btn" data-toggle-extra="edit-add-email" title="Add Secondary Email">+ Secondary Email</button>
+                </label>
+                <input class="input" type="email" name="email" required>
+                <div id="edit-add-email-wrap" class="is-hidden" style="margin-top:8px;">
+                  <input class="input" type="email" name="additional_email" placeholder="secondary@agency.com">
+                </div>
+              </div>
+              <div class="form-group">
+                <label class="form-label" style="display:flex;justify-content:space-between;align-items:center;">
+                  <span>Primary Phone</span>
+                  <button type="button" class="icon-chip-btn" data-toggle-extra="edit-add-phone" title="Add Secondary Phone">+ Secondary Phone</button>
+                </label>
+                <input class="input" name="phone" placeholder="+1 ...">
+                <div id="edit-add-phone-wrap" class="is-hidden" style="margin-top:8px;">
+                  <input class="input" name="additional_phone" placeholder="+1 (secondary phone)">
+                </div>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="form-group">
+                <label class="form-label">Website</label>
+                <input class="input" name="website" placeholder="https://agency.com">
+              </div>
+              <div class="form-group">
+                <label class="form-label">Assigned Focus VA</label>
+                <select class="select" name="focus_va_id">
+                  <option value="">Unassigned</option>
+                  <?php foreach ($vas as $v): ?>
+                    <option value="<?= SecurityHelper::e($v['id']) ?>"><?= SecurityHelper::e($v['name']) ?></option>
+                  <?php endforeach; ?>
+                </select>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Contract Status</label>
+              <div class="status-radio-grid">
+                <label class="status-pill status-active" data-status-tone="active">
+                  <input type="radio" name="contract_status" value="active">
+                  <span class="status-dot"></span>
+                  <span>Active</span>
+                </label>
+                <label class="status-pill status-pending" data-status-tone="pending">
+                  <input type="radio" name="contract_status" value="pending">
+                  <span class="status-dot"></span>
+                  <span>Pending</span>
+                </label>
+                <label class="status-pill status-cancelled" data-status-tone="cancelled">
+                  <input type="radio" name="contract_status" value="cancelled">
+                  <span class="status-dot"></span>
+                  <span>Cancelled</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="grid-2">
+              <div class="form-group">
+                <label class="form-label">Contracted Hrs/Mo</label>
+                <input class="input" type="number" step="1" min="1" name="contracted_hours_per_month" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label">Consumed Hrs</label>
+                <input class="input" type="number" step="0.5" min="0" name="consumed_hours_month" required>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" style="display:flex;justify-content:space-between;align-items:center;">
+                <span>Client Available Hours (Synced with Open Slot Scanner)</span>
+                <button type="button" class="btn btn-secondary btn-sm" data-add-slot-btn="edit-client-slots-list">+ Add Slot</button>
               </label>
-              <label class="status-pill status-pending" data-status-tone="pending">
-                <input type="radio" name="contract_status" value="pending">
-                <span class="status-dot"></span>
-                <span>Pending</span>
-              </label>
-              <label class="status-pill status-cancelled" data-status-tone="cancelled">
-                <input type="radio" name="contract_status" value="cancelled">
-                <span class="status-dot"></span>
-                <span>Cancelled</span>
-              </label>
+              <div id="edit-client-slots-list" data-slots-container></div>
             </div>
-          </div>
 
-          <div class="grid-2">
             <div class="form-group">
-              <label class="form-label">Contracted Hrs/Mo</label>
-              <input class="input" type="number" step="1" min="1" name="contracted_hours_per_month" required>
+              <label class="form-label">Internal Account Notes</label>
+              <textarea class="textarea" name="internal_notes" rows="3"></textarea>
             </div>
-            <div class="form-group">
-              <label class="form-label">Consumed Hrs</label>
-              <input class="input" type="number" step="0.5" min="0" name="consumed_hours_month" required>
+
+            <div style="display:flex;justify-content:flex-end;gap:10px;padding-top:8px;">
+              <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
+              <button type="submit" class="btn btn-primary">Save Client Profile</button>
             </div>
-          </div>
+          </form>
 
-          <div class="form-group">
-            <label class="form-label" style="display:flex;justify-content:space-between;align-items:center;">
-              <span>Client Available Hours (Synced with Open Slot Scanner)</span>
-              <button type="button" class="btn btn-secondary btn-sm" data-add-slot-btn="edit-client-slots-list">+ Add Slot</button>
-            </label>
-            <div id="edit-client-slots-list" data-slots-container></div>
-          </div>
+          <form id="form-upload-contract" data-api-form="/api/v1/uploads/contract" data-api-method="POST" enctype="multipart/form-data" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;">
+            <input type="hidden" name="client_id" value="">
+            <label class="form-label" style="display:block;margin-bottom:6px;">Upload / Replace Signed Contract (.PDF max 15MB)</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <input class="input" type="file" name="contract_pdf" accept="application/pdf" required style="flex:1;padding:6px;">
+              <button type="submit" class="btn btn-secondary btn-sm">Upload PDF</button>
+            </div>
+          </form>
+        <?php else: ?>
+          <div id="dossier-va-readonly" class="card" style="background:var(--bg);padding:14px;"></div>
+        <?php endif; ?>
+      </div>
 
-          <div class="form-group">
-            <label class="form-label">Internal Account Notes</label>
-            <textarea class="textarea" name="internal_notes" rows="3"></textarea>
-          </div>
-
-          <div style="display:flex;justify-content:flex-end;gap:10px;padding-top:8px;">
-            <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
-            <button type="submit" class="btn btn-primary">Save Client Profile</button>
-          </div>
-        </form>
-
-        <form id="form-upload-contract" data-api-form="/api/v1/uploads/contract" data-api-method="POST" enctype="multipart/form-data" style="padding:12px;background:var(--bg);border:1px solid var(--border);border-radius:10px;margin-bottom:20px;">
+      <!-- Tab 2: Unified Per-Client Communications & Activity Timeline -->
+      <div class="is-hidden" data-tab-group="crm-dossier" data-tab-panel="timeline">
+        <form id="form-client-activity" data-no-reload="1" class="crm-activity-composer" style="margin-bottom:16px;">
           <input type="hidden" name="client_id" value="">
-          <label class="form-label" style="display:block;margin-bottom:6px;">Upload / Replace Signed Contract (.PDF max 15MB)</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px;">
+            <select name="type" class="select" style="flex:0 0 140px;">
+              <option value="note">Note</option>
+              <option value="meeting">Call / Meeting</option>
+              <option value="contract">Contract Update</option>
+              <option value="update">Status Update</option>
+            </select>
+            <span class="muted" style="font-size:12px;">Logs directly to this client's CRM record in real time.</span>
+          </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <input class="input" type="file" name="contract_pdf" accept="application/pdf" required style="flex:1;padding:6px;">
-            <button type="submit" class="btn btn-secondary btn-sm">Upload PDF</button>
+            <input class="input" name="description" required placeholder="Log call summary, client feedback, or renewal update..." style="flex:1 1 220px;min-width:0;">
+            <button type="submit" class="btn btn-primary btn-sm">Log Entry</button>
           </div>
         </form>
-      <?php else: ?>
-        <div id="dossier-va-readonly" class="card" style="background:var(--bg);margin-bottom:18px;padding:14px;"></div>
-      <?php endif; ?>
 
-      <div style="border-top:1px solid var(--border);padding-top:16px;">
-        <h4 style="margin-bottom:10px;">Activity Stream</h4>
-        <div id="dossier-activities" style="margin-bottom:12px;"></div>
-        <form id="form-client-activity" data-api-form="/api/v1/clients" data-api-method="POST" style="display:flex;gap:8px;flex-wrap:wrap;">
-          <input class="input" name="description" required placeholder="Log meeting update, call summary, or renewal note..." style="flex:1 1 200px;min-width:0;">
-          <button type="submit" class="btn btn-primary btn-sm">Log Activity</button>
-        </form>
+        <div id="dossier-activities" class="crm-timeline-list"></div>
+      </div>
+
+      <!-- Tab 3: Associated Virtual Assistant & Client Deliverables -->
+      <div class="is-hidden" data-tab-group="crm-dossier" data-tab-panel="team">
+        <div id="dossier-va-card" style="margin-bottom:18px;"></div>
+        <div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <h4>Client Deliverables</h4>
+            <a href="/tasks" class="btn btn-secondary btn-sm">Open Kanban</a>
+          </div>
+          <div id="dossier-tasks-list" style="display:grid;gap:8px;"></div>
+        </div>
       </div>
     </div>
   </aside>
@@ -496,7 +529,7 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
       </div>
 
       <div class="drawer-body">
-        <?php if (empty($data['vas'])): ?>
+        <?php if (empty($vas)): ?>
           <div class="notice notice-warn">Create at least one Virtual Assistant account before onboarding a client.</div>
         <?php else: ?>
           <form id="form-create-client" data-api-form="/api/v1/clients" data-api-method="POST">
@@ -560,7 +593,7 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
               <div class="form-group">
                 <label class="form-label">Assigned VA</label>
                 <select class="select" name="focus_va_id" required>
-                  <?php foreach ($data['vas'] as $v): ?>
+                  <?php foreach ($vas as $v): ?>
                     <option value="<?= SecurityHelper::e($v['id']) ?>"><?= SecurityHelper::e($v['name']) ?></option>
                   <?php endforeach; ?>
                 </select>
@@ -657,7 +690,7 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
       </div>
 
       <div class="drawer-body">
-        <?php if (empty($data['vas'])): ?>
+        <?php if (empty($vas)): ?>
           <div class="notice notice-warn">Create at least one Virtual Assistant account before importing clients.</div>
         <?php else: ?>
           <div class="wizard-steps" id="bulk-wizard-steps">
@@ -691,7 +724,7 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
             <div class="form-group">
               <label class="form-label">Default Focus VA (used when VA column is not mapped)</label>
               <select id="bulk-default-va" class="select" required>
-                <?php foreach ($data['vas'] as $v): ?>
+                <?php foreach ($vas as $v): ?>
                   <option value="<?= SecurityHelper::e($v['id']) ?>"><?= SecurityHelper::e($v['name']) ?></option>
                 <?php endforeach; ?>
               </select>

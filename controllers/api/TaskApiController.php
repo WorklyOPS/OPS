@@ -32,6 +32,20 @@ final class TaskApiController
             $db->exec("ALTER TABLE tasks ADD CONSTRAINT tasks_status_check CHECK (status IN ('backlog', 'todo', 'in_progress', 'completed'))");
             $db->exec("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS tasks_priority_check");
             $db->exec("ALTER TABLE tasks ADD CONSTRAINT tasks_priority_check CHECK (priority IN ('low', 'medium', 'high', 'urgent'))");
+            $db->exec("
+                CREATE TABLE IF NOT EXISTS task_subtasks (
+                    id VARCHAR(64) PRIMARY KEY,
+                    task_id VARCHAR(64) NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                    title VARCHAR(255) NOT NULL,
+                    is_completed BOOLEAN NOT NULL DEFAULT FALSE,
+                    position INTEGER NOT NULL DEFAULT 0,
+                    created_by_id VARCHAR(64) DEFAULT NULL,
+                    completed_at TIMESTAMPTZ DEFAULT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            ");
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_subtask_task ON task_subtasks (task_id, position ASC, created_at ASC)");
         } catch (Throwable) {
             // Constraints already aligned or restricted
         }
@@ -162,9 +176,10 @@ final class TaskApiController
         self::ensureTaskSchemaConstraints($this->db);
 
         $parts = explode('/', trim($uri, '/'));
-        // /api/v1/tasks/{id}/{sub}
+        // /api/v1/tasks/{id}/{sub}/{subId}
         $taskId = $parts[3] ?? ($_GET['id'] ?? null);
         $sub = $parts[4] ?? null;
+        $subId = $parts[5] ?? null;
 
         if ($method === 'GET' && !$taskId) {
             $this->listTasks($user);
@@ -173,6 +188,24 @@ final class TaskApiController
         if ($method === 'GET' && $taskId && $sub === 'activity') {
             $this->getActivity($taskId, $user);
             return;
+        }
+        if ($taskId && $sub === 'subtasks') {
+            if ($method === 'GET' && !$subId) {
+                $this->listSubtasks($taskId, $user);
+                return;
+            }
+            if ($method === 'POST' && !$subId) {
+                $this->addSubtask($taskId, $user);
+                return;
+            }
+            if ($method === 'PATCH' && $subId) {
+                $this->updateSubtask($taskId, $subId, $user);
+                return;
+            }
+            if ($method === 'DELETE' && $subId) {
+                $this->deleteSubtask($taskId, $subId, $user);
+                return;
+            }
         }
         if ($method === 'POST' && !$taskId) {
             $this->createTask($user);
@@ -374,6 +407,7 @@ final class TaskApiController
         usort($timeline, static fn(array $a, array $b): int => strcmp((string) $a['created_at'], (string) $b['created_at']));
 
         $mentionCandidates = self::getMentionCandidatesForTask($this->db, $task, $user);
+        $subtasks = $this->fetchSubtasksForTask($taskId);
 
         echo json_encode([
             'success'            => true,
@@ -383,6 +417,7 @@ final class TaskApiController
             'timeline'           => $timeline,
             'comment_authors'    => $commentAuthors,
             'mention_candidates' => $mentionCandidates,
+            'subtasks'           => $subtasks,
         ]);
     }
 
@@ -468,6 +503,27 @@ final class TaskApiController
                 ':instr'   => $user['role'] !== 'va' ? 'true' : 'false',
                 ':content' => SecurityHelper::sanitizePlainText($input['initial_note'], 2000),
             ]);
+        }
+
+        if (!empty($input['subtasks']) && is_array($input['subtasks'])) {
+            $stIns = $this->db->prepare("
+                INSERT INTO task_subtasks (id, task_id, title, is_completed, position, created_by_id)
+                VALUES (:id, :tid, :title, FALSE, :pos, :cid)
+            ");
+            $pos = 0;
+            foreach ($input['subtasks'] as $rawSubTitle) {
+                $subTitle = SecurityHelper::sanitizePlainText((string) $rawSubTitle, 255);
+                if ($subTitle === '') {
+                    continue;
+                }
+                $stIns->execute([
+                    ':id'    => 'sub-' . bin2hex(random_bytes(5)),
+                    ':tid'   => $id,
+                    ':title' => $subTitle,
+                    ':pos'   => $pos++,
+                    ':cid'   => $user['id'],
+                ]);
+            }
         }
 
         if ($assignedVaId !== '' && $assignedVaId !== $user['id']) {
@@ -711,5 +767,146 @@ final class TaskApiController
         $this->invalidate();
         AuditLogger::log('EXTRA_HOURS_LOGGED', 'success', "Logged {$hours}h overtime on task {$taskId}", $user['id'], $user['role'], $this->db);
         echo json_encode(['success' => true, 'id' => $id]);
+    }
+
+    private function fetchSubtasksForTask(string $taskId): array
+    {
+        try {
+            $stmt = $this->db->prepare("
+                SELECT id, task_id, title, is_completed, position, created_by_id, completed_at, created_at, updated_at
+                FROM task_subtasks
+                WHERE task_id = :tid
+                ORDER BY position ASC, created_at ASC
+            ");
+            $stmt->execute([':tid' => $taskId]);
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$r) {
+                $r['is_completed'] = filter_var($r['is_completed'], FILTER_VALIDATE_BOOLEAN);
+                $r['position'] = (int) ($r['position'] ?? 0);
+            }
+            unset($r);
+            return $rows;
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    private function listSubtasks(string $taskId, array $user): void
+    {
+        $this->assertTaskAccess($taskId, $user);
+        $subtasks = $this->fetchSubtasksForTask($taskId);
+        echo json_encode([
+            'success'  => true,
+            'task_id'  => $taskId,
+            'subtasks' => $subtasks,
+        ]);
+    }
+
+    private function addSubtask(string $taskId, array $user): void
+    {
+        $this->assertTaskAccess($taskId, $user, 'update');
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $title = SecurityHelper::sanitizePlainText($input['title'] ?? '', 255);
+        if ($title === '') {
+            http_response_code(422);
+            echo json_encode(['error' => 'Sub-task title cannot be empty']);
+            return;
+        }
+
+        $posStmt = $this->db->prepare('SELECT COALESCE(MAX(position), -1) + 1 FROM task_subtasks WHERE task_id = :tid');
+        $posStmt->execute([':tid' => $taskId]);
+        $nextPos = (int) $posStmt->fetchColumn();
+
+        $id = 'sub-' . bin2hex(random_bytes(5));
+        $stmt = $this->db->prepare("
+            INSERT INTO task_subtasks (id, task_id, title, is_completed, position, created_by_id)
+            VALUES (:id, :tid, :title, FALSE, :pos, :cid)
+        ");
+        $stmt->execute([
+            ':id'    => $id,
+            ':tid'   => $taskId,
+            ':title' => $title,
+            ':pos'   => $nextPos,
+            ':cid'   => $user['id'],
+        ]);
+
+        $this->invalidate();
+        $subtasks = $this->fetchSubtasksForTask($taskId);
+        AuditLogger::log('SUBTASK_ADDED', 'success', "Added sub-task {$id} to task {$taskId}", $user['id'], $user['role'], $this->db);
+        http_response_code(201);
+        echo json_encode([
+            'success'  => true,
+            'id'       => $id,
+            'subtasks' => $subtasks,
+        ]);
+    }
+
+    private function updateSubtask(string $taskId, string $subtaskId, array $user): void
+    {
+        $this->assertTaskAccess($taskId, $user, 'update');
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+
+        $chk = $this->db->prepare('SELECT id, title, is_completed FROM task_subtasks WHERE id = :sid AND task_id = :tid LIMIT 1');
+        $chk->execute([':sid' => $subtaskId, ':tid' => $taskId]);
+        $existing = $chk->fetch(PDO::FETCH_ASSOC);
+        if (!$existing) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Sub-task not found']);
+            return;
+        }
+
+        $sets = [];
+        $params = [':sid' => $subtaskId, ':tid' => $taskId];
+
+        if (array_key_exists('is_completed', $input)) {
+            $done = filter_var($input['is_completed'], FILTER_VALIDATE_BOOLEAN);
+            $sets[] = 'is_completed = :done';
+            $sets[] = $done ? 'completed_at = NOW()' : 'completed_at = NULL';
+            $params[':done'] = $done ? 'true' : 'false';
+        }
+
+        if (array_key_exists('title', $input)) {
+            $title = SecurityHelper::sanitizePlainText((string) $input['title'], 255);
+            if ($title === '') {
+                http_response_code(422);
+                echo json_encode(['error' => 'Sub-task title cannot be empty']);
+                return;
+            }
+            $sets[] = 'title = :title';
+            $params[':title'] = $title;
+        }
+
+        if (empty($sets)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'No valid sub-task changes provided']);
+            return;
+        }
+
+        $upd = $this->db->prepare('UPDATE task_subtasks SET ' . implode(', ', $sets) . ', updated_at = NOW() WHERE id = :sid AND task_id = :tid');
+        $upd->execute($params);
+
+        $this->invalidate();
+        $subtasks = $this->fetchSubtasksForTask($taskId);
+        echo json_encode([
+            'success'  => true,
+            'id'       => $subtaskId,
+            'subtasks' => $subtasks,
+        ]);
+    }
+
+    private function deleteSubtask(string $taskId, string $subtaskId, array $user): void
+    {
+        $this->assertTaskAccess($taskId, $user, 'update');
+        $stmt = $this->db->prepare('DELETE FROM task_subtasks WHERE id = :sid AND task_id = :tid');
+        $stmt->execute([':sid' => $subtaskId, ':tid' => $taskId]);
+
+        $this->invalidate();
+        $subtasks = $this->fetchSubtasksForTask($taskId);
+        AuditLogger::log('SUBTASK_DELETED', 'warning', "Deleted sub-task {$subtaskId} from task {$taskId}", $user['id'], $user['role'], $this->db);
+        echo json_encode([
+            'success'  => true,
+            'id'       => $subtaskId,
+            'subtasks' => $subtasks,
+        ]);
     }
 }
