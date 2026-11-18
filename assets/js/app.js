@@ -808,6 +808,11 @@
     return String(ts).replace('T', ' ').slice(0, 16);
   }
 
+  function formatTime(ts) {
+      if (!ts) return '';
+      return String(ts).replace('T', ' ').slice(11, 16);
+  }
+
   function saveTaskDataset(allData) {
     const store = document.getElementById('task-details-json');
     if (store && allData) {
@@ -1168,13 +1173,26 @@
         });
       });
       merged.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+      
+      let previousDay = '';
 
       if (merged.length === 0) {
         combinedList.innerHTML = '<div class="collab-empty">No notes or comments on this deliverable yet.</div>';
       } else {
         merged.forEach((item) => {
+          const currentDay = String(item.created_at || '').slice(0, 10);
           const el = document.createElement('article');
           const rolePretty = String(item.author_role || 'va').replace('_', ' ');
+
+          if (currentDay && currentDay !== previousDay) {
+            const separator = document.createElement('div');
+            separator.className = 'collab-day-separator';
+            separator.textContent = formatShortTs(item.created_at);
+
+            combinedList.appendChild(separator);
+            previousDay = currentDay;
+          }
+
           if (item.kind === 'note') {
             el.className = 'collab-note-item';
             el.innerHTML =
@@ -1188,7 +1206,6 @@
                   '</div>' +
                   '<div class="collab-entry-actions">' +
                     buildCollabActionBtn('Reply', 'reply', 'data-author-name', item.author_name) +
-                    buildCollabActionBtn('Copy', 'copy', 'data-copy-text', item.text) +
                   '</div>' +
                 '</div>' +
                 '<p class="collab-entry-text">' + formatTextWithMentionsHtml(item.text, taskId, allData) + '</p>' +
@@ -1205,11 +1222,10 @@
                     '<span class="muted collab-role-sep">·</span>' +
                     '<span class="muted" style="font-size:11.5px;text-transform:capitalize;">' + escapeHtml(rolePretty) + '</span>' +
                     '<span class="muted collab-role-sep">·</span>' +
-                    '<span class="muted mono collab-entry-ts">' + escapeHtml(formatShortTs(item.created_at)) + '</span>' +
+                    '<span class="muted mono collab-entry-ts">' + escapeHtml(formatTime(item.created_at)) + '</span>' +
                   '</div>' +
                   '<div class="collab-entry-actions">' +
                     buildCollabActionBtn('Reply', 'reply', 'data-author-name', item.author_name) +
-                    buildCollabActionBtn('Copy', 'copy', 'data-copy-text', item.text) +
                   '</div>' +
                 '</div>' +
                 '<p class="collab-entry-text">' + formatTextWithMentionsHtml(item.text, taskId, allData) + '</p>' +
@@ -1269,7 +1285,7 @@
                   '<span class="muted collab-role-sep">·</span>' +
                   '<span class="muted" style="font-size:11.5px;text-transform:capitalize;">' + escapeHtml(rolePretty) + '</span>' +
                   '<span class="muted collab-role-sep">·</span>' +
-                  '<span class="muted mono collab-entry-ts">' + escapeHtml(formatShortTs(c.created_at)) + '</span>' +
+                  '<span class="muted mono collab-entry-ts">' + escapeHtml(formatTime(c.created_at)) + '</span>' +
                 '</div>' +
                 '<div class="collab-entry-actions">' +
                   buildCollabActionBtn('Reply', 'reply', 'data-author-name', c.author_name) +
