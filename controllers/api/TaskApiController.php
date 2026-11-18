@@ -505,24 +505,39 @@ final class TaskApiController
             ]);
         }
 
-        if (!empty($input['subtasks']) && is_array($input['subtasks'])) {
+        $rawSubtasks = $input['subtasks'] ?? [];
+        if (is_string($rawSubtasks)) {
+            $decodedSubs = json_decode($rawSubtasks, true);
+            $rawSubtasks = is_array($decodedSubs) ? $decodedSubs : array_filter(array_map('trim', explode("\n", $rawSubtasks)));
+        }
+        $createdSubtasks = [];
+        if (!empty($rawSubtasks) && is_array($rawSubtasks)) {
             $stIns = $this->db->prepare("
                 INSERT INTO task_subtasks (id, task_id, title, is_completed, position, created_by_id)
                 VALUES (:id, :tid, :title, FALSE, :pos, :cid)
             ");
             $pos = 0;
-            foreach ($input['subtasks'] as $rawSubTitle) {
+            foreach ($rawSubtasks as $rawSubTitle) {
                 $subTitle = SecurityHelper::sanitizePlainText((string) $rawSubTitle, 255);
                 if ($subTitle === '') {
                     continue;
                 }
+                $subId = 'sub-' . bin2hex(random_bytes(5));
                 $stIns->execute([
-                    ':id'    => 'sub-' . bin2hex(random_bytes(5)),
+                    ':id'    => $subId,
                     ':tid'   => $id,
                     ':title' => $subTitle,
-                    ':pos'   => $pos++,
+                    ':pos'   => $pos,
                     ':cid'   => $user['id'],
                 ]);
+                $createdSubtasks[] = [
+                    'id'           => $subId,
+                    'task_id'      => $id,
+                    'title'        => $subTitle,
+                    'is_completed' => false,
+                    'position'     => $pos,
+                ];
+                $pos++;
             }
         }
 
@@ -541,7 +556,7 @@ final class TaskApiController
         $this->invalidate();
         AuditLogger::log('TASK_CREATED', 'success', "Created task {$id} ({$title})", $user['id'], $user['role'], $this->db);
         http_response_code(201);
-        echo json_encode(['success' => true, 'id' => $id]);
+        echo json_encode(['success' => true, 'id' => $id, 'subtasks' => $createdSubtasks]);
     }
 
     private function updateStatus(string $taskId, array $user, ?array $preloaded = null): void

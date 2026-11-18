@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="workly-csrf" content="<?= SecurityHelper::e($csrfToken) ?>">
   <title>Sign In — Workly Virtual Assistant Platform</title>
   <meta name="description" content="Secure authentication for Workly Virtual Assistant Operations.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -129,6 +130,8 @@
       </div>
     </section>
   </main>
+
+  <?php require __DIR__ . '/../partials/cookie_banner.php'; ?>
 
   <script src="/assets/js/app.js"></script>
   <script src="/assets/js/theme-mode.js"></script>

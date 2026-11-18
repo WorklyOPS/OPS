@@ -109,6 +109,12 @@ if (str_starts_with($uri, '/api/v1/')) {
         exit;
     }
 
+    if ($uri === '/api/v1/auth/cookie-consent' && $method === 'POST') {
+        require_once __DIR__ . '/controllers/AuthController.php';
+        (new AuthController($db))->handleCookieConsent();
+        exit;
+    }
+
     if (str_starts_with($uri, '/api/v1/tasks')) {
         require_once __DIR__ . '/controllers/api/TaskApiController.php';
         (new TaskApiController($db))->handle($method, $uri);
@@ -291,5 +297,6 @@ SecurityHelper::sendHtmlHeaders();
     <p class="muted">The requested workspace route does not exist.</p>
     <a class="btn btn-primary" href="/">Return to Workspace</a>
   </div>
+  <script src="/assets/js/theme-mode.js"></script>
 </body>
 </html>

@@ -551,6 +551,8 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
     </div>
   </div>
 
+  <?php require __DIR__ . '/../partials/cookie_banner.php'; ?>
+
   <script src="/assets/js/app.js"></script>
   <script src="/assets/js/theme-mode.js"></script>
   <?php if ($activeSection === 'dashboard' && $role === 'team_leader'): ?>

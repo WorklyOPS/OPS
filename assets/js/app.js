@@ -80,6 +80,7 @@
     portalOverlaysToBody();
     initSkeletonStaging();
     initAuthControls();
+    initCookieBanner();
     initMobileDrawer();
     initHeaderPopovers();
     initDrawersAndModals();
@@ -178,6 +179,66 @@
         btn.setAttribute('aria-pressed', isPass ? 'true' : 'false');
       });
     });
+  }
+
+  // ------------------------------------------------------------------------
+  // Essential Session Cookie Consent Popup
+  // ------------------------------------------------------------------------
+  function initCookieBanner() {
+    const banner = document.getElementById('workly-cookie-banner');
+    if (!banner) return;
+
+    const getStoredConsent = () => {
+      const m = document.cookie.match(/(?:^|;\s*)workly_cookie_consent=(accepted|declined)(?:;|$)/);
+      if (m) return m[1];
+      try {
+        const ls = localStorage.getItem('workly_cookie_consent');
+        if (ls === 'accepted' || ls === 'declined') return ls;
+      } catch (_e) {
+      }
+      return '';
+    };
+
+    if (getStoredConsent() !== '') {
+      banner.remove();
+      return;
+    }
+
+    const submitConsent = async (choice) => {
+      const acceptBtn = document.getElementById('btn-cookie-accept');
+      const declineBtn = document.getElementById('btn-cookie-decline');
+      if (acceptBtn) acceptBtn.disabled = true;
+      if (declineBtn) declineBtn.disabled = true;
+
+      document.cookie = 'workly_cookie_consent=' + choice + '; path=/; max-age=15552000; SameSite=Lax';
+      try {
+        localStorage.setItem('workly_cookie_consent', choice);
+      } catch (_e) {
+      }
+
+      try {
+        await apiFetch('/api/v1/auth/cookie-consent', {
+          method: 'POST',
+          body: JSON.stringify({ consent: choice })
+        });
+      } catch (_err) {
+        // Cookie is already saved locally if session was not active yet
+      }
+
+      banner.classList.add('is-leaving');
+      window.setTimeout(() => banner.remove(), reducedMotion ? 0 : 200);
+      showToast(
+        choice === 'accepted'
+          ? 'Essential session cookies enabled'
+          : 'Persistent cookies declined — using tab session only',
+        'success'
+      );
+    };
+
+    const acceptBtn = document.getElementById('btn-cookie-accept');
+    const declineBtn = document.getElementById('btn-cookie-decline');
+    if (acceptBtn) acceptBtn.addEventListener('click', () => submitConsent('accepted'));
+    if (declineBtn) declineBtn.addEventListener('click', () => submitConsent('declined'));
   }
 
   // ------------------------------------------------------------------------
@@ -642,7 +703,6 @@
       setVal('[name="description"]', task.description || '');
     }
 
-    renderSubtasksForTask(taskId, allData);
     openModal('modal-task-edit');
   }
 
@@ -832,34 +892,192 @@
     });
   }
 
+  const SPECIALTY_CHECKLIST_PRESETS = {
+    Development: [
+      'Verify staging & lint checks',
+      'Run regression QA test pass',
+      'Update repository & PR notes',
+      'Confirm production deploy check'
+    ],
+    Marketing: [
+      'Audit brand voice & copywriting',
+      'Verify UTM links & pixel tracking',
+      'Prepare & size creative assets',
+      'Schedule campaign & QA preview'
+    ],
+    Legal: [
+      'Review clauses, dates & entities',
+      'Cross-check compliance checklist',
+      'Verify signatory & witness fields',
+      'Archive executed PDF copy'
+    ],
+    Insurance: [
+      'Verify policy limits & coverage',
+      'Audit client underwriting docs',
+      'Update carrier portal status',
+      'Send COI / renewal confirmation'
+    ],
+    Healthcare: [
+      'Verify HIPAA privacy compliance',
+      'Confirm patient & provider intake',
+      'Audit billing & coding accuracy',
+      'Log EHR follow-up summary'
+    ],
+    Administrative: [
+      'Audit inbox & calendar conflicts',
+      'Organize client cloud folders',
+      'Update CRM tracker records',
+      'Send EOD status summary'
+    ],
+    Management: [
+      'Confirm pod owners & capacity',
+      'Review SLA milestones & blockers',
+      'Verify QA sign-off criteria',
+      'Send stakeholder progress brief'
+    ],
+    Accounting: [
+      'Reconcile invoices & receipts',
+      'Verify ledger account categories',
+      'Cross-check tax & due dates',
+      'Export reconciled ledger summary'
+    ],
+    General: [
+      'Review acceptance criteria',
+      'Complete primary deliverable draft',
+      'Self-QA & proofread output',
+      'Confirm client handoff ready'
+    ]
+  };
+
+  function resolveChecklistSuggestionsForVa(vaId, allData) {
+    const data = allData || {};
+    const specsRaw = (data.va_specialties && vaId && Array.isArray(data.va_specialties[vaId]))
+      ? data.va_specialties[vaId]
+      : [];
+    const matchedKeys = [];
+    const seenSteps = new Set();
+    const suggestions = [];
+
+    specsRaw.forEach((sp) => {
+      const clean = String(sp || '').trim();
+      if (!clean) return;
+      const presetKey = Object.keys(SPECIALTY_CHECKLIST_PRESETS).find(
+        (k) => k.toLowerCase() === clean.toLowerCase()
+      );
+      if (presetKey) {
+        if (!matchedKeys.includes(presetKey)) matchedKeys.push(presetKey);
+        SPECIALTY_CHECKLIST_PRESETS[presetKey].forEach((step) => {
+          const low = step.toLowerCase();
+          if (!seenSteps.has(low)) {
+            seenSteps.add(low);
+            suggestions.push({ title: step, category: presetKey });
+          }
+        });
+      }
+    });
+
+    SPECIALTY_CHECKLIST_PRESETS.General.forEach((step) => {
+      const low = step.toLowerCase();
+      if (!seenSteps.has(low)) {
+        seenSteps.add(low);
+        suggestions.push({ title: step, category: 'General' });
+      }
+    });
+
+    return {
+      label: matchedKeys.length > 0 ? (matchedKeys.join(' · ') + ' + General') : 'General Workflow',
+      items: suggestions.slice(0, 10)
+    };
+  }
+
+  let activeSubtasksTaskId = null;
+
+  function renderSubtaskSuggestionsForModal(taskId, allData) {
+    const wrap = document.getElementById('modal-subtask-suggestions-tags');
+    const lbl = document.getElementById('modal-subtask-spec-label');
+    if (!wrap) return;
+
+    const data = allData || getTaskDataset() || {};
+    const task = (data.tasks || {})[taskId] || {};
+    const vaId = String(task.assigned_va_id || data.current_user_id || '');
+    const existingSet = new Set(
+      ((data.subtasks || {})[taskId] || []).map((s) => String(s.title || '').trim().toLowerCase())
+    );
+
+    const resolved = resolveChecklistSuggestionsForVa(vaId, data);
+    if (lbl) lbl.textContent = resolved.label;
+
+    wrap.innerHTML = '';
+    resolved.items.forEach((item) => {
+      const isAdded = existingSet.has(item.title.toLowerCase());
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'subtask-suggest-tag' + (isAdded ? ' is-added' : '');
+      btn.setAttribute('data-modal-suggest-step', item.title);
+      btn.setAttribute('title', item.category + ': Click to add to checklist');
+      if (isAdded) btn.disabled = true;
+
+      const iconSpan = document.createElement('span');
+      iconSpan.className = 'subtask-suggest-plus';
+      iconSpan.textContent = isAdded ? '✓' : '+';
+      const txtSpan = document.createElement('span');
+      txtSpan.textContent = item.title;
+
+      btn.appendChild(iconSpan);
+      btn.appendChild(txtSpan);
+      wrap.appendChild(btn);
+    });
+  }
+
   function renderSubtasksForTask(taskId, allData) {
     const subtasks = ((allData && allData.subtasks) ? allData.subtasks[taskId] : null) || [];
-
-    const modal = document.getElementById('modal-task-edit');
-    if (modal && activeEditTaskId === taskId) {
+    const modal = document.getElementById('modal-task-subtasks');
+    if (modal && activeSubtasksTaskId === taskId) {
       renderSubtaskContainer(
         taskId,
-        modal.querySelector('#modal-subtasks-list'),
-        modal.querySelector('#modal-subtasks-counter'),
-        modal.querySelector('#modal-subtasks-progress'),
+        modal.querySelector('#subtasks-modal-list'),
+        modal.querySelector('#subtasks-modal-counter'),
+        modal.querySelector('#subtasks-modal-progress'),
         subtasks
       );
+      renderSubtaskSuggestionsForModal(taskId, allData);
     }
+  }
 
-    const drawer = document.getElementById('drawer-task-collab');
-    if (drawer && (activeCollabTaskId === taskId || !drawer.classList.contains('is-hidden'))) {
-      renderSubtaskContainer(
-        taskId,
-        drawer.querySelector('#collab-subtasks-list'),
-        drawer.querySelector('#collab-subtasks-counter'),
-        drawer.querySelector('#collab-subtasks-progress'),
-        subtasks
-      );
-      const tabCount = drawer.querySelector('[data-collab-subtask-tab-count]');
-      if (tabCount) {
-        const done = subtasks.filter((s) => Boolean(s.is_completed)).length;
-        tabCount.textContent = done + '/' + subtasks.length;
+  async function openTaskSubtasksModal(taskId) {
+    const allData = getTaskDataset() || {};
+    const task = allData.tasks ? allData.tasks[taskId] : null;
+    const modal = document.getElementById('modal-task-subtasks');
+    if (!task || !modal) return;
+
+    activeSubtasksTaskId = taskId;
+    const tEl = modal.querySelector('#subtasks-modal-task-title');
+    const mEl = modal.querySelector('#subtasks-modal-task-meta');
+    if (tEl) tEl.textContent = (task.title || 'Sub-Tasks Checklist');
+    if (mEl) mEl.textContent = (task.client_name || '') + ' · ' + (task.va_name || '') + ' · Due ' + (task.deadline || '');
+
+    renderSubtasksForTask(taskId, allData);
+    openModal('modal-task-subtasks');
+
+    const inp = modal.querySelector('#subtasks-modal-input');
+    if (inp) window.setTimeout(() => inp.focus(), 60);
+
+    try {
+      const res = await fetch('/api/v1/tasks/' + encodeURIComponent(taskId) + '/subtasks', {
+        headers: { 'Accept': 'application/json', 'X-CSRF-Token': CSRF_TOKEN }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.success && Array.isArray(data.subtasks) && activeSubtasksTaskId === taskId) {
+          const fresh = getTaskDataset() || {};
+          fresh.subtasks = fresh.subtasks || {};
+          fresh.subtasks[taskId] = data.subtasks;
+          saveTaskDataset(fresh);
+          renderSubtasksForTask(taskId, fresh);
+          syncTaskCardIndicators(taskId, fresh);
+        }
       }
+    } catch (_e) {
     }
   }
 
@@ -890,10 +1108,6 @@
     document.querySelectorAll('[data-task-subtask-pct="' + taskId + '"]').forEach((pctEl) => {
       pctEl.textContent = subPct + '%';
     });
-    const drawerTabBadge = document.querySelector('#drawer-task-collab [data-collab-subtask-tab-count]');
-    if (drawerTabBadge && activeCollabTaskId === taskId) {
-      drawerTabBadge.textContent = subDone + '/' + subTotal;
-    }
     document.querySelectorAll('[data-task-commenter-avatars="' + taskId + '"]').forEach((wrap) => {
       wrap.innerHTML = '';
       authors.slice(0, 3).forEach((ca) => {
@@ -922,8 +1136,6 @@
     });
   }
 
-  let collabFilterKind = 'all';
-
   function buildCollabActionBtn(label, action, attrName, attrVal) {
     return '<button type="button" class="collab-card-action" data-collab-action="' + action + '" ' +
       attrName + '="' + escapeHtml(attrVal || '') + '">' + escapeHtml(label) + '</button>';
@@ -935,14 +1147,6 @@
 
     const notes = ((allData.notes || {})[taskId]) || [];
     const comments = ((allData.comments || {})[taskId]) || [];
-
-    // Update filter counts
-    const allCountEl = drawer.querySelector('[data-collab-count="all"]');
-    const noteCountEl = drawer.querySelector('[data-collab-count="note"]');
-    const commentCountEl = drawer.querySelector('[data-collab-count="comment"]');
-    if (allCountEl) allCountEl.textContent = String(notes.length + comments.length);
-    if (noteCountEl) noteCountEl.textContent = String(notes.length);
-    if (commentCountEl) commentCountEl.textContent = String(comments.length);
 
     // Combined Timeline: Notes carry clean warm highlight; Comments stay crisp & neutral
     const combinedList = drawer.querySelector('#detail-combined-list');
@@ -971,14 +1175,10 @@
       });
       merged.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
 
-      const visibleItems = collabFilterKind === 'all'
-        ? merged
-        : merged.filter((m) => m.kind === collabFilterKind);
-
-      if (visibleItems.length === 0) {
-        combinedList.innerHTML = '<div class="collab-empty">No ' + (collabFilterKind === 'all' ? 'notes or comments' : collabFilterKind + 's') + ' on this deliverable yet.</div>';
+      if (merged.length === 0) {
+        combinedList.innerHTML = '<div class="collab-empty">No notes or comments on this deliverable yet.</div>';
       } else {
-        visibleItems.forEach((item) => {
+        merged.forEach((item) => {
           const el = document.createElement('article');
           const rolePretty = String(item.author_role || 'va').replace('_', ' ');
           if (item.kind === 'note') {
@@ -1163,6 +1363,10 @@
   }
 
   function openTaskCollabDrawer(taskId, initialTab) {
+    if (initialTab === 'subtasks') {
+      openTaskSubtasksModal(taskId);
+      return;
+    }
     const allData = getTaskDataset();
     const task = allData && allData.tasks ? allData.tasks[taskId] : null;
     const drawer = document.getElementById('drawer-task-collab');
@@ -1175,12 +1379,11 @@
 
     activeCollabTaskId = taskId;
     renderTaskCollabLists(taskId, allData);
-    renderSubtasksForTask(taskId, allData);
 
     drawer.querySelectorAll('input[name="task_id"]').forEach((inp) => { inp.value = taskId; });
     openDrawer('drawer-task-collab');
 
-    const tabKey = (initialTab === 'comments' || initialTab === 'notes' || initialTab === 'subtasks') ? initialTab : 'combined';
+    const tabKey = (initialTab === 'comments' || initialTab === 'notes') ? initialTab : 'combined';
     activateTab('task-collab', tabKey);
 
     refreshTaskActivityLive(taskId);
@@ -1424,6 +1627,12 @@
           return;
         }
 
+        const subtasksBtn = e.target.closest('[data-open-task-subtasks]');
+        if (subtasksBtn) {
+          openTaskSubtasksModal(subtasksBtn.getAttribute('data-open-task-subtasks'));
+          return;
+        }
+
         const collabBtn = e.target.closest('[data-open-task-collab]');
         if (collabBtn) {
           openTaskCollabDrawer(
@@ -1453,7 +1662,7 @@
         if (action === 'open-edit') {
           openTaskEditModal(tid);
         } else if (action === 'open-subtasks') {
-          openTaskCollabDrawer(tid, 'subtasks');
+          openTaskSubtasksModal(tid);
         } else if (action === 'status') {
           const status = btn.getAttribute('data-status');
           try {
@@ -1509,21 +1718,9 @@
       }, 240);
     }
 
-    // Combined Timeline No-Reload Submission + Interactive Filter & Reply/Copy Actions
+    // Combined Timeline No-Reload Reply & Copy Actions
     const collabDrawer = document.getElementById('drawer-task-collab');
     if (collabDrawer) {
-      collabDrawer.querySelectorAll('[data-collab-filter]').forEach((chip) => {
-        chip.addEventListener('click', () => {
-          collabFilterKind = chip.getAttribute('data-collab-filter') || 'all';
-          collabDrawer.querySelectorAll('[data-collab-filter]').forEach((c) => {
-            c.classList.toggle('is-active', c === chip);
-          });
-          if (activeCollabTaskId) {
-            renderTaskCollabLists(activeCollabTaskId, getTaskDataset());
-          }
-        });
-      });
-
       collabDrawer.addEventListener('click', (e) => {
         const actionBtn = e.target.closest('[data-collab-action]');
         if (!actionBtn) return;
@@ -1747,14 +1944,14 @@
       });
     }
 
-    // Sub-Tasks Breakdown Live Checklist CRUD (Create Drafts + Edit Modal + Collab Drawer)
-    const addSubtaskToTask = async (taskId, inputEl, btnEl) => {
-      const title = inputEl ? inputEl.value.trim() : '';
+    // Standalone Sub-Tasks Modal CRUD + 1-Click VA Specialty Suggestions
+    const addSubtaskTitleToTask = async (taskId, titleText, triggerBtn, inputToClear) => {
+      const title = String(titleText || '').trim();
       if (!taskId || !title) {
-        if (inputEl) inputEl.focus();
+        if (inputToClear) inputToClear.focus();
         return;
       }
-      if (btnEl) btnEl.disabled = true;
+      if (triggerBtn) triggerBtn.disabled = true;
       try {
         const res = await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId) + '/subtasks', {
           method: 'POST',
@@ -1768,39 +1965,38 @@
           renderSubtasksForTask(taskId, allData);
           syncTaskCardIndicators(taskId, allData);
         }
-        if (inputEl) {
-          inputEl.value = '';
-          inputEl.focus();
+        if (inputToClear) {
+          inputToClear.value = '';
+          inputToClear.focus();
         }
         showToast('Sub-task added', 'success');
       } catch (err) {
         showToast(err.message, 'error');
+        if (triggerBtn) triggerBtn.disabled = false;
       } finally {
-        if (btnEl) btnEl.disabled = false;
+        if (inputToClear && triggerBtn) triggerBtn.disabled = false;
       }
     };
 
-    const modalSubInput = document.getElementById('modal-subtask-input');
-    const modalSubBtn = document.getElementById('modal-subtask-add-btn');
-    if (modalSubBtn && modalSubInput) {
-      modalSubBtn.addEventListener('click', () => addSubtaskToTask(activeEditTaskId, modalSubInput, modalSubBtn));
-      modalSubInput.addEventListener('keydown', (e) => {
+    const subModalInput = document.getElementById('subtasks-modal-input');
+    const subModalBtn = document.getElementById('subtasks-modal-add-btn');
+    if (subModalBtn && subModalInput) {
+      subModalBtn.addEventListener('click', () => addSubtaskTitleToTask(activeSubtasksTaskId, subModalInput.value, subModalBtn, subModalInput));
+      subModalInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          addSubtaskToTask(activeEditTaskId, modalSubInput, modalSubBtn);
+          addSubtaskTitleToTask(activeSubtasksTaskId, subModalInput.value, subModalBtn, subModalInput);
         }
       });
     }
 
-    const collabSubInput = document.getElementById('collab-subtask-input');
-    const collabSubBtn = document.getElementById('collab-subtask-add-btn');
-    if (collabSubBtn && collabSubInput) {
-      collabSubBtn.addEventListener('click', () => addSubtaskToTask(activeCollabTaskId, collabSubInput, collabSubBtn));
-      collabSubInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          addSubtaskToTask(activeCollabTaskId, collabSubInput, collabSubBtn);
-        }
+    const modalSuggestTags = document.getElementById('modal-subtask-suggestions-tags');
+    if (modalSuggestTags) {
+      modalSuggestTags.addEventListener('click', (e) => {
+        const tagBtn = e.target.closest('[data-modal-suggest-step]');
+        if (!tagBtn || tagBtn.disabled || !activeSubtasksTaskId) return;
+        const stepTitle = tagBtn.getAttribute('data-modal-suggest-step') || '';
+        addSubtaskTitleToTask(activeSubtasksTaskId, stepTitle, tagBtn, null);
       });
     }
 
@@ -1874,15 +2070,62 @@
       }
     });
 
-    // Optional Sub-Tasks Draft Builder inside Create Deliverable Drawer
+    // Sub-Tasks Draft Builder + 1-Click Specialty Suggestions inside Create Deliverable Drawer
+    const createDrawer = document.getElementById('drawer-create-task');
     const createSubInput = document.getElementById('create-subtask-draft-input');
     const createSubBtn = document.getElementById('btn-add-create-subtask');
     const createSubList = document.getElementById('create-subtasks-list');
+    const createSuggestTags = document.getElementById('create-subtask-suggestions-tags');
+    const createSuggestSpecLbl = document.getElementById('create-subtask-spec-label');
     if (createSubInput && createSubBtn && createSubList) {
-      const addDraftStep = () => {
-        const val = createSubInput.value.trim();
+      const refreshCreateSuggestions = () => {
+        if (!createSuggestTags) return;
+        const allData = getTaskDataset() || {};
+        const vaField = createDrawer ? createDrawer.querySelector('[name="assigned_va_id"]') : null;
+        const vaId = vaField ? String(vaField.value || '') : String(allData.current_user_id || '');
+        const resolved = resolveChecklistSuggestionsForVa(vaId, allData);
+        if (createSuggestSpecLbl) createSuggestSpecLbl.textContent = resolved.label;
+
+        const existingDrafts = new Set(
+          Array.from(createSubList.querySelectorAll('input[name="subtasks[]"]'))
+            .map((inp) => String(inp.value || '').trim().toLowerCase())
+        );
+
+        createSuggestTags.innerHTML = '';
+        resolved.items.forEach((item) => {
+          const isAdded = existingDrafts.has(item.title.toLowerCase());
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'subtask-suggest-tag' + (isAdded ? ' is-added' : '');
+          btn.setAttribute('data-create-suggest-step', item.title);
+          btn.setAttribute('title', item.category + ': Click to add to checklist');
+          if (isAdded) btn.disabled = true;
+
+          const iconSpan = document.createElement('span');
+          iconSpan.className = 'subtask-suggest-plus';
+          iconSpan.textContent = isAdded ? '✓' : '+';
+          const txtSpan = document.createElement('span');
+          txtSpan.textContent = item.title;
+
+          btn.appendChild(iconSpan);
+          btn.appendChild(txtSpan);
+          createSuggestTags.appendChild(btn);
+        });
+      };
+
+      const appendDraftStep = (rawTitle, refocusInput) => {
+        const val = String(rawTitle || '').trim();
         if (!val) {
-          createSubInput.focus();
+          if (refocusInput) createSubInput.focus();
+          return;
+        }
+        const exists = Array.from(createSubList.querySelectorAll('input[name="subtasks[]"]'))
+          .some((inp) => String(inp.value || '').trim().toLowerCase() === val.toLowerCase());
+        if (exists) {
+          if (refocusInput) {
+            createSubInput.value = '';
+            createSubInput.focus();
+          }
           return;
         }
         const chip = document.createElement('div');
@@ -1898,21 +2141,54 @@
         rm.className = 'subtask-del-btn';
         rm.setAttribute('aria-label', 'Remove draft step');
         rm.textContent = '×';
-        rm.addEventListener('click', () => chip.remove());
+        rm.addEventListener('click', () => {
+          chip.remove();
+          refreshCreateSuggestions();
+        });
         chip.appendChild(label);
         chip.appendChild(hidden);
         chip.appendChild(rm);
         createSubList.appendChild(chip);
-        createSubInput.value = '';
-        createSubInput.focus();
+        if (refocusInput) {
+          createSubInput.value = '';
+          createSubInput.focus();
+        }
+        refreshCreateSuggestions();
       };
-      createSubBtn.addEventListener('click', addDraftStep);
+
+      createSubBtn.addEventListener('click', () => appendDraftStep(createSubInput.value, true));
       createSubInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          addDraftStep();
+          appendDraftStep(createSubInput.value, true);
         }
       });
+
+      if (createSuggestTags) {
+        createSuggestTags.addEventListener('click', (e) => {
+          const btn = e.target.closest('[data-create-suggest-step]');
+          if (!btn || btn.disabled) return;
+          appendDraftStep(btn.getAttribute('data-create-suggest-step') || '', false);
+        });
+      }
+
+      const vaSelect = createDrawer ? createDrawer.querySelector('select[name="assigned_va_id"]') : null;
+      if (vaSelect) {
+        vaSelect.addEventListener('change', refreshCreateSuggestions);
+      }
+
+      // Auto-flush any unadded draft step when submitting New Deliverable
+      const createForm = createDrawer ? createDrawer.querySelector('form[data-api-form="/api/v1/tasks"]') : null;
+      if (createForm) {
+        createForm.addEventListener('submit', () => {
+          if (createSubInput.value.trim() !== '') {
+            appendDraftStep(createSubInput.value, false);
+            createSubInput.value = '';
+          }
+        }, true);
+      }
+
+      refreshCreateSuggestions();
     }
   }
 

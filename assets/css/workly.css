@@ -2738,7 +2738,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
 
 .sla-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -2785,15 +2785,6 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   font-size: 11px;
 }
 
-.collab-filter-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-bottom: 12px;
-}
-
 .collab-filter-chips {
   display: inline-flex;
   align-items: center;
@@ -2833,22 +2824,6 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
 
 .collab-filter-chip.is-active span {
   color: var(--brand-secondary);
-}
-
-.collab-legend-hint {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  color: var(--muted);
-}
-
-.collab-legend-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  border: 1px solid #F59E0B;
-  background: #FEF3C7;
 }
 
 .collab-timeline {
@@ -4582,6 +4557,201 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   padding-top: 12px;
 }
 
+/* Dedicated Subtasks Modal & Specialty Checklist Suggestion Tags */
+.modal-panel-subtasks {
+  max-width: 560px;
+}
+
+.subtask-suggestions-wrap {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-alt);
+}
+
+.subtask-suggestions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.subtask-suggestions-label {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  letter-spacing: 0.01em;
+}
+
+.subtask-suggestions-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.subtask-suggest-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease, color 0.14s ease, transform 0.12s ease;
+}
+
+.subtask-suggest-tag:hover:not(:disabled) {
+  border-color: var(--brand);
+  background: var(--brand-tint);
+  color: var(--brand-secondary);
+  transform: translateY(-1px);
+}
+
+.subtask-suggest-tag.is-added,
+.subtask-suggest-tag:disabled {
+  background: var(--success-soft);
+  border-color: rgba(5, 150, 105, 0.32);
+  color: var(--success);
+  cursor: default;
+  transform: none;
+}
+
+.subtask-suggest-plus {
+  font-weight: 800;
+  font-size: 12.5px;
+  line-height: 1;
+}
+
+/* Detailed SLA Report Checklist Cell */
+.report-checklist-cell {
+  min-width: 190px;
+  vertical-align: top;
+}
+
+.report-checklist-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+
+.report-checklist-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.report-checklist-items li {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--ink-soft);
+}
+
+.report-checklist-items li.is-done {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.report-check-mark {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--brand);
+}
+
+.report-checklist-items li.is-done .report-check-mark {
+  color: var(--success);
+}
+
+/* Bottom Session Cookie Consent Popup */
+.cookie-banner {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 1200;
+  max-width: 440px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 15px;
+  border-radius: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-3d);
+  color: var(--ink);
+  animation: cookieSlideUp 0.24s var(--ease-snappy) both;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+
+.cookie-banner.is-leaving {
+  opacity: 0;
+  transform: translateY(10px);
+  pointer-events: none;
+}
+
+.cookie-banner-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.cookie-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.cookie-banner-body strong {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink);
+  margin-bottom: 2px;
+}
+
+.cookie-banner-body p {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.cookie-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+@keyframes cookieSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* --------------------------------------------------------------------------
    Responsive Breakpoints & Motion Accessibility
    -------------------------------------------------------------------------- */
@@ -4682,6 +4852,17 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   .va-inspect-select { min-width: 0; width: 100%; }
   .subtask-add-row .btn, .subtask-draft-row .btn { width: 100%; }
   .toast { left: 14px; right: 14px; bottom: 14px; max-width: calc(100vw - 28px); }
+  .cookie-banner {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    max-width: none;
+    flex-wrap: wrap;
+  }
+  .cookie-banner-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
 }
 
 @media (max-width: 520px) {
@@ -4718,7 +4899,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
    -------------------------------------------------------------------------- */
 
 @media print {
-  .sidebar, .topbar, .no-print, .drawer-backdrop, .modal-backdrop, .context-menu, .toast, .tour-overlay, .tour-tooltip, .cmdk-backdrop, .skeleton-screen, .tab-strip, .workly-global-progress {
+  .sidebar, .topbar, .no-print, .drawer-backdrop, .modal-backdrop, .context-menu, .toast, .tour-overlay, .tour-tooltip, .cmdk-backdrop, .skeleton-screen, .tab-strip, .workly-global-progress, .cookie-banner {
     display: none !important;
   }
   .workspace-frame { display: block !important; max-width: none !important; padding: 0 !important; }

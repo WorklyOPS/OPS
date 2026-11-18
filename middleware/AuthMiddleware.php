@@ -27,9 +27,11 @@ final class AuthMiddleware
         SecurityHelper::configureSecureSession();
 
         if (!SecurityHelper::verifySessionIntegrity()) {
-            session_unset();
-            session_destroy();
-            return null;
+            $_SESSION = [];
+            if (session_status() === PHP_SESSION_ACTIVE) {
+                @session_regenerate_id(true);
+            }
+            $_SESSION['workly_fp'] = SecurityHelper::getClientFingerprint();
         }
 
         $userId = null;
@@ -43,6 +45,19 @@ final class AuthMiddleware
                 $payload = self::verifyJwt($matches[1]);
                 if ($payload && !empty($payload['id'])) {
                     $userId = (string) $payload['id'];
+                }
+            }
+
+            if ($userId === null && !SecurityHelper::hasDeclinedPersistentCookies()) {
+                $restoredId = SecurityHelper::consumePersistentSession($db);
+                if ($restoredId !== null && $restoredId !== '') {
+                    if (session_status() === PHP_SESSION_ACTIVE) {
+                        @session_regenerate_id(true);
+                    }
+                    $_SESSION['workly_user_id'] = $restoredId;
+                    $_SESSION['workly_fp'] = SecurityHelper::getClientFingerprint();
+                    SecurityHelper::refreshSessionCookieLifetime(true);
+                    $userId = $restoredId;
                 }
             }
         }
@@ -80,8 +95,15 @@ final class AuthMiddleware
         }
 
         if (!$user || !$user['is_active'] || $user['is_suspended']) {
-            session_unset();
+            $_SESSION = [];
+            SecurityHelper::revokeCurrentPersistentSession($db);
             return null;
+        }
+
+        // Slide active session cookie if persistent cookies are allowed and user has not yet received a rotating keep cookie
+        if (!empty($_SESSION['workly_user_id']) && !SecurityHelper::hasDeclinedPersistentCookies() && empty($_COOKIE['workly_keep_session'])) {
+            SecurityHelper::issuePersistentSession($db, (string) $user['id']);
+            SecurityHelper::refreshSessionCookieLifetime(true);
         }
 
         return $user;

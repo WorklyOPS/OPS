@@ -57,18 +57,22 @@ foreach (($data['calendar_pto'] ?? []) as $pto) {
 
 $repTasks = $data['report_tasks'] ?? [];
 $analytics = $data['report_analytics'] ?? [
-    'total'           => 0,
-    'completed'       => 0,
-    'on_time'         => 0,
-    'late'            => 0,
-    'overdue'         => 0,
-    'est_hours'       => 0.0,
-    'extra_hours'     => 0.0,
-    'total_hours'     => 0.0,
-    'status_counts'   => ['backlog' => 0, 'todo' => 0, 'in_progress' => 0, 'completed' => 0],
-    'priority_counts' => ['urgent' => 0, 'high' => 0, 'medium' => 0, 'low' => 0],
-    'by_client'       => [],
-    'by_va'           => [],
+    'total'               => 0,
+    'completed'           => 0,
+    'on_time'             => 0,
+    'late'                => 0,
+    'overdue'             => 0,
+    'est_hours'           => 0.0,
+    'extra_hours'         => 0.0,
+    'total_hours'         => 0.0,
+    'subtask_total'       => 0,
+    'subtask_done'        => 0,
+    'subtask_rate'        => 0.0,
+    'tasks_with_subtasks' => 0,
+    'status_counts'       => ['backlog' => 0, 'todo' => 0, 'in_progress' => 0, 'completed' => 0],
+    'priority_counts'     => ['urgent' => 0, 'high' => 0, 'medium' => 0, 'low' => 0],
+    'by_client'           => [],
+    'by_va'               => [],
 ];
 
 $repTotal = (int) ($analytics['total'] ?? 0);
@@ -79,6 +83,10 @@ $repOverdue = (int) ($analytics['overdue'] ?? 0);
 $repEstHours = (float) ($analytics['est_hours'] ?? 0.0);
 $repExtraHours = (float) ($analytics['extra_hours'] ?? 0.0);
 $repHours = (float) ($analytics['total_hours'] ?? 0.0);
+$repSubTotal = (int) ($analytics['subtask_total'] ?? 0);
+$repSubDone = (int) ($analytics['subtask_done'] ?? 0);
+$repSubRate = (float) ($analytics['subtask_rate'] ?? 0.0);
+$repTasksWithSub = (int) ($analytics['tasks_with_subtasks'] ?? 0);
 $repCompletionRate = $repTotal > 0 ? round(($repDone / $repTotal) * 100, 1) : 0.0;
 $repSla = $repDone > 0 ? round(($repOnTime / $repDone) * 100, 1) : ($repTotal === 0 ? 100.0 : 0.0);
 $selectedRepVa = $data['report_va'] ?? 'all';
@@ -99,10 +107,14 @@ $summaryPlainText = "Workly Executive SLA Performance Report\n"
     . "Period: {$data['start_date']} to {$data['end_date']} | Scope: {$scopeName}\n"
     . "Prepared By: {$user['name']} ({$user['email']})\n"
     . "Total Tasks: {$repTotal} | Completed: {$repDone} ({$repCompletionRate}%) | SLA On-Time: {$repSla}% | Late: {$repLate} | Overdue: {$repOverdue}\n"
+    . "Checklist Steps: {$repSubDone}/{$repSubTotal} ({$repSubRate}%) across {$repTasksWithSub} deliverable(s)\n"
     . "Hours: " . number_format($repHours, 1) . "h (Est " . number_format($repEstHours, 1) . "h + Extra " . number_format($repExtraHours, 1) . "h)\n\n";
 foreach ($repTasks as $rt) {
     $noteStr = !empty($rt['latest_note']) ? ' | Note: ' . $rt['latest_note'] : '';
-    $summaryPlainText .= "- [{$rt['status']} | {$rt['sla_state']}] {$rt['title']} ({$rt['client_name']} / {$rt['va_name']}) | Due {$rt['deadline']}{$noteStr}\n";
+    $subStr = ((int) ($rt['subtask_total'] ?? 0) > 0)
+        ? " | Checklist: {$rt['subtask_done']}/{$rt['subtask_total']} ({$rt['subtask_status']})"
+        : ' | Checklist: None';
+    $summaryPlainText .= "- [{$rt['status']} | {$rt['sla_state']}] {$rt['title']} ({$rt['client_name']} / {$rt['va_name']}) | Due {$rt['deadline']}{$subStr}{$noteStr}\n";
 }
 
 $defaultTab = (isset($_GET['start_date']) || isset($_GET['end_date']) || isset($_GET['rep_va'])) && !isset($_GET['month']) ? 'reports' : 'calendar';
@@ -290,6 +302,11 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
       <div class="kpi-value" style="font-size:22px;color:<?= $repOverdue > 0 ? 'var(--danger)' : 'var(--ink)' ?>;"><?= $repOverdue ?></div>
       <div class="kpi-sub">Past deadline &amp; open</div>
     </div>
+    <div class="card" style="background:var(--bg);padding:14px;">
+      <div class="kpi-label">Checklist Completion</div>
+      <div class="kpi-value tabular-nums" style="font-size:22px;color:var(--brand);"><?= $repSubRate ?>%</div>
+      <div class="kpi-sub tabular-nums"><?= $repSubDone ?> / <?= $repSubTotal ?> steps across <?= $repTasksWithSub ?> task(s)</div>
+    </div>
   </div>
 
   <!-- Stage & Priority Analytics Row -->
@@ -424,12 +441,13 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
   </div>
 
   <!-- Granular Deliverables Ledger -->
-  <h4 style="margin-bottom:10px;">Detailed Deliverables &amp; Execution Notes Ledger</h4>
+  <h4 style="margin-bottom:10px;">Detailed Deliverables, Checklist &amp; Execution Notes Ledger</h4>
   <div class="table-wrap" style="margin-bottom:20px;">
     <table id="sla-tasks-table" class="table">
       <thead>
         <tr>
           <th>Deliverable &amp; Latest VA Note</th>
+          <th>Checklist &amp; Status</th>
           <th>Priority</th>
           <th>Client</th>
           <th>Assigned VA</th>
@@ -441,7 +459,7 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
       </thead>
       <tbody>
         <?php if (empty($repTasks)): ?>
-          <tr><td colspan="8" class="muted">No deliverables fall inside this custom date range.</td></tr>
+          <tr><td colspan="9" class="muted">No deliverables fall inside this custom date range.</td></tr>
         <?php else: ?>
           <?php foreach ($repTasks as $rt): ?>
             <?php
@@ -451,12 +469,42 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
                   'Overdue' => 'badge-danger',
                   default   => 'badge-info',
               };
+              $subTotal = (int) ($rt['subtask_total'] ?? 0);
+              $subDone = (int) ($rt['subtask_done'] ?? 0);
+              $subPct = (int) ($rt['subtask_pct'] ?? 0);
+              $subStatus = (string) ($rt['subtask_status'] ?? 'No Checklist');
+              $subBadgeClass = match ($subStatus) {
+                  'Complete'    => 'badge-success',
+                  'In Progress' => 'badge-info',
+                  'Not Started' => 'badge-warn',
+                  default       => 'badge-neutral',
+              };
+              $subItems = $rt['subtasks'] ?? [];
             ?>
             <tr>
               <td>
                 <strong><?= SecurityHelper::e($rt['title']) ?></strong>
                 <?php if (!empty($rt['latest_note'])): ?>
                   <div class="muted" style="font-size:11.5px;margin-top:2px;">Note: <?= SecurityHelper::e($rt['latest_note']) ?></div>
+                <?php endif; ?>
+              </td>
+              <td class="report-checklist-cell">
+                <?php if ($subTotal === 0): ?>
+                  <span class="badge badge-neutral">No Checklist</span>
+                <?php else: ?>
+                  <div class="report-checklist-head">
+                    <span class="badge <?= $subBadgeClass ?>"><?= SecurityHelper::e($subStatus) ?></span>
+                    <span class="mono tabular-nums" style="font-size:11.5px;font-weight:700;"><?= $subDone ?>/<?= $subTotal ?> (<?= $subPct ?>%)</span>
+                  </div>
+                  <ul class="report-checklist-items">
+                    <?php foreach ($subItems as $sItem): ?>
+                      <?php $isSubDone = !empty($sItem['is_completed']); ?>
+                      <li class="<?= $isSubDone ? 'is-done' : '' ?>">
+                        <span class="report-check-mark" aria-hidden="true"><?= $isSubDone ? '✓' : '○' ?></span>
+                        <span><?= SecurityHelper::e((string) $sItem['title']) ?></span>
+                      </li>
+                    <?php endforeach; ?>
+                  </ul>
                 <?php endif; ?>
               </td>
               <?php

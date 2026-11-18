@@ -339,6 +339,35 @@ final class PageController
             }
         }
 
+        $vaIdsForSpec = [];
+        foreach ($tasks as $t) {
+            if (!empty($t['assigned_va_id'])) {
+                $vaIdsForSpec[(string) $t['assigned_va_id']] = true;
+            }
+        }
+        foreach ($vas as $v) {
+            if (!empty($v['id'])) {
+                $vaIdsForSpec[(string) $v['id']] = true;
+            }
+        }
+        if ($role === 'va' && !empty($uid)) {
+            $vaIdsForSpec[(string) $uid] = true;
+        }
+        $vaSpecialtiesByVa = [];
+        if (!empty($vaIdsForSpec)) {
+            try {
+                $idList = array_keys($vaIdsForSpec);
+                $spPh = implode(',', array_fill(0, count($idList), '?'));
+                $spStmt = $this->db->prepare("SELECT va_id, specialty FROM va_specialties WHERE va_id IN ({$spPh}) ORDER BY specialty ASC");
+                $spStmt->execute($idList);
+                foreach ($spStmt->fetchAll(PDO::FETCH_ASSOC) as $spRow) {
+                    $vaSpecialtiesByVa[(string) $spRow['va_id']][] = (string) $spRow['specialty'];
+                }
+            } catch (Throwable) {
+                $vaSpecialtiesByVa = [];
+            }
+        }
+
         return [
             'tasks'                      => $tasks,
             'notes_by_task'              => $notesByTask,
@@ -346,6 +375,7 @@ final class PageController
             'comment_authors_by_task'    => $commentAuthorsByTask,
             'extra_hours_by_task'        => $extraHoursByTask,
             'subtasks_by_task'           => $subtasksByTask,
+            'va_specialties_by_va'       => $vaSpecialtiesByVa,
             'mention_candidates_by_task' => $mentionCandidatesByTask,
             'status_counts'              => $statusCounts,
             'due_today_count'            => $dueTodayCount,
@@ -1125,6 +1155,29 @@ final class PageController
         $rStmt->execute($repParams);
         $reportTasks = $rStmt->fetchAll(PDO::FETCH_ASSOC);
 
+        // Fetch checklist / sub-tasks breakdown for every task in the SLA report
+        TaskApiController::ensureTaskSchemaConstraints($this->db);
+        $repSubtasksByTask = [];
+        $repTaskIds = array_values(array_filter(array_column($reportTasks, 'id')));
+        if (!empty($repTaskIds)) {
+            try {
+                $stPh = implode(',', array_fill(0, count($repTaskIds), '?'));
+                $stStmt = $this->db->prepare("
+                    SELECT id, task_id, title, is_completed, position
+                    FROM task_subtasks
+                    WHERE task_id IN ({$stPh})
+                    ORDER BY position ASC, created_at ASC
+                ");
+                $stStmt->execute($repTaskIds);
+                foreach ($stStmt->fetchAll(PDO::FETCH_ASSOC) as $stRow) {
+                    $stRow['is_completed'] = filter_var($stRow['is_completed'], FILTER_VALIDATE_BOOLEAN);
+                    $repSubtasksByTask[(string) $stRow['task_id']][] = $stRow;
+                }
+            } catch (Throwable) {
+                $repSubtasksByTask = [];
+            }
+        }
+
         // Compute granular executive SLA analytics
         $todayStr = date('Y-m-d');
         $repStatusCounts = ['backlog' => 0, 'todo' => 0, 'in_progress' => 0, 'completed' => 0];
@@ -1137,6 +1190,9 @@ final class PageController
         $repOverdue = 0;
         $repEstHours = 0.0;
         $repExtraHours = 0.0;
+        $repSubTotal = 0;
+        $repSubDone = 0;
+        $repTasksWithSubtasks = 0;
 
         foreach ($reportTasks as &$rt) {
             $st = isset($repStatusCounts[$rt['status']]) ? $rt['status'] : 'todo';
@@ -1149,6 +1205,31 @@ final class PageController
             $totH = $est + $ext;
             $repEstHours += $est;
             $repExtraHours += $ext;
+
+            $subs = $repSubtasksByTask[(string) $rt['id']] ?? [];
+            $sTotal = count($subs);
+            $sDone = 0;
+            foreach ($subs as $sItem) {
+                if (!empty($sItem['is_completed'])) {
+                    $sDone++;
+                }
+            }
+            $sPct = $sTotal > 0 ? (int) round(($sDone / $sTotal) * 100) : 0;
+            $sStatus = $sTotal === 0
+                ? 'No Checklist'
+                : ($sDone === $sTotal ? 'Complete' : ($sDone > 0 ? 'In Progress' : 'Not Started'));
+
+            $rt['subtasks'] = $subs;
+            $rt['subtask_total'] = $sTotal;
+            $rt['subtask_done'] = $sDone;
+            $rt['subtask_pct'] = $sPct;
+            $rt['subtask_status'] = $sStatus;
+
+            $repSubTotal += $sTotal;
+            $repSubDone += $sDone;
+            if ($sTotal > 0) {
+                $repTasksWithSubtasks++;
+            }
 
             $cname = (string) $rt['client_name'];
             if (!isset($repByClient[$cname])) {
@@ -1229,18 +1310,22 @@ final class PageController
             'calendar_pto'     => $calendarPto,
             'report_tasks'     => $reportTasks,
             'report_analytics' => [
-                'total'           => count($reportTasks),
-                'completed'       => $repDone,
-                'on_time'         => $repOnTime,
-                'late'            => $repLate,
-                'overdue'         => $repOverdue,
-                'est_hours'       => round($repEstHours, 2),
-                'extra_hours'     => round($repExtraHours, 2),
-                'total_hours'     => round($repEstHours + $repExtraHours, 2),
-                'status_counts'   => $repStatusCounts,
-                'priority_counts' => $repPriorityCounts,
-                'by_client'       => array_values($repByClient),
-                'by_va'           => array_values($repByVa),
+                'total'               => count($reportTasks),
+                'completed'           => $repDone,
+                'on_time'             => $repOnTime,
+                'late'                => $repLate,
+                'overdue'             => $repOverdue,
+                'est_hours'           => round($repEstHours, 2),
+                'extra_hours'         => round($repExtraHours, 2),
+                'total_hours'         => round($repEstHours + $repExtraHours, 2),
+                'subtask_total'       => $repSubTotal,
+                'subtask_done'        => $repSubDone,
+                'subtask_rate'        => $repSubTotal > 0 ? round(($repSubDone / $repSubTotal) * 100, 1) : 0.0,
+                'tasks_with_subtasks' => $repTasksWithSubtasks,
+                'status_counts'       => $repStatusCounts,
+                'priority_counts'     => $repPriorityCounts,
+                'by_client'           => array_values($repByClient),
+                'by_va'               => array_values($repByVa),
             ],
             'vas'              => $vas,
             'clients'          => $clients,

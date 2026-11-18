@@ -32,22 +32,56 @@ final class SecurityHelper
         header("Content-Security-Policy: default-src 'self'; script-src 'self' https://challenges.cloudflare.com https://www.gstatic.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data:; frame-src https://challenges.cloudflare.com https://*.firebaseapp.com https://accounts.google.com; connect-src 'self' https://*.googleapis.com https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; frame-ancestors 'self'; base-uri 'self'; form-action 'self';");
     }
 
+    public static function getCookieConsent(): string
+    {
+        $val = strtolower(trim((string) ($_COOKIE['workly_cookie_consent'] ?? '')));
+        if ($val === 'accepted' || $val === 'declined') {
+            return $val;
+        }
+        return 'unset';
+    }
+
+    public static function hasDeclinedPersistentCookies(): bool
+    {
+        return self::getCookieConsent() === 'declined';
+    }
+
+    public static function isHttpsRequest(): bool
+    {
+        return (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || (($_SERVER['SERVER_PORT'] ?? 80) == 443)
+            || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    }
+
+    public static function setCookieConsentCookie(string $consent): void
+    {
+        $val = $consent === 'declined' ? 'declined' : 'accepted';
+        setcookie('workly_cookie_consent', $val, [
+            'expires'  => time() + (180 * 86400),
+            'path'     => '/',
+            'domain'   => '',
+            'secure'   => self::isHttpsRequest(),
+            'httponly' => false,
+            'samesite' => 'Lax',
+        ]);
+        $_COOKIE['workly_cookie_consent'] = $val;
+    }
+
     public static function configureSecureSession(): void
     {
         if (session_status() === PHP_SESSION_NONE) {
-            $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-                || (($_SERVER['SERVER_PORT'] ?? 80) == 443)
-                || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+            $isHttps = self::isHttpsRequest();
+            $lifetime = self::hasDeclinedPersistentCookies() ? 0 : 2592000;
 
             ini_set('session.use_strict_mode', '1');
             ini_set('session.use_only_cookies', '1');
             ini_set('session.cookie_httponly', '1');
             ini_set('session.cookie_samesite', 'Lax');
-            ini_set('session.cookie_lifetime', '0');
+            ini_set('session.cookie_lifetime', (string) $lifetime);
             ini_set('session.gc_maxlifetime', '2592000');
 
             session_set_cookie_params([
-                'lifetime' => 0,
+                'lifetime' => $lifetime,
                 'path'     => '/',
                 'domain'   => '',
                 'secure'   => $isHttps,
@@ -58,10 +92,36 @@ final class SecurityHelper
         }
     }
 
+    public static function refreshSessionCookieLifetime(bool $persistent): void
+    {
+        if (session_status() !== PHP_SESSION_ACTIVE || headers_sent()) {
+            return;
+        }
+        $expires = $persistent ? (time() + 2592000) : 0;
+        setcookie(session_name(), session_id(), [
+            'expires'  => $expires,
+            'path'     => '/',
+            'domain'   => '',
+            'secure'   => self::isHttpsRequest(),
+            'httponly' => true,
+            'samesite' => 'Lax',
+        ]);
+    }
+
+    public static function getNormalizedUserAgent(): string
+    {
+        $ua = trim((string) ($_SERVER['HTTP_USER_AGENT'] ?? 'unknown'));
+        if ($ua === '') {
+            return 'unknown';
+        }
+        // Keep browser/OS family intact while ignoring minor build patch numbers so auto-updates do not log users out
+        $normalized = preg_replace('/(\d+)\.\d+\.\d+(?:\.\d+)?/', '$1', $ua) ?? $ua;
+        return mb_strtolower(mb_substr($normalized, 0, 240, 'UTF-8'), 'UTF-8');
+    }
+
     public static function getClientFingerprint(): string
     {
-        $ua = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
-        return hash('sha256', 'workly-ua|' . $ua);
+        return hash('sha256', 'workly-ua-v2|' . self::getNormalizedUserAgent());
     }
 
     public static function verifySessionIntegrity(): bool
@@ -71,6 +131,217 @@ final class SecurityHelper
             return true;
         }
         return hash_equals((string) $_SESSION['workly_fp'], self::getClientFingerprint());
+    }
+
+    public static function ensurePersistentSessionSchema(PDO $db): void
+    {
+        static $done = false;
+        if ($done) {
+            return;
+        }
+        $done = true;
+        try {
+            $db->exec("
+                CREATE TABLE IF NOT EXISTS user_persistent_sessions (
+                    selector VARCHAR(32) PRIMARY KEY,
+                    family_id VARCHAR(32) NOT NULL,
+                    user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    validator_hash VARCHAR(64) NOT NULL,
+                    ua_hash VARCHAR(64) NOT NULL,
+                    is_revoked BOOLEAN NOT NULL DEFAULT FALSE,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            ");
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_ups_user ON user_persistent_sessions (user_id)");
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_ups_family ON user_persistent_sessions (family_id)");
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_ups_expires ON user_persistent_sessions (expires_at)");
+        } catch (Throwable) {
+            // Schema already exists or restricted
+        }
+    }
+
+    private static function setPersistentAuthCookie(string $value, int $expires): void
+    {
+        if (!headers_sent()) {
+            setcookie('workly_keep_session', $value, [
+                'expires'  => $expires,
+                'path'     => '/',
+                'domain'   => '',
+                'secure'   => self::isHttpsRequest(),
+                'httponly' => true,
+                'samesite' => 'Lax',
+            ]);
+        }
+        if ($expires < time()) {
+            unset($_COOKIE['workly_keep_session']);
+        } else {
+            $_COOKIE['workly_keep_session'] = $value;
+        }
+    }
+
+    public static function issuePersistentSession(PDO $db, string $userId, ?string $familyId = null): void
+    {
+        if (self::hasDeclinedPersistentCookies() || $userId === '') {
+            self::setPersistentAuthCookie('', time() - 42000);
+            return;
+        }
+
+        self::ensurePersistentSessionSchema($db);
+        $selector = bin2hex(random_bytes(12));
+        $validator = bin2hex(random_bytes(24));
+        $validatorHash = hash_hmac('sha256', $validator, Secrets::get('CSRF_SALT'));
+        $uaHash = self::getClientFingerprint();
+        $fam = ($familyId !== null && $familyId !== '') ? $familyId : bin2hex(random_bytes(12));
+        $ttlDays = 30;
+
+        try {
+            // Opportunistically prune expired tokens
+            $db->exec("DELETE FROM user_persistent_sessions WHERE expires_at < NOW() - INTERVAL '7 days'");
+
+            $stmt = $db->prepare("
+                INSERT INTO user_persistent_sessions (selector, family_id, user_id, validator_hash, ua_hash, is_revoked, expires_at, last_used_at)
+                VALUES (:sel, :fam, :uid, :vhash, :uahash, FALSE, NOW() + (:days || ' days')::INTERVAL, NOW())
+            ");
+            $stmt->execute([
+                ':sel'    => $selector,
+                ':fam'    => $fam,
+                ':uid'    => $userId,
+                ':vhash'  => $validatorHash,
+                ':uahash' => $uaHash,
+                ':days'   => (string) $ttlDays,
+            ]);
+
+            self::setPersistentAuthCookie("{$selector}.{$validator}", time() + ($ttlDays * 86400));
+            $_SESSION['workly_session_family'] = $fam;
+        } catch (Throwable) {
+            // Keep login resilient even if persistent table fails
+        }
+    }
+
+    public static function consumePersistentSession(PDO $db): ?string
+    {
+        $rawCookie = trim((string) ($_COOKIE['workly_keep_session'] ?? ''));
+        if ($rawCookie === '') {
+            return null;
+        }
+
+        if (self::hasDeclinedPersistentCookies()) {
+            self::revokeCurrentPersistentSession($db);
+            return null;
+        }
+
+        $parts = explode('.', $rawCookie, 2);
+        if (count($parts) !== 2 || !preg_match('/^[a-f0-9]{16,32}$/', $parts[0]) || !preg_match('/^[a-f0-9]{32,64}$/', $parts[1])) {
+            self::setPersistentAuthCookie('', time() - 42000);
+            return null;
+        }
+
+        [$selector, $validator] = $parts;
+        self::ensurePersistentSessionSchema($db);
+
+        try {
+            $stmt = $db->prepare("
+                SELECT selector, family_id, user_id, validator_hash, ua_hash, is_revoked,
+                       (expires_at <= NOW()) AS is_expired,
+                       EXTRACT(EPOCH FROM (NOW() - last_used_at)) AS seconds_since_used
+                FROM user_persistent_sessions
+                WHERE selector = :sel
+                LIMIT 1
+            ");
+            $stmt->execute([':sel' => $selector]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+            if (!$row) {
+                self::setPersistentAuthCookie('', time() - 42000);
+                return null;
+            }
+
+            if (filter_var($row['is_expired'], FILTER_VALIDATE_BOOLEAN)) {
+                $del = $db->prepare('DELETE FROM user_persistent_sessions WHERE selector = :sel');
+                $del->execute([':sel' => $selector]);
+                self::setPersistentAuthCookie('', time() - 42000);
+                return null;
+            }
+
+            $givenHash = hash_hmac('sha256', $validator, Secrets::get('CSRF_SALT'));
+            $validatorMatches = hash_equals((string) $row['validator_hash'], $givenHash);
+            $uaMatches = hash_equals((string) $row['ua_hash'], self::getClientFingerprint());
+            $isRevoked = filter_var($row['is_revoked'], FILTER_VALIDATE_BOOLEAN);
+            $secondsSinceUsed = (float) ($row['seconds_since_used'] ?? 999);
+
+            // Detect token theft / replay or UA hijack
+            if (!$validatorMatches || !$uaMatches) {
+                $revFam = $db->prepare('UPDATE user_persistent_sessions SET is_revoked = TRUE WHERE family_id = :fam');
+                $revFam->execute([':fam' => $row['family_id']]);
+                self::setPersistentAuthCookie('', time() - 42000);
+                if (class_exists('AuditLogger')) {
+                    AuditLogger::log(
+                        'SESSION_HIJACK_BLOCKED',
+                        'blocked',
+                        'Blocked persistent cookie validation mismatch or client mismatch',
+                        (string) $row['user_id'],
+                        'security',
+                        $db
+                    );
+                }
+                return null;
+            }
+
+            if ($isRevoked) {
+                // Allow a 15-second grace window for concurrent parallel browser fetches during rotation
+                if ($secondsSinceUsed <= 15.0) {
+                    $chkActive = $db->prepare('SELECT 1 FROM user_persistent_sessions WHERE family_id = :fam AND is_revoked = FALSE AND expires_at > NOW() LIMIT 1');
+                    $chkActive->execute([':fam' => $row['family_id']]);
+                    if ($chkActive->fetchColumn()) {
+                        return (string) $row['user_id'];
+                    }
+                }
+                // Replay of rotated token >15s later indicates theft: revoke entire family
+                $revFam = $db->prepare('UPDATE user_persistent_sessions SET is_revoked = TRUE WHERE family_id = :fam');
+                $revFam->execute([':fam' => $row['family_id']]);
+                self::setPersistentAuthCookie('', time() - 42000);
+                if (class_exists('AuditLogger')) {
+                    AuditLogger::log(
+                        'SESSION_THEFT_DETECTED',
+                        'blocked',
+                        'Detected replayed persistent session token; revoked token family',
+                        (string) $row['user_id'],
+                        'security',
+                        $db
+                    );
+                }
+                return null;
+            }
+
+            // Valid token: revoke current selector and rotate to a fresh selector + validator in same family
+            $revCur = $db->prepare('UPDATE user_persistent_sessions SET is_revoked = TRUE, last_used_at = NOW() WHERE selector = :sel');
+            $revCur->execute([':sel' => $selector]);
+
+            self::issuePersistentSession($db, (string) $row['user_id'], (string) $row['family_id']);
+            return (string) $row['user_id'];
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    public static function revokeCurrentPersistentSession(PDO $db): void
+    {
+        $rawCookie = trim((string) ($_COOKIE['workly_keep_session'] ?? ''));
+        if ($rawCookie !== '' && str_contains($rawCookie, '.')) {
+            [$selector] = explode('.', $rawCookie, 2);
+            if (preg_match('/^[a-f0-9]{16,32}$/', $selector)) {
+                try {
+                    self::ensurePersistentSessionSchema($db);
+                    $stmt = $db->prepare('UPDATE user_persistent_sessions SET is_revoked = TRUE WHERE selector = :sel');
+                    $stmt->execute([':sel' => $selector]);
+                } catch (Throwable) {
+                }
+            }
+        }
+        unset($_SESSION['workly_session_family']);
+        self::setPersistentAuthCookie('', time() - 42000);
     }
 
     public static function csrfToken(): string

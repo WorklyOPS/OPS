@@ -103,6 +103,10 @@ final class AuthController
         $_SESSION['workly_user_id'] = $user['id'];
         $_SESSION['workly_fp'] = SecurityHelper::getClientFingerprint();
         SecurityHelper::rotateCsrfToken();
+        if (!SecurityHelper::hasDeclinedPersistentCookies()) {
+            SecurityHelper::issuePersistentSession($this->db, (string) $user['id']);
+            SecurityHelper::refreshSessionCookieLifetime(true);
+        }
 
         AuditLogger::log('LOGIN_SUCCESS', 'success', "Signed in {$email} ({$user['role']})", (string) $user['id'], (string) $user['role'], $this->db);
         $this->redirectForRole((string) $user['role']);
@@ -160,6 +164,10 @@ final class AuthController
         $_SESSION['workly_fp'] = SecurityHelper::getClientFingerprint();
         $csrf = SecurityHelper::rotateCsrfToken();
         $jwt = AuthMiddleware::issueJwt($user);
+        if (!SecurityHelper::hasDeclinedPersistentCookies()) {
+            SecurityHelper::issuePersistentSession($this->db, (string) $user['id']);
+            SecurityHelper::refreshSessionCookieLifetime(true);
+        }
 
         AuditLogger::log('API_LOGIN_SUCCESS', 'success', "API login for {$email}", (string) $user['id'], (string) $user['role'], $this->db);
         echo json_encode([
@@ -243,10 +251,46 @@ final class AuthController
         $_SESSION['workly_user_id'] = $id;
         $_SESSION['workly_fp'] = SecurityHelper::getClientFingerprint();
         SecurityHelper::rotateCsrfToken();
+        if (!SecurityHelper::hasDeclinedPersistentCookies()) {
+            SecurityHelper::issuePersistentSession($this->db, (string) $id);
+            SecurityHelper::refreshSessionCookieLifetime(true);
+        }
 
         AuditLogger::log('INITIAL_ADMIN_CREATED', 'success', "Initial production administrator {$email} bootstrapped via /setup", $id, 'admin', $this->db);
         header('Location: /dashboard');
         exit;
+    }
+
+    public function handleCookieConsent(): void
+    {
+        SecurityHelper::configureSecureSession();
+        CsrfMiddleware::validateApi('POST');
+
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $consent = strtolower(trim((string) ($input['consent'] ?? '')));
+        if (!in_array($consent, ['accepted', 'declined'], true)) {
+            http_response_code(422);
+            echo json_encode(['error' => 'Invalid consent preference']);
+            return;
+        }
+
+        SecurityHelper::setCookieConsentCookie($consent);
+
+        $uid = (string) ($_SESSION['workly_user_id'] ?? '');
+        if ($consent === 'accepted') {
+            if ($uid !== '') {
+                SecurityHelper::issuePersistentSession($this->db, $uid);
+                SecurityHelper::refreshSessionCookieLifetime(true);
+            }
+        } else {
+            SecurityHelper::revokeCurrentPersistentSession($this->db);
+            SecurityHelper::refreshSessionCookieLifetime(false);
+        }
+
+        echo json_encode([
+            'success' => true,
+            'consent' => $consent,
+        ]);
     }
 
     public function handleLogout(): void
@@ -257,6 +301,7 @@ final class AuthController
             AuditLogger::log('LOGOUT', 'success', "User {$uid} signed out", $uid, 'user', $this->db);
         }
 
+        SecurityHelper::revokeCurrentPersistentSession($this->db);
         $_SESSION = [];
         if (ini_get('session.use_cookies')) {
             $params = session_get_cookie_params();

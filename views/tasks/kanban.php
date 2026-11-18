@@ -54,6 +54,7 @@ $commentsMap = $data['comments_by_task'] ?? [];
 $commentAuthorsMap = $data['comment_authors_by_task'] ?? [];
 $extraHoursMap = $data['extra_hours_by_task'] ?? [];
 $subtasksMap = $data['subtasks_by_task'] ?? [];
+$vaSpecialtiesMap = $data['va_specialties_by_va'] ?? [];
 $mentionCandidatesMap = $data['mention_candidates_by_task'] ?? [];
 $dueToday = (int) ($data['due_today_count'] ?? 0);
 $overdue = (int) ($data['overdue_count'] ?? 0);
@@ -128,7 +129,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
 
       <div class="task-card-actions">
         <div style="display:flex;align-items:center;gap:4px;">
-          <button type="button" class="icon-chip-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="subtasks" title="Sub-Tasks Checklist">
+          <button type="button" class="icon-chip-btn" data-open-task-subtasks="<?= SecurityHelper::e($task['id']) ?>" title="Sub-Tasks Checklist">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="6" height="6" rx="1.5"/><path d="m4.5 8 1.2 1.2 2-2.2"/><path d="M12 8h9"/><rect x="3" y="14" width="6" height="6" rx="1.5"/><path d="M12 17h9"/></svg>
             <span class="tabular-nums" data-task-subtask-count="<?= SecurityHelper::e($task['id']) ?>"><?= $subDone ?>/<?= $subTotal ?></span>
           </button>
@@ -404,7 +405,9 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
     'comment_authors'    => $commentAuthorsMap,
     'extra_hours'        => $extraHoursMap,
     'subtasks'           => $subtasksMap,
+    'va_specialties'     => $vaSpecialtiesMap,
     'mention_candidates' => $mentionCandidatesMap,
+    'current_user_id'    => (string) ($user['id'] ?? ''),
     'current_user_name'  => (string) ($user['name'] ?? ''),
 ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
 
@@ -486,10 +489,17 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
           </div>
 
           <div class="form-group">
-            <label class="form-label">Sub-Tasks Breakdown (optional)</label>
+            <label class="form-label">Sub-Tasks Checklist (optional)</label>
             <div class="subtask-draft-row">
               <input type="text" class="input" id="create-subtask-draft-input" placeholder="Break deliverable into a smaller step...">
               <button type="button" class="btn btn-secondary btn-sm" id="btn-add-create-subtask">+ Add Step</button>
+            </div>
+            <div class="subtask-suggestions-wrap" id="create-subtask-suggestions">
+              <div class="subtask-suggestions-head">
+                <span class="subtask-suggestions-label">Quick Checklist Suggestions</span>
+                <span class="muted" id="create-subtask-spec-label" style="font-size:11px;"></span>
+              </div>
+              <div class="subtask-suggestions-tags" id="create-subtask-suggestions-tags"></div>
             </div>
             <div id="create-subtasks-list" class="subtask-draft-list"></div>
           </div>
@@ -571,31 +581,13 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
           <button type="submit" class="btn btn-primary">Save Task Changes</button>
         </div>
       </form>
-
-      <section class="subtasks-panel" id="modal-subtasks-section" aria-label="Task Sub-Tasks Breakdown">
-        <div class="subtasks-head">
-          <div>
-            <h4>Sub-Tasks Checklist</h4>
-            <span class="muted" style="font-size:12px;">Break complex work into trackable action items.</span>
-          </div>
-          <span id="modal-subtasks-counter" class="muted tabular-nums" style="font-size:12px;font-weight:700;">0 / 0 done</span>
-        </div>
-        <div class="progress-track" style="height:6px;margin-bottom:12px;">
-          <div id="modal-subtasks-progress" class="progress-fill" style="width:0%;"></div>
-        </div>
-        <div id="modal-subtasks-list" class="subtasks-list"></div>
-        <div class="subtask-add-row">
-          <input type="text" class="input" id="modal-subtask-input" placeholder="Add a sub-task step...">
-          <button type="button" class="btn btn-secondary btn-sm" id="modal-subtask-add-btn">+ Add Sub-Task</button>
-        </div>
-      </section>
     </div>
   </div>
 </div>
 
-<!-- Window 2: Right-Side Drawer for Sub-Tasks, Combined Timeline, VA Notes & Comments (Live No-Reload) -->
+<!-- Window 2: Right-Side Drawer for Combined Timeline, VA Notes & Comments (Live No-Reload) -->
 <div id="drawer-task-collab" class="drawer-backdrop is-hidden">
-  <aside class="drawer-panel" role="dialog" aria-label="Task Sub-Tasks, Notes and Comments">
+  <aside class="drawer-panel" role="dialog" aria-label="Task Notes and Comments">
     <div class="drawer-head">
       <div>
         <h3 id="collab-task-title">Deliverable Conversation</h3>
@@ -610,25 +602,12 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
     <div class="drawer-body">
       <div class="tab-strip">
         <button type="button" class="tab-btn active" data-tab-group="task-collab" data-tab-btn="combined">Combined Timeline</button>
-        <button type="button" class="tab-btn" data-tab-group="task-collab" data-tab-btn="subtasks">Sub-Tasks <span class="tabular-nums" data-collab-subtask-tab-count>0/0</span></button>
         <button type="button" class="tab-btn" data-tab-group="task-collab" data-tab-btn="notes">VA Notes</button>
         <button type="button" class="tab-btn" data-tab-group="task-collab" data-tab-btn="comments">Comments</button>
       </div>
 
       <!-- Tab 1: Combined Notes + Comments Timeline -->
       <div data-tab-group="task-collab" data-tab-panel="combined">
-        <div class="collab-filter-bar">
-          <div class="collab-filter-chips" role="group" aria-label="Filter deliverable activity">
-            <button type="button" class="collab-filter-chip is-active" data-collab-filter="all">All Activity <span data-collab-count="all" class="tabular-nums">0</span></button>
-            <button type="button" class="collab-filter-chip" data-collab-filter="note">Notes <span data-collab-count="note" class="tabular-nums">0</span></button>
-            <button type="button" class="collab-filter-chip" data-collab-filter="comment">Comments <span data-collab-count="comment" class="tabular-nums">0</span></button>
-          </div>
-          <div class="collab-legend-hint">
-            <span class="collab-legend-dot is-note" aria-hidden="true"></span>
-            <span>Highlighted cards = Execution Notes</span>
-          </div>
-        </div>
-
         <div id="detail-combined-list" class="collab-timeline" style="margin-bottom:14px;"></div>
 
         <form id="form-task-combined" class="collab-composer" data-no-reload="1" data-task-collab-form data-mode="comment">
@@ -654,25 +633,6 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
             <button type="submit" id="btn-collab-submit" class="btn btn-primary btn-sm">Post Comment</button>
           </div>
         </form>
-      </div>
-
-      <!-- Tab 2: Interactive Sub-Tasks Checklist -->
-      <div class="is-hidden" data-tab-group="task-collab" data-tab-panel="subtasks">
-        <div class="subtasks-head" style="margin-bottom:10px;">
-          <div>
-            <h4>Deliverable Sub-Tasks</h4>
-            <span class="muted" style="font-size:12px;">Check off sub-tasks in real time as work progresses.</span>
-          </div>
-          <span id="collab-subtasks-counter" class="muted tabular-nums" style="font-size:12px;font-weight:700;">0 / 0 done</span>
-        </div>
-        <div class="progress-track" style="height:6px;margin-bottom:14px;">
-          <div id="collab-subtasks-progress" class="progress-fill" style="width:0%;"></div>
-        </div>
-        <div id="collab-subtasks-list" class="subtasks-list" style="margin-bottom:14px;"></div>
-        <div class="subtask-add-row">
-          <input type="text" class="input" id="collab-subtask-input" placeholder="Break into a new sub-task step...">
-          <button type="button" class="btn btn-primary btn-sm" id="collab-subtask-add-btn">+ Add Step</button>
-        </div>
       </div>
 
       <!-- Tab 3: Execution Notes -->
@@ -733,6 +693,43 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
           <button type="submit" class="btn btn-primary">Record Extra Hours</button>
         </div>
       </form>
+    </div>
+  </div>
+</div>
+
+<!-- Window 4: Dedicated Centered Popup Modal for Sub-Tasks Checklist -->
+<div id="modal-task-subtasks" class="modal-backdrop is-hidden">
+  <div class="modal-panel modal-panel-subtasks" role="dialog" aria-modal="true" aria-label="Deliverable Sub-Tasks Checklist">
+    <div class="modal-head">
+      <div>
+        <h3 id="subtasks-modal-task-title">Sub-Tasks Checklist</h3>
+        <div id="subtasks-modal-task-meta" class="muted" style="font-size:12px;margin-top:2px;"></div>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="subtasks-head" style="margin-bottom:8px;">
+        <span class="muted" style="font-size:12.5px;">Track granular steps and add recurring specialty checklist actions in one click.</span>
+        <span id="subtasks-modal-counter" class="badge badge-brand tabular-nums">0 / 0 done</span>
+      </div>
+      <div class="progress-track" style="height:7px;margin-bottom:14px;">
+        <div id="subtasks-modal-progress" class="progress-fill" style="width:0%;"></div>
+      </div>
+
+      <div id="subtasks-modal-list" class="subtasks-list" style="margin-bottom:14px;"></div>
+
+      <div class="subtask-add-row" style="margin-top:0;margin-bottom:14px;">
+        <input type="text" class="input" id="subtasks-modal-input" placeholder="Add a custom checklist step...">
+        <button type="button" class="btn btn-primary btn-sm" id="subtasks-modal-add-btn">+ Add Step</button>
+      </div>
+
+      <div class="subtask-suggestions-wrap" id="modal-subtask-suggestions">
+        <div class="subtask-suggestions-head">
+          <span class="subtask-suggestions-label">One-Click Suggestions by VA Specialty</span>
+          <span class="muted" id="modal-subtask-spec-label" style="font-size:11px;"></span>
+        </div>
+        <div class="subtask-suggestions-tags" id="modal-subtask-suggestions-tags"></div>
+      </div>
     </div>
   </div>
 </div>
