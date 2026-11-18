@@ -18,6 +18,8 @@ $defaultBadgeLabel = $mailbox ? ('Linked: ' . $mailbox['email']) : 'Workspace Ma
 $defaultBadgeClass = $mailbox ? 'badge badge-success' : 'badge badge-neutral';
 ?>
 
+<script type="application/json" id="workly-firebase-config"><?= json_encode($data['firebase_config'] ?? null, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
+
 <div class="page-header">
   <div>
     <h1>Email Communications Hub</h1>
