@@ -1722,20 +1722,6 @@ final class PageController
             $contacts = $this->db->query("SELECT name, email, role FROM users WHERE is_active = TRUE AND role <> 'admin' ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
         }
 
-        $firebaseCfg = null;
-        $cfgPath = __DIR__ . '/../firebase-applet-config.json';
-        if (is_file($cfgPath)) {
-            $decoded = json_decode((string) @file_get_contents($cfgPath), true);
-            if (is_array($decoded)) {
-                $firebaseCfg = [
-                    'apiKey'            => $decoded['apiKey'] ?? '',
-                    'authDomain'        => $decoded['authDomain'] ?? '',
-                    'projectId'         => $decoded['projectId'] ?? '',
-                    'appId'             => $decoded['appId'] ?? '',
-                    'messagingSenderId' => $decoded['messagingSenderId'] ?? '',
-                ];
-            }
-        }
 
         return [
             'threads'          => $threads,
@@ -1745,7 +1731,6 @@ final class PageController
             'attachments'      => $attachmentsByMsg,
             'mailbox'          => $mailbox,
             'contacts'         => $contacts,
-            'firebase_config'  => $firebaseCfg,
         ];
     }
 

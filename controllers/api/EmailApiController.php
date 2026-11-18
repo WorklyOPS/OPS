@@ -11,6 +11,7 @@ require_once __DIR__ . '/../../services/AuditLogger.php';
 require_once __DIR__ . '/../../services/SecurityHelper.php';
 require_once __DIR__ . '/../../middleware/AuthMiddleware.php';
 require_once __DIR__ . '/../../middleware/CsrfMiddleware.php';
+require_once __DIR__ . '/../../services/GmailOAuthService.php';
 
 final class EmailApiController
 {
@@ -22,12 +23,28 @@ final class EmailApiController
     {
         $user = AuthMiddleware::authenticateApi($this->db);
         CsrfMiddleware::validateApi($method);
-        $this->ensureEmailSchema();
-
         $parts = explode('/', trim($uri, '/'));
+        $this->ensureEmailSchema();
         $sub = $parts[3] ?? '';
         $arg = $parts[4] ?? '';
 
+        if ($sub === 'google' && $arg === 'connect' && $method === 'GET') {
+            $this->startGoogleOAuth($user);
+            return;
+        }
+        if ($sub === 'google' && $arg === 'callback' && $method === 'GET') {
+            $this->completeGoogleOAuth($user);
+            return;
+        }
+
+        if ($method === 'GET' && $sub === 'status') {
+            $this->mailboxStatus($user);
+            return;
+        }
+        if ($method === 'POST' && $sub === 'disconnect') {
+            $this->disconnectMailbox($user);
+            return;
+        }
         if ($method === 'POST' && $sub === 'reply') {
             $this->replyInThread($user);
             return;
@@ -59,6 +76,11 @@ final class EmailApiController
         try {
             $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS gmail_message_id VARCHAR(128) DEFAULT NULL');
             $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS snippet TEXT DEFAULT NULL');
+            $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS access_token_encrypted TEXT DEFAULT NULL');
+            $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT DEFAULT NULL');
+            $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ DEFAULT NULL');
+            $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS token_type VARCHAR(32) DEFAULT NULL');
+            $this->db->exec("CREATE TABLE IF NOT EXISTS gmail_oauth_states (state_hash CHAR(64) PRIMARY KEY, user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
             $this->db->exec("
                 CREATE TABLE IF NOT EXISTS email_attachments (
                     id VARCHAR(64) PRIMARY KEY,
@@ -82,19 +104,192 @@ final class EmailApiController
         CacheService::invalidatePrefix($this->db, 'alerts:');
     }
 
-    private function getGoogleAccessToken(): string
+    private function getGoogleAccessToken(array $user): string
     {
-        $headers = function_exists('getallheaders') ? getallheaders() : [];
-        foreach ($headers as $k => $v) {
-            if (strtolower((string) $k) === 'x-gmail-access-token' && trim((string) $v) !== '') {
-                return trim((string) $v);
+        $stmt = $this->db->prepare("
+            SELECT access_token_encrypted, refresh_token_encrypted, token_expires_at
+            FROM staff_connected_mailboxes WHERE user_id = :uid AND oauth_status = 'active' LIMIT 1
+        " );
+        $stmt->execute([':uid' => $user['id']]);
+        $mailbox = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$mailbox) {
+            return '';
+        }
+
+        try {
+            $accessToken = GmailOAuthService::decrypt((string) ($mailbox['access_token_encrypted'] ?? ''));
+            $refreshToken = GmailOAuthService::decrypt((string) ($mailbox['refresh_token_encrypted'] ?? ''));
+        } catch (Throwable $e) {
+            error_log('Workly Gmail token decryption failed: ' . $e->getMessage());
+            $this->markMailboxNeedsAuth((string) $user['id']);
+            return '';
+        }
+        $expiresAt = !empty($mailbox['token_expires_at']) ? strtotime((string) $mailbox['token_expires_at']) : 0;
+
+        if ($accessToken !== '' && $expiresAt > time() + 60) {
+            return $accessToken;
+        }
+        if ($refreshToken === '') {
+            $this->markMailboxNeedsAuth((string) $user['id']);
+            return '';
+        }
+
+        try {
+            $client = GmailOAuthService::client();
+            $client->fetchAccessTokenWithRefreshToken($refreshToken);
+            $token = $client->getAccessToken();
+            $newAccessToken = (string) ($token['access_token'] ?? '');
+            if ($newAccessToken === '') {
+                $this->markMailboxNeedsAuth((string) $user['id']);
+                return '';
             }
+
+            $newRefreshToken = (string) ($token['refresh_token'] ?? $refreshToken);
+            $expiresIn = max(60, (int) ($token['expires_in'] ?? 3600));
+            $update = $this->db->prepare("
+                UPDATE staff_connected_mailboxes
+                SET access_token_encrypted = :access_token, refresh_token_encrypted = :refresh_token,
+                    token_expires_at = NOW() + (CAST(:expires_in AS INTEGER) * INTERVAL '1 second'),
+                    token_type = :token_type, oauth_status = 'active', updated_at = NOW()
+                WHERE user_id = :uid
+            " );
+            $update->execute([
+                ':access_token' => GmailOAuthService::encrypt($newAccessToken),
+                ':refresh_token' => GmailOAuthService::encrypt($newRefreshToken),
+                ':expires_in' => $expiresIn,
+                ':token_type' => (string) ($token['token_type'] ?? 'Bearer'),
+                ':uid' => $user['id'],
+            ]);
+            return $newAccessToken;
+        } catch (Throwable $e) {
+            error_log('Workly Gmail token refresh failed: ' . $e->getMessage());
+            $this->markMailboxNeedsAuth((string) $user['id']);
+            return '';
         }
-        $auth = $headers['Authorization'] ?? $headers['authorization'] ?? '';
-        if (preg_match('/Bearer\s+(\S+)/', (string) $auth, $m)) {
-            return trim($m[1]);
+    }
+
+    private function markMailboxNeedsAuth(string $userId): void
+    {
+        $stmt = $this->db->prepare("UPDATE staff_connected_mailboxes SET oauth_status = 'needs_auth', updated_at = NOW() WHERE user_id = :uid");
+        $stmt->execute([':uid' => $userId]);
+    }
+
+    private function mailboxStatus(array $user): void
+    {
+        $stmt = $this->db->prepare("SELECT email, oauth_status, last_synced_at FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1");
+        $stmt->execute([':uid' => $user['id']]);
+        $mailbox = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        $connected = $mailbox && $mailbox['oauth_status'] === 'active' && !empty($mailbox['refresh_token_encrypted']);
+        echo json_encode([
+            'connected' => (bool) $connected,
+            'email' => $connected ? $mailbox['email'] : null,
+            'status' => $mailbox['oauth_status'] ?? 'disconnected',
+            'last_synced_at' => $mailbox['last_synced_at'] ?? null,
+        ]);
+    }
+
+    private function disconnectMailbox(array $user): void
+    {
+        $stmt = $this->db->prepare("
+            UPDATE staff_connected_mailboxes
+            SET oauth_status = 'needs_auth', access_token_encrypted = NULL, refresh_token_encrypted = NULL,
+                token_expires_at = NULL, token_type = NULL, updated_at = NOW()
+            WHERE user_id = :uid
+        " );
+        $stmt->execute([':uid' => $user['id']]);
+        AuditLogger::log('GMAIL_DISCONNECTED', 'success', 'User disconnected Gmail OAuth mailbox', $user['id'], $user['role'], $this->db);
+        echo json_encode(['success' => true]);
+    }
+
+    private function startGoogleOAuth(array $user): void
+    {
+        try {
+            SecurityHelper::configureSecureSession();
+            $state = bin2hex(random_bytes(32));
+            $cleanup = $this->db->prepare('DELETE FROM gmail_oauth_states WHERE expires_at < NOW()');
+            $cleanup->execute();
+            $stateStmt = $this->db->prepare("INSERT INTO gmail_oauth_states (state_hash, user_id, expires_at) VALUES (:hash, :uid, NOW() + INTERVAL '10 minutes')");
+            $stateStmt->execute([':hash' => hash('sha256', $state), ':uid' => $user['id']]);
+            $client = GmailOAuthService::client();
+            $client->setState($state);
+            header('Cache-Control: no-store');
+            header('Location: ' . $client->createAuthUrl(), true, 302);
+            exit;
+        } catch (Throwable $e) {
+            error_log('Workly Gmail OAuth start failed: ' . $e->getMessage());
+            header('Location: /email?gmail_error=config', true, 303);
+            exit;
         }
-        return '';
+    }
+
+    private function completeGoogleOAuth(array $user): void
+    {
+        $receivedState = (string) ($_GET['state'] ?? '');
+        if ($receivedState === '' || !preg_match('/^[a-f0-9]{64}$/', $receivedState)) {
+            header('Location: /email?gmail_error=state', true, 303);
+            exit;
+        }
+        $stateStmt = $this->db->prepare("DELETE FROM gmail_oauth_states WHERE state_hash = :hash AND user_id = :uid AND expires_at > NOW() RETURNING user_id");
+        $stateStmt->execute([':hash' => hash('sha256', $receivedState), ':uid' => $user['id']]);
+        if (!$stateStmt->fetchColumn()) {
+            header('Location: /email?gmail_error=state', true, 303);
+            exit;
+        }
+        if (!empty($_GET['error']) || empty($_GET['code'])) {
+            header('Location: /email?gmail_error=cancelled', true, 303);
+            exit;
+        }
+
+        try {
+            $client = GmailOAuthService::client();
+            $token = $client->fetchAccessTokenWithAuthCode((string) $_GET['code']);
+            if (!is_array($token) || !empty($token['error']) || empty($token['access_token'])) {
+                throw new RuntimeException('Google did not return a valid access token.');
+            }
+
+            $accessToken = (string) $token['access_token'];
+            $profile = GmailOAuthService::fetchProfile($accessToken);
+            $gmailEmail = strtolower(trim((string) ($profile['emailAddress'] ?? '')));
+            if (!filter_var($gmailEmail, FILTER_VALIDATE_EMAIL)) {
+                throw new RuntimeException('Unable to identify the authorized Gmail account.');
+            }
+
+            $existing = $this->db->prepare('SELECT refresh_token_encrypted FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1');
+            $existing->execute([':uid' => $user['id']]);
+            $oldRefresh = (string) ($existing->fetchColumn() ?: '');
+            $refreshToken = (string) ($token['refresh_token'] ?? '');
+            if ($refreshToken === '' && $oldRefresh !== '') {
+                $refreshToken = GmailOAuthService::decrypt($oldRefresh);
+            }
+            if ($refreshToken === '') {
+                throw new RuntimeException('Google did not issue a refresh token. Revoke Workly access in your Google Account and connect again.');
+            }
+
+            $expiresIn = max(60, (int) ($token['expires_in'] ?? 3600));
+            $scopes = implode(' ', GmailOAuthService::scopes());
+            $stmt = $this->db->prepare("
+                INSERT INTO staff_connected_mailboxes
+                    (user_id, provider, email, oauth_status, sync_interval_minutes, oauth_scope, access_token_encrypted, refresh_token_encrypted, token_expires_at, token_type, updated_at)
+                VALUES (:uid, 'gmail', :email, 'active', 5, :scope, :access_token, :refresh_token, NOW() + (CAST(:expires_in AS INTEGER) * INTERVAL '1 second'), :token_type, NOW())
+                ON CONFLICT (user_id) DO UPDATE SET
+                    provider = 'gmail', email = EXCLUDED.email, oauth_status = 'active', oauth_scope = EXCLUDED.oauth_scope,
+                    access_token_encrypted = EXCLUDED.access_token_encrypted, refresh_token_encrypted = EXCLUDED.refresh_token_encrypted,
+                    token_expires_at = EXCLUDED.token_expires_at, token_type = EXCLUDED.token_type, updated_at = NOW()
+            " );
+            $stmt->execute([
+                ':uid' => $user['id'], ':email' => $gmailEmail, ':scope' => $scopes,
+                ':access_token' => GmailOAuthService::encrypt($accessToken),
+                ':refresh_token' => GmailOAuthService::encrypt($refreshToken),
+                ':expires_in' => $expiresIn, ':token_type' => (string) ($token['token_type'] ?? 'Bearer'),
+            ]);
+            AuditLogger::log('GMAIL_OAUTH_CONNECTED', 'success', 'Google Gmail OAuth connected: ' . $gmailEmail, $user['id'], $user['role'], $this->db);
+            header('Location: /email?gmail_connected=1', true, 303);
+            exit;
+        } catch (Throwable $e) {
+            error_log('Workly Gmail OAuth callback failed: ' . $e->getMessage());
+            header('Location: /email?gmail_error=callback', true, 303);
+            exit;
+        }
     }
 
     private function gmailRequest(string $method, string $path, string $token, ?array $jsonBody = null): ?array
@@ -266,7 +461,7 @@ final class EmailApiController
 
         // Send via Gmail API when active OAuth token is provided
         $gmailSentId = null;
-        $token = $this->getGoogleAccessToken();
+        $token = $this->getGoogleAccessToken($user);
         $senderEmail = (string) $user['email'];
         $mbStmt = $this->db->prepare('SELECT email FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1');
         $mbStmt->execute([':uid' => $user['id']]);
@@ -336,7 +531,7 @@ final class EmailApiController
 
         $threadId = 'th-' . bin2hex(random_bytes(5));
         $gmailSentId = null;
-        $token = $this->getGoogleAccessToken();
+        $token = $this->getGoogleAccessToken($user);
 
         $senderEmail = (string) $user['email'];
         $mbStmt = $this->db->prepare('SELECT email FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1');
@@ -462,9 +657,15 @@ final class EmailApiController
 
     private function syncMailbox(array $user): void
     {
-        $token = $this->getGoogleAccessToken();
+        $token = $this->getGoogleAccessToken($user);
         $syncedCount = 0;
         $gmailEmail = null;
+
+        if ($token === '') {
+            http_response_code(409);
+            echo json_encode(['error' => 'Connect your Gmail account before synchronizing.']);
+            return;
+        }
 
         if ($token !== '') {
             $profile = $this->gmailRequest('GET', '/profile', $token);
@@ -472,7 +673,7 @@ final class EmailApiController
                 $gmailEmail = strtolower((string) $profile['emailAddress']);
                 $upMb = $this->db->prepare("
                     INSERT INTO staff_connected_mailboxes (user_id, provider, email, oauth_status, sync_interval_minutes, oauth_scope, last_synced_at, updated_at)
-                    VALUES (:uid, 'gmail', :em, 'active', 5, 'gmail.readonly gmail.send gmail.modify', NOW(), NOW())
+                    VALUES (:uid, 'gmail', :em, 'active', 5, 'gmail.readonly gmail.send', NOW(), NOW())
                     ON CONFLICT (user_id) DO UPDATE
                     SET email = EXCLUDED.email, oauth_status = 'active', last_synced_at = NOW(), updated_at = NOW()
                 ");
@@ -609,7 +810,7 @@ final class EmailApiController
                 $bytes = $decoded;
             }
         } elseif (!empty($att['gmail_attachment_id']) && !empty($att['gmail_message_id'])) {
-            $token = $this->getGoogleAccessToken();
+            $token = $this->getGoogleAccessToken($user);
             if ($token !== '') {
                 $resp = $this->gmailRequest(
                     'GET',

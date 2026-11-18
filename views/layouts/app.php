@@ -560,8 +560,6 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
     <script src="/assets/js/tl-recharts.js"></script>
   <?php endif; ?>
   <?php if ($activeSection === 'email'): ?>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
     <script src="/assets/js/gmail-oauth.js"></script>
   <?php endif; ?>
 </body>
