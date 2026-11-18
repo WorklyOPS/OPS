@@ -5,6 +5,7 @@
    ========================================================================== */
 
 :root {
+  color-scheme: light;
   --brand-primary: #AE09E9;
   --brand-secondary: #8822CE;
   --brand-tint: #FBF3FF;
@@ -186,6 +187,55 @@
 :root[data-theme="dark"] input[type="month"] {
   color-scheme: dark;
 }
+
+/* --------------------------------------------------------------------------
+   Dark/light Mode theme icon
+   -------------------------------------------------------------------------- */
+
+.theme-toggle {
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    transition: transform .2s ease, background .3s ease;
+}
+
+.theme-toggle svg {
+    width: 20px;
+    height: 20px;
+}
+
+/* Transición circular entre temas */
+::view-transition-old(root),
+::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+}
+
+::view-transition-new(root) {
+    z-index: 9999;
+    animation: reveal .5s ease-out;
+}
+
+::view-transition-old(root) {
+    z-index: 1;
+}
+
+@keyframes reveal {
+    from {
+        clip-path: circle(0 at var(--x) var(--y));
+    }
+
+    to {
+        clip-path: circle(150vmax at var(--x) var(--y));
+    }
+}
+
 
 *, *::before, *::after {
   box-sizing: border-box;
