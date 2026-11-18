@@ -145,37 +145,6 @@ $historyMeta = static function (string $eventType): array {
 
             <p class="perk-card-desc"><?= SecurityHelper::e($pk['description']) ?></p>
 
-            <!-- Inside-Card Active Recipients Avatar Strip -->
-            <div class="perk-holders-strip">
-              <div class="perk-holders-head">
-                <span class="perk-holders-label">Active Recipients</span>
-                <span class="muted tabular-nums" style="font-size:11.5px;" data-perk-holder-count="<?= SecurityHelper::e($pid) ?>"><?= count($holders) ?> active</span>
-              </div>
-              <div class="perk-holders-avatars" data-perk-holders="<?= SecurityHelper::e($pid) ?>">
-                <?php if (empty($holders)): ?>
-                  <span class="perk-holders-empty">No VAs currently hold this perk</span>
-                <?php else: ?>
-                  <?php foreach ($holders as $g): ?>
-                    <?php $gInit = strtoupper(substr((string) ($g['va_name'] ?? 'VA'), 0, 2)); ?>
-                    <span class="perk-holder-chip" title="<?= SecurityHelper::e($g['va_name']) ?>">
-                      <?php if (!empty($g['va_avatar'])): ?>
-                        <img src="<?= SecurityHelper::e($g['va_avatar']) ?>" alt="<?= SecurityHelper::e($g['va_name']) ?>" class="avatar-xs">
-                      <?php else: ?>
-                        <span class="avatar-xs"><?= SecurityHelper::e($gInit) ?></span>
-                      <?php endif; ?>
-                      <?php if ($canManagePerks): ?>
-                        <button type="button"
-                                class="perk-holder-revoke"
-                                title="Revoke perk from <?= SecurityHelper::e($g['va_name']) ?>"
-                                aria-label="Revoke perk from <?= SecurityHelper::e($g['va_name']) ?>"
-                                data-perk-revoke="/api/v1/perks/<?= SecurityHelper::e($pid) ?>/grant?user_id=<?= urlencode((string) $g['user_id']) ?>">×</button>
-                      <?php endif; ?>
-                    </span>
-                  <?php endforeach; ?>
-                <?php endif; ?>
-              </div>
-            </div>
-
             <?php if ($canManagePerks && !empty($vas)): ?>
               <form data-api-form="/api/v1/perks/<?= SecurityHelper::e($pid) ?>/grant"
                     data-api-method="POST"
@@ -266,7 +235,8 @@ $historyMeta = static function (string $eventType): array {
             $holderIds = $awardUserIdsByBadge[$bid] ?? [];
           ?>
           <article class="card perk-program-card" data-badge-card="<?= SecurityHelper::e($bid) ?>">
-            <div class="perk-card-head">
+        <div class="perk-info">
+          <div class="perk-card-head">
               <div style="display:flex;align-items:center;gap:12px;min-width:0;">
                 <span class="tier-icon-wrap tier-<?= SecurityHelper::e($tierSlug) ?>">
                   <?= workly_icon_svg((string) ($bdg['icon_name'] ?? 'Medal'), 19) ?>
@@ -283,35 +253,10 @@ $historyMeta = static function (string $eventType): array {
             </div>
 
             <p class="perk-card-desc"><?= SecurityHelper::e($bdg['description']) ?></p>
-
-            <!-- Inside-Card Earned By Avatar Strip -->
-            <div class="perk-holders-strip">
-              <div class="perk-holders-head">
-                <span class="perk-holders-label">Awarded To</span>
-                <span class="muted tabular-nums" style="font-size:11.5px;" data-badge-holder-count="<?= SecurityHelper::e($bid) ?>"><?= count($holders) ?> earned</span>
-              </div>
-              <div class="perk-holders-avatars" data-badge-holders="<?= SecurityHelper::e($bid) ?>">
-                <?php if (empty($holders)): ?>
-                  <span class="perk-holders-empty">No VAs have earned this badge yet</span>
-                <?php else: ?>
-                  <?php foreach ($holders as $aw): ?>
-                    <?php
-                      $aInit = strtoupper(substr((string) ($aw['va_name'] ?? 'VA'), 0, 2));
-                      $earnedDate = substr((string) ($aw['earned_at'] ?? ''), 0, 10);
-                    ?>
-                    <span class="perk-holder-chip" title="<?= SecurityHelper::e($aw['va_name'] . ($earnedDate !== '' ? ' · Earned ' . $earnedDate : '')) ?>">
-                      <?php if (!empty($aw['va_avatar'])): ?>
-                        <img src="<?= SecurityHelper::e($aw['va_avatar']) ?>" alt="<?= SecurityHelper::e($aw['va_name']) ?>" class="avatar-xs">
-                      <?php else: ?>
-                        <span class="avatar-xs"><?= SecurityHelper::e($aInit) ?></span>
-                      <?php endif; ?>
-                    </span>
-                  <?php endforeach; ?>
-                <?php endif; ?>
-              </div>
-            </div>
+        </div>
 
             <?php if ($canManagePerks && !empty($vas)): ?>
+            <div class="form-perks-va">
               <form data-api-form="/api/v1/perks/badges/<?= SecurityHelper::e($bid) ?>/award"
                     data-api-method="POST"
                     data-no-reload="1"
@@ -372,6 +317,7 @@ $historyMeta = static function (string $eventType): array {
                   </div>
                 </div>
               </form>
+            </div>
             <?php elseif ($canManagePerks): ?>
               <p class="muted" style="font-size:12px;">No active Virtual Assistants available to assign.</p>
             <?php endif; ?>

@@ -51,6 +51,7 @@ foreach ($docs as $d) {
       <article class="card card-hover kb-doc-card"
                data-kb-cat="<?= SecurityHelper::e($doc['category']) ?>"
                data-kb-search="<?= SecurityHelper::e($plainSearch) ?>">
+      <div class="section-art-one">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px;">
           <div>
             <h3><?= SecurityHelper::e($doc['title']) ?></h3>
@@ -77,7 +78,9 @@ foreach ($docs as $d) {
           </div>
           <div class="kb-rich-fade"></div>
         </div>
-        <button type="button" class="btn btn-secondary btn-sm is-hidden kb-expand-btn no-print" data-kb-expand style="margin-bottom:12px;">View More</button>
+
+      <div class="section-art-two">
+        <button type="button" class="btn btn-secondary btn-sm kb-expand-btn no-print" data-kb-expand style="margin-bottom:12px;">View More</button>
 
         <div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;padding-top:10px;border-top:1px solid var(--border);">
           <button type="button" class="btn btn-secondary btn-sm" data-kb-print>
@@ -94,6 +97,7 @@ foreach ($docs as $d) {
                     data-action-url="/api/v1/knowledge/<?= SecurityHelper::e($doc['id']) ?>"
                     data-action-method="DELETE">Remove Document</button>
           <?php endif; ?>
+        </div>
         </div>
       </article>
     <?php endforeach; ?>
