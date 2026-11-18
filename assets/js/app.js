@@ -2189,6 +2189,443 @@
       }
 
       refreshCreateSuggestions();
+
+      // Reusable Task Templates Library & 1-Click Injection
+      const createTplSelect = document.getElementById('create-template-select');
+      const createTplInjectBtn = document.getElementById('btn-inject-create-template');
+      const browseCreateTplBtn = document.getElementById('btn-browse-create-templates');
+      const subtasksTplSelect = document.getElementById('subtasks-template-select');
+      const subtasksTplInjectBtn = document.getElementById('btn-inject-subtasks-template');
+      const browseSubtasksTplBtn = document.getElementById('btn-browse-subtasks-templates');
+      const openTplLibraryBtn = document.getElementById('btn-open-templates-library');
+
+      const tplModal = document.getElementById('modal-task-templates');
+      const tplGrid = document.getElementById('tpl-library-grid');
+      const tplPills = document.getElementById('tpl-category-pills');
+      const tplTargetSelect = document.getElementById('tpl-inject-target-select');
+      const tplSearchInput = document.getElementById('tpl-search-input');
+      const tplCreatePanel = document.getElementById('tpl-create-panel');
+      const tplToggleNewBtn = document.getElementById('btn-toggle-new-template');
+      const tplCancelNewBtn = document.getElementById('btn-cancel-new-template');
+      const tplCreateForm = document.getElementById('form-create-task-template');
+
+      let activeTplCategory = 'all';
+
+      const getTemplatesList = () => {
+        const ds = getTaskDataset() || {};
+        return Array.isArray(ds.templates) ? ds.templates : [];
+      };
+
+      const saveTemplatesList = (list) => {
+        const ds = getTaskDataset() || {};
+        ds.templates = Array.isArray(list) ? list : [];
+        saveTaskDataset(ds);
+      };
+
+      const populateTemplateSelects = () => {
+        const list = getTemplatesList();
+        const byCat = new Map();
+        list.forEach((t) => {
+          const cat = String(t.specialty_category || 'General');
+          if (!byCat.has(cat)) byCat.set(cat, []);
+          byCat.get(cat).push(t);
+        });
+
+        [createTplSelect, subtasksTplSelect].forEach((sel, idx) => {
+          if (!sel) return;
+          const prevVal = sel.value;
+          sel.innerHTML = '';
+          const ph = document.createElement('option');
+          ph.value = '';
+          ph.textContent = idx === 0
+            ? 'Choose a template by VA specialization...'
+            : 'Select VA specialization template...';
+          sel.appendChild(ph);
+
+          Array.from(byCat.keys()).sort((a, b) => a.localeCompare(b)).forEach((cat) => {
+            const grp = document.createElement('optgroup');
+            grp.label = cat;
+            byCat.get(cat).forEach((tpl) => {
+              const opt = document.createElement('option');
+              opt.value = tpl.id;
+              const stepsCnt = Array.isArray(tpl.subtasks) ? tpl.subtasks.length : 0;
+              opt.textContent = tpl.title + ' (' + stepsCnt + ' steps)';
+              grp.appendChild(opt);
+            });
+            sel.appendChild(grp);
+          });
+
+          if (prevVal && list.some((t) => t.id === prevVal)) {
+            sel.value = prevVal;
+          }
+        });
+      };
+
+      const populateTargetTasksSelect = (preferredTaskId) => {
+        if (!tplTargetSelect) return;
+        const ds = getTaskDataset() || {};
+        const tasksObj = ds.tasks || {};
+        tplTargetSelect.innerHTML = '';
+
+        const newOpt = document.createElement('option');
+        newOpt.value = '__new__';
+        newOpt.textContent = 'Inject Target: + New Deliverable';
+        tplTargetSelect.appendChild(newOpt);
+
+        Object.values(tasksObj).forEach((t) => {
+          const opt = document.createElement('option');
+          opt.value = t.id;
+          opt.textContent = 'Task: ' + (t.title || 'Untitled') + ' (' + (t.client_name || 'Client') + ')';
+          tplTargetSelect.appendChild(opt);
+        });
+
+        if (preferredTaskId && tasksObj[preferredTaskId]) {
+          tplTargetSelect.value = preferredTaskId;
+        } else {
+          tplTargetSelect.value = '__new__';
+        }
+      };
+
+      const injectTemplateIntoCreateDrawer = (tpl) => {
+        if (!tpl || !createDrawer) return;
+        const titleInp = createDrawer.querySelector('input[name="title"]');
+        const descInp = createDrawer.querySelector('textarea[name="description"]');
+        const prioSel = createDrawer.querySelector('select[name="priority"]');
+        const hrsInp = createDrawer.querySelector('input[name="estimated_hours"]');
+
+        if (titleInp && !titleInp.value.trim()) {
+          titleInp.value = tpl.title || '';
+        }
+        if (descInp && !descInp.value.trim() && tpl.description) {
+          descInp.value = tpl.description;
+        }
+        if (prioSel && tpl.default_priority) {
+          prioSel.value = tpl.default_priority;
+        }
+        if (hrsInp && tpl.default_estimated_hours) {
+          hrsInp.value = String(tpl.default_estimated_hours);
+        }
+
+        const steps = Array.isArray(tpl.subtasks) ? tpl.subtasks : [];
+        steps.forEach((step) => appendDraftStep(step, false));
+        showToast('Injected "' + tpl.title + '" (' + steps.length + ' subtasks)', 'success');
+      };
+
+      const injectTemplateIntoExistingTask = async (taskId, tpl, triggerBtn) => {
+        if (!taskId || !tpl) return;
+        const origLabel = triggerBtn ? triggerBtn.textContent : '';
+        if (triggerBtn) {
+          triggerBtn.disabled = true;
+          triggerBtn.textContent = 'Injecting...';
+        }
+        try {
+          const res = await apiFetch('/api/v1/tasks/' + encodeURIComponent(taskId) + '/inject-template', {
+            method: 'POST',
+            body: JSON.stringify({ template_id: tpl.id })
+          });
+          const ds = getTaskDataset() || {};
+          ds.subtasks = ds.subtasks || {};
+          if (res && Array.isArray(res.subtasks)) {
+            ds.subtasks[taskId] = res.subtasks;
+          }
+          if (Array.isArray(ds.templates)) {
+            const found = ds.templates.find((item) => item.id === tpl.id);
+            if (found) found.usage_count = Number(found.usage_count || 0) + 1;
+          }
+          saveTaskDataset(ds);
+          renderSubtasksForTask(taskId, ds);
+          syncTaskCardIndicators(taskId, ds);
+          populateTemplateSelects();
+          renderTemplateLibraryModal();
+
+          const added = Number(res && res.added_count != null ? res.added_count : 0);
+          showToast(
+            added > 0
+              ? ('Injected ' + added + ' subtask(s) from "' + tpl.title + '"')
+              : ('All steps from "' + tpl.title + '" are already in this checklist'),
+            added > 0 ? 'success' : 'info'
+          );
+        } catch (err) {
+          showToast(err.message || 'Unable to inject template', 'error');
+        } finally {
+          if (triggerBtn) {
+            triggerBtn.disabled = false;
+            triggerBtn.textContent = origLabel;
+          }
+        }
+      };
+
+      function renderTemplateLibraryModal() {
+        if (!tplGrid || !tplPills) return;
+        const list = getTemplatesList();
+        const categories = ['all'];
+        list.forEach((t) => {
+          const c = String(t.specialty_category || '').trim();
+          if (c && !categories.includes(c)) categories.push(c);
+        });
+        if (activeTplCategory !== 'all' && !categories.includes(activeTplCategory)) {
+          activeTplCategory = 'all';
+        }
+
+        tplPills.innerHTML = '';
+        categories.forEach((cat) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'collab-filter-chip' + (activeTplCategory === cat ? ' is-active' : '');
+          btn.setAttribute('data-tpl-cat', cat);
+          const cnt = cat === 'all'
+            ? list.length
+            : list.filter((t) => String(t.specialty_category || '') === cat).length;
+          btn.textContent = (cat === 'all' ? 'All Specializations' : cat) + ' (' + cnt + ')';
+          tplPills.appendChild(btn);
+        });
+
+        const q = String(tplSearchInput ? tplSearchInput.value : '').trim().toLowerCase();
+        const filtered = list.filter((t) => {
+          if (activeTplCategory !== 'all' && String(t.specialty_category || '') !== activeTplCategory) {
+            return false;
+          }
+          if (!q) return true;
+          const hay = [
+            t.title,
+            t.specialty_category,
+            t.description,
+            ...(Array.isArray(t.subtasks) ? t.subtasks : [])
+          ].join(' ').toLowerCase();
+          return hay.includes(q);
+        });
+
+        tplGrid.innerHTML = '';
+        if (!filtered.length) {
+          const empty = document.createElement('div');
+          empty.className = 'notice notice-info';
+          empty.style.gridColumn = '1 / -1';
+          empty.textContent = 'No templates match this specialization or search filter. Click "+ New Template" to create one.';
+          tplGrid.appendChild(empty);
+          return;
+        }
+
+        filtered.forEach((tpl) => {
+          const card = document.createElement('article');
+          card.className = 'tpl-card';
+
+          const top = document.createElement('div');
+          top.className = 'tpl-card-top';
+          const catBadge = document.createElement('span');
+          catBadge.className = 'badge badge-brand';
+          catBadge.textContent = tpl.specialty_category || 'General';
+          const metaRight = document.createElement('div');
+          metaRight.style.display = 'flex';
+          metaRight.style.alignItems = 'center';
+          metaRight.style.gap = '6px';
+          const prioBadge = document.createElement('span');
+          const prio = String(tpl.default_priority || 'medium').toLowerCase();
+          prioBadge.className = 'badge priority-badge priority-' + prio;
+          prioBadge.textContent = prio.charAt(0).toUpperCase() + prio.slice(1);
+          const hrsBadge = document.createElement('span');
+          hrsBadge.className = 'badge badge-neutral tabular-nums';
+          hrsBadge.textContent = Number(tpl.default_estimated_hours || 2).toFixed(1) + 'h';
+          metaRight.appendChild(prioBadge);
+          metaRight.appendChild(hrsBadge);
+          top.appendChild(catBadge);
+          top.appendChild(metaRight);
+
+          const titleEl = document.createElement('h4');
+          titleEl.className = 'tpl-card-title';
+          titleEl.textContent = tpl.title || 'Template';
+
+          const descEl = document.createElement('p');
+          descEl.className = 'muted tpl-card-desc';
+          descEl.textContent = tpl.description || 'Reusable deliverable workflow with pre-defined subtasks.';
+
+          const stepsList = document.createElement('ul');
+          stepsList.className = 'tpl-card-steps';
+          const steps = Array.isArray(tpl.subtasks) ? tpl.subtasks : [];
+          steps.slice(0, 5).forEach((st) => {
+            const li = document.createElement('li');
+            li.textContent = st;
+            stepsList.appendChild(li);
+          });
+          if (steps.length > 5) {
+            const more = document.createElement('li');
+            more.className = 'muted';
+            more.textContent = '+' + (steps.length - 5) + ' more step(s)';
+            stepsList.appendChild(more);
+          }
+
+          const footer = document.createElement('div');
+          footer.className = 'tpl-card-footer';
+          const usageSpan = document.createElement('span');
+          usageSpan.className = 'muted tabular-nums';
+          usageSpan.style.fontSize = '11.5px';
+          usageSpan.textContent = steps.length + ' subtasks · ' + Number(tpl.usage_count || 0) + ' uses';
+
+          const btns = document.createElement('div');
+          btns.style.display = 'flex';
+          btns.style.gap = '6px';
+          btns.style.alignItems = 'center';
+
+          if (!tpl.is_system) {
+            const delBtn = document.createElement('button');
+            delBtn.type = 'button';
+            delBtn.className = 'btn btn-secondary btn-xs';
+            delBtn.textContent = 'Delete';
+            delBtn.addEventListener('click', async () => {
+              delBtn.disabled = true;
+              try {
+                const res = await apiFetch('/api/v1/tasks/templates/' + encodeURIComponent(tpl.id), { method: 'DELETE' });
+                if (res && Array.isArray(res.templates)) {
+                  saveTemplatesList(res.templates);
+                } else {
+                  saveTemplatesList(getTemplatesList().filter((x) => x.id !== tpl.id));
+                }
+                populateTemplateSelects();
+                renderTemplateLibraryModal();
+                showToast('Template removed', 'success');
+              } catch (err) {
+                delBtn.disabled = false;
+                showToast(err.message || 'Unable to delete template', 'error');
+              }
+            });
+            btns.appendChild(delBtn);
+          }
+
+          const injectBtn = document.createElement('button');
+          injectBtn.type = 'button';
+          injectBtn.className = 'btn btn-primary btn-sm';
+          injectBtn.textContent = '1-Click Inject';
+          injectBtn.addEventListener('click', async () => {
+            const targetId = tplTargetSelect ? tplTargetSelect.value : '__new__';
+            if (!targetId || targetId === '__new__') {
+              closeAllModals(true);
+              openDrawer('drawer-create-task');
+              injectTemplateIntoCreateDrawer(tpl);
+            } else {
+              await injectTemplateIntoExistingTask(targetId, tpl, injectBtn);
+              if (activeSubtasksTaskId === targetId) {
+                renderSubtasksForTask(targetId, getTaskDataset() || {});
+              }
+            }
+          });
+          btns.appendChild(injectBtn);
+
+          footer.appendChild(usageSpan);
+          footer.appendChild(btns);
+
+          card.appendChild(top);
+          card.appendChild(titleEl);
+          card.appendChild(descEl);
+          card.appendChild(stepsList);
+          card.appendChild(footer);
+          tplGrid.appendChild(card);
+        });
+      }
+
+      const openTemplatesLibrary = (preferredTaskId) => {
+        if (!tplModal) return;
+        populateTargetTasksSelect(preferredTaskId || '');
+        renderTemplateLibraryModal();
+        openModal('modal-task-templates');
+      };
+
+      populateTemplateSelects();
+
+      if (createTplInjectBtn && createTplSelect) {
+        createTplInjectBtn.addEventListener('click', () => {
+          const tpl = getTemplatesList().find((t) => t.id === createTplSelect.value);
+          if (!tpl) {
+            showToast('Select a template first', 'info');
+            return;
+          }
+          injectTemplateIntoCreateDrawer(tpl);
+        });
+      }
+
+      if (subtasksTplInjectBtn && subtasksTplSelect) {
+        subtasksTplInjectBtn.addEventListener('click', () => {
+          if (!activeSubtasksTaskId) return;
+          const tpl = getTemplatesList().find((t) => t.id === subtasksTplSelect.value);
+          if (!tpl) {
+            showToast('Select a template to inject', 'info');
+            return;
+          }
+          injectTemplateIntoExistingTask(activeSubtasksTaskId, tpl, subtasksTplInjectBtn);
+        });
+      }
+
+      if (openTplLibraryBtn) {
+        openTplLibraryBtn.addEventListener('click', () => openTemplatesLibrary('__new__'));
+      }
+      if (browseCreateTplBtn) {
+        browseCreateTplBtn.addEventListener('click', () => openTemplatesLibrary('__new__'));
+      }
+      if (browseSubtasksTplBtn) {
+        browseSubtasksTplBtn.addEventListener('click', () => {
+          const currentTid = activeSubtasksTaskId || '__new__';
+          closeAllModals(true);
+          openTemplatesLibrary(currentTid);
+        });
+      }
+
+      if (tplPills) {
+        tplPills.addEventListener('click', (e) => {
+          const pill = e.target.closest('[data-tpl-cat]');
+          if (!pill) return;
+          activeTplCategory = pill.getAttribute('data-tpl-cat') || 'all';
+          renderTemplateLibraryModal();
+        });
+      }
+
+      if (tplSearchInput) {
+        tplSearchInput.addEventListener('input', renderTemplateLibraryModal);
+      }
+
+      if (tplToggleNewBtn && tplCreatePanel) {
+        tplToggleNewBtn.addEventListener('click', () => {
+          tplCreatePanel.classList.toggle('is-hidden');
+        });
+      }
+      if (tplCancelNewBtn && tplCreatePanel) {
+        tplCancelNewBtn.addEventListener('click', () => {
+          tplCreatePanel.classList.add('is-hidden');
+        });
+      }
+
+      if (tplCreateForm) {
+        tplCreateForm.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const fd = new FormData(tplCreateForm);
+          const submitBtn = tplCreateForm.querySelector('button[type="submit"]');
+          if (submitBtn) submitBtn.disabled = true;
+          try {
+            const payload = {
+              title: String(fd.get('title') || '').trim(),
+              specialty_category: String(fd.get('specialty_category') || '').trim(),
+              default_priority: String(fd.get('default_priority') || 'medium'),
+              default_estimated_hours: Number(fd.get('default_estimated_hours') || 2),
+              description: String(fd.get('description') || '').trim(),
+              subtasks: String(fd.get('subtasks') || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
+            };
+            const res = await apiFetch('/api/v1/tasks/templates', {
+              method: 'POST',
+              body: JSON.stringify(payload)
+            });
+            if (res && Array.isArray(res.templates)) {
+              saveTemplatesList(res.templates);
+            }
+            tplCreateForm.reset();
+            if (tplCreatePanel) tplCreatePanel.classList.add('is-hidden');
+            activeTplCategory = payload.specialty_category || 'all';
+            populateTemplateSelects();
+            renderTemplateLibraryModal();
+            showToast('Reusable template saved to library', 'success');
+          } catch (err) {
+            showToast(err.message || 'Failed to save template', 'error');
+          } finally {
+            if (submitBtn) submitBtn.disabled = false;
+          }
+        });
+      }
     }
   }
 

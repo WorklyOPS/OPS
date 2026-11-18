@@ -97,7 +97,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
              data-priority="<?= SecurityHelper::e($prioKey) ?>"
              data-search="<?= SecurityHelper::e($task['title'] . ' ' . $task['client_name'] . ' ' . $task['va_name'] . ' ' . $prioKey) ?>">
       <div class="task-card-top">
-        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+        <div class="task-card-badges">
           <span class="badge priority-badge <?= $pMeta[1] ?>" data-task-priority-badge>
             <?= workly_icon_svg($pMeta[2], 11) ?>
             <span><?= $pMeta[0] ?></span>
@@ -106,9 +106,15 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
             <span class="badge badge-danger">Overdue</span>
           <?php endif; ?>
         </div>
-        <button type="button" class="icon-chip-btn task-menu-btn" data-task-id="<?= SecurityHelper::e($task['id']) ?>" aria-label="Task context menu" title="Quick Actions">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
-        </button>
+        <div class="task-card-top-actions">
+          <button type="button" class="icon-chip-btn task-top-note-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="notes" title="VA Notes">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
+            <span data-task-note-count="<?= SecurityHelper::e($task['id']) ?>"><?= $noteCount ?></span>
+          </button>
+          <button type="button" class="icon-chip-btn task-menu-btn" data-task-id="<?= SecurityHelper::e($task['id']) ?>" aria-label="Task context menu" title="Quick Actions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          </button>
+        </div>
       </div>
 
       <div class="task-title" data-open-task-edit="<?= SecurityHelper::e($task['id']) ?>">
@@ -128,18 +134,14 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
       </div>
 
       <div class="task-card-actions">
-        <div style="display:flex;align-items:center;gap:4px;">
-          <button type="button" class="icon-chip-btn" data-open-task-subtasks="<?= SecurityHelper::e($task['id']) ?>" title="Sub-Tasks Checklist">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="6" height="6" rx="1.5"/><path d="m4.5 8 1.2 1.2 2-2.2"/><path d="M12 8h9"/><rect x="3" y="14" width="6" height="6" rx="1.5"/><path d="M12 17h9"/></svg>
-            <span class="tabular-nums" data-task-subtask-count="<?= SecurityHelper::e($task['id']) ?>"><?= $subDone ?>/<?= $subTotal ?></span>
-          </button>
-          <button type="button" class="icon-chip-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="combined" title="Notes &amp; Comments Timeline">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
-            <span data-task-note-count="<?= SecurityHelper::e($task['id']) ?>"><?= $noteCount ?></span>
-          </button>
+        <div class="task-card-footer-icons">
           <button type="button" class="icon-chip-btn" data-open-task-collab="<?= SecurityHelper::e($task['id']) ?>" data-task-tab="comments" title="Comments">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             <span data-task-comment-count="<?= SecurityHelper::e($task['id']) ?>"><?= $commentCount ?></span>
+          </button>
+          <button type="button" class="icon-chip-btn" data-open-task-subtasks="<?= SecurityHelper::e($task['id']) ?>" title="Sub-Tasks Checklist">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="6" height="6" rx="1.5"/><path d="m4.5 8 1.2 1.2 2-2.2"/><path d="M12 8h9"/><rect x="3" y="14" width="6" height="6" rx="1.5"/><path d="M12 17h9"/></svg>
+            <span class="tabular-nums" data-task-subtask-count="<?= SecurityHelper::e($task['id']) ?>"><?= $subDone ?>/<?= $subTotal ?></span>
           </button>
           <button type="button" class="icon-chip-btn" data-open-task-overtime="<?= SecurityHelper::e($task['id']) ?>" title="Overtime Hours">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
@@ -147,7 +149,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
           </button>
         </div>
 
-        <div style="display:flex;align-items:center;gap:6px;">
+        <div class="task-card-commenters-slot">
           <div class="commenter-avatars" data-task-commenter-avatars="<?= SecurityHelper::e($task['id']) ?>" title="Commenters on this task">
             <?php foreach (array_slice($commentAuthors, 0, 3) as $ca): ?>
               <?php $caInit = strtoupper(substr((string) ($ca['name'] ?? 'U'), 0, 2)); ?>
@@ -182,10 +184,15 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
 <div class="page-header">
   <div>
     <h1>Weekly Task Organizer</h1>
-    <p class="muted">Drag cards across stages, right-click for instant quick actions, click a card title to edit details, or collaborate live in Combined Timeline.</p>
+    <p class="muted">Drag cards across stages, right-click for quick actions, inject reusable VA templates, or collaborate live.</p>
   </div>
   <?php if (in_array($role, ['va', 'team_leader', 'admin'], true)): ?>
-    <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-task">+ New Deliverable</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button type="button" class="btn btn-secondary" id="btn-open-templates-library">
+        <?= workly_icon_svg('Book', 15) ?> <span>Templates Library</span>
+      </button>
+      <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-task">+ New Deliverable</button>
+    </div>
   <?php endif; ?>
 </div>
 
@@ -406,6 +413,7 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
     'extra_hours'        => $extraHoursMap,
     'subtasks'           => $subtasksMap,
     'va_specialties'     => $vaSpecialtiesMap,
+    'templates'          => $data['task_templates'] ?? [],
     'mention_candidates' => $mentionCandidatesMap,
     'current_user_id'    => (string) ($user['id'] ?? ''),
     'current_user_name'  => (string) ($user['name'] ?? ''),
@@ -429,6 +437,19 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
         </div>
       <?php else: ?>
         <form data-api-form="/api/v1/tasks" data-api-method="POST">
+          <div class="tpl-quick-bar" style="margin-bottom:14px;">
+            <div class="tpl-quick-bar-head">
+              <span class="subtask-suggestions-label">Inject Reusable VA Template</span>
+              <button type="button" class="btn btn-secondary btn-xs" id="btn-browse-create-templates">Browse Library</button>
+            </div>
+            <div class="tpl-quick-bar-row">
+              <select class="select" id="create-template-select" aria-label="Select reusable task template">
+                <option value="">Choose a template by VA specialization...</option>
+              </select>
+              <button type="button" class="btn btn-primary btn-sm" id="btn-inject-create-template">Inject</button>
+            </div>
+          </div>
+
           <div class="form-group">
             <label class="form-label">Deliverable Title</label>
             <input class="input" name="title" required placeholder="e.g. Weekly CRM Pipeline Reconciliation">
@@ -730,6 +751,105 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
         </div>
         <div class="subtask-suggestions-tags" id="modal-subtask-suggestions-tags"></div>
       </div>
+
+      <div class="tpl-quick-bar" style="margin-top:12px;">
+        <div class="tpl-quick-bar-head">
+          <span class="subtask-suggestions-label">Inject Pre-Defined Template Subtasks</span>
+          <button type="button" class="btn btn-secondary btn-xs" id="btn-browse-subtasks-templates">Open Library</button>
+        </div>
+        <div class="tpl-quick-bar-row">
+          <select class="select" id="subtasks-template-select" aria-label="Choose task template to inject">
+            <option value="">Select VA specialization template...</option>
+          </select>
+          <button type="button" class="btn btn-primary btn-sm" id="btn-inject-subtasks-template">1-Click Inject</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Window 5: Reusable Task Templates Library Modal -->
+<div id="modal-task-templates" class="modal-backdrop is-hidden">
+  <div class="modal-panel modal-panel-templates" role="dialog" aria-modal="true" aria-label="Reusable Task Templates Library">
+    <div class="modal-head">
+      <div>
+        <h3>VA Specialization Task Templates Library</h3>
+        <div class="muted" style="font-size:12px;margin-top:2px;">Inject pre-defined workflows &amp; subtasks into any deliverable in one click, or save reusable custom templates.</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <button type="button" class="btn btn-secondary btn-sm" id="btn-toggle-new-template">+ New Template</button>
+        <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+      </div>
+    </div>
+
+    <div class="modal-body">
+      <div id="tpl-create-panel" class="tpl-create-panel is-hidden">
+        <form id="form-create-task-template">
+          <div class="grid-3">
+            <div class="form-group">
+              <label class="form-label">Template Title</label>
+              <input class="input" name="title" required placeholder="e.g. Daily Lead Enrichment Batch">
+            </div>
+            <div class="form-group">
+              <label class="form-label">VA Specialization</label>
+              <input class="input" name="specialty_category" list="tpl-specialty-datalist" required placeholder="e.g. Executive Admin, Data Entry">
+              <datalist id="tpl-specialty-datalist">
+                <option value="Executive Admin">
+                <option value="Social Media Manager">
+                <option value="Data Entry">
+                <option value="Development">
+                <option value="Marketing">
+                <option value="Accounting">
+                <option value="Legal">
+                <option value="Healthcare">
+                <option value="Insurance">
+                <option value="Administrative">
+                <option value="Management">
+              </datalist>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Default Priority &amp; Est Hrs</label>
+              <div style="display:flex;gap:6px;">
+                <select class="select" name="default_priority">
+                  <option value="low">Low</option>
+                  <option value="medium" selected>Medium</option>
+                  <option value="high">High</option>
+                  <option value="urgent">Urgent</option>
+                </select>
+                <input class="input" type="number" step="0.5" min="0.5" name="default_estimated_hours" value="2" style="max-width:86px;">
+              </div>
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="form-group">
+              <label class="form-label">Description (optional)</label>
+              <textarea class="textarea" name="description" rows="3" placeholder="Brief summary of expected deliverable standard..."></textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Pre-Defined Subtasks (one step per line)</label>
+              <textarea class="textarea" name="subtasks" rows="3" required placeholder="Step 1: Audit source records&#10;Step 2: Validate required fields&#10;Step 3: Export final QA report"></textarea>
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:flex-end;gap:8px;">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-cancel-new-template">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-sm">Save Reusable Template</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="tpl-library-toolbar">
+        <div class="tpl-category-pills" id="tpl-category-pills" role="tablist" aria-label="Filter templates by VA specialization"></div>
+        <div class="tpl-toolbar-right">
+          <select class="select tpl-target-select" id="tpl-inject-target-select" aria-label="Target task for 1-click injection">
+            <option value="__new__">Inject Target: + New Deliverable</option>
+          </select>
+          <input type="search" class="input tpl-search-input" id="tpl-search-input" placeholder="Search templates or steps...">
+        </div>
+      </div>
+
+      <div id="tpl-library-grid" class="tpl-library-grid"></div>
     </div>
   </div>
 </div>

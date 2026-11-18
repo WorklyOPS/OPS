@@ -368,6 +368,8 @@ final class PageController
             }
         }
 
+        $taskTemplates = TaskApiController::listTaskTemplates($this->db);
+
         return [
             'tasks'                      => $tasks,
             'notes_by_task'              => $notesByTask,
@@ -376,6 +378,7 @@ final class PageController
             'extra_hours_by_task'        => $extraHoursByTask,
             'subtasks_by_task'           => $subtasksByTask,
             'va_specialties_by_va'       => $vaSpecialtiesByVa,
+            'task_templates'             => $taskTemplates,
             'mention_candidates_by_task' => $mentionCandidatesByTask,
             'status_counts'              => $statusCounts,
             'due_today_count'            => $dueTodayCount,
@@ -494,7 +497,16 @@ final class PageController
                            TO_CHAR(t.deadline, 'Mon DD') AS short_date,
                            COUNT(*)::INTEGER AS total_count,
                            COUNT(*) FILTER (WHERE t.status = 'completed')::INTEGER AS done_count,
-                           COUNT(*) FILTER (WHERE t.status <> 'completed' AND t.deadline < CURRENT_DATE)::INTEGER AS overdue_count
+                           COUNT(*) FILTER (WHERE t.status <> 'completed' AND t.deadline < CURRENT_DATE)::INTEGER AS overdue_count,
+                           COALESCE(SUM(t.estimated_hours + COALESCE(t.extra_hours_logged, 0)), 0)::NUMERIC AS logged_hours,
+                           ROUND(
+                             COALESCE(
+                               AVG(GREATEST(0.0, EXTRACT(EPOCH FROM (COALESCE(t.completed_at, t.updated_at) - t.created_at)) / 3600.0))
+                               FILTER (WHERE t.status = 'completed'),
+                               0
+                             )::NUMERIC,
+                             1
+                           ) AS avg_turnaround_hours
                     FROM tasks t
                     JOIN users u ON t.assigned_va_id = u.id
                     WHERE (u.team_leader_id = :tl OR t.assigned_va_id = :tl2 OR t.created_by_id = :tl3)
@@ -508,10 +520,16 @@ final class PageController
                     $tot = (int) ($tr['total_count'] ?? 0);
                     $done = (int) ($tr['done_count'] ?? 0);
                     $ovd = (int) ($tr['overdue_count'] ?? 0);
+                    $compPct = $tot > 0 ? round(($done / $tot) * 100, 1) : 0.0;
                     $tr['total_count'] = $tot;
                     $tr['done_count'] = $done;
                     $tr['overdue_count'] = $ovd;
-                    $tr['completion_rate'] = $tot > 0 ? round(($done / $tot) * 100, 1) : 0.0;
+                    $tr['completion_rate'] = $compPct;
+                    $tr['avg_turnaround_hours'] = round((float) ($tr['avg_turnaround_hours'] ?? 0), 1);
+                    $tr['logged_hours'] = round((float) ($tr['logged_hours'] ?? 0), 1);
+                    $tr['productivity_score'] = $tot > 0
+                        ? round(max(0.0, min(100.0, $compPct - ($ovd * 5.0))), 1)
+                        : 0.0;
                 }
                 unset($tr);
                 $res['completion_trend'] = $trendRows;
@@ -548,6 +566,24 @@ final class PageController
                 $kDistStmt->execute([':tl' => $uid, ':tl2' => $uid]);
                 $kanbanByVa = $kDistStmt->fetchAll(PDO::FETCH_ASSOC);
 
+                // Fetch VA specialties / functional roles for all pod VAs
+                $vaSpecMap = [];
+                if (!empty($kanbanByVa)) {
+                    $podVaIds = array_values(array_unique(array_map(static fn(array $r): string => (string) $r['va_id'], $kanbanByVa)));
+                    if (!empty($podVaIds)) {
+                        try {
+                            $spPh = implode(',', array_fill(0, count($podVaIds), '?'));
+                            $spStmt = $this->db->prepare("SELECT va_id, specialty FROM va_specialties WHERE va_id IN ({$spPh}) ORDER BY specialty ASC");
+                            $spStmt->execute($podVaIds);
+                            foreach ($spStmt->fetchAll(PDO::FETCH_ASSOC) as $spRow) {
+                                $vaSpecMap[(string) $spRow['va_id']][] = (string) $spRow['specialty'];
+                            }
+                        } catch (Throwable) {
+                            $vaSpecMap = [];
+                        }
+                    }
+                }
+
                 $kanbanStatusCounts = [
                     'backlog'     => 0,
                     'todo'        => 0,
@@ -558,15 +594,25 @@ final class PageController
                 $vaPerfRows = [];
                 $tatWeightedSum = 0.0;
                 $tatCompletedSum = 0;
+                $roleBuckets = [];
                 foreach ($kanbanByVa as &$vaRow) {
                     foreach (array_keys($kanbanStatusCounts) as $stKey) {
                         $kanbanStatusCounts[$stKey] += (int) ($vaRow[$stKey] ?? 0);
                     }
+                    $vid = (string) $vaRow['va_id'];
+                    $specs = $vaSpecMap[$vid] ?? [];
+                    if (empty($specs)) {
+                        $specs = ['General VA'];
+                    }
+                    $primaryRole = (string) $specs[0];
                     $totVa = (int) ($vaRow['total_tasks'] ?? 0);
                     $doneVa = (int) ($vaRow['completed'] ?? 0);
+                    $inProgVa = (int) ($vaRow['in_progress'] ?? 0);
                     $ovdVa = (int) ($vaRow['overdue_count'] ?? 0);
+                    $hrsVa = round((float) ($vaRow['total_hours'] ?? 0), 1);
                     $tatHours = round((float) ($vaRow['avg_turnaround_hours'] ?? 0), 1);
                     $tatDays = round($tatHours / 24.0, 2);
+                    $slaRate = round((float) ($vaRow['on_time_rate'] ?? 100), 1);
                     $overdueTotal += $ovdVa;
                     if ($doneVa > 0) {
                         $tatWeightedSum += ($tatHours * $doneVa);
@@ -576,23 +622,85 @@ final class PageController
                     $vaRow['completion_rate'] = $compRate;
                     $vaRow['avg_turnaround_hours'] = $tatHours;
                     $vaRow['avg_turnaround_days'] = $tatDays;
+                    $vaRow['specialties'] = $specs;
+                    $vaRow['primary_role'] = $primaryRole;
+
                     $firstName = explode(' ', trim((string) $vaRow['va_name']))[0] ?: 'VA';
                     $vaPerfRows[] = [
-                        'va_id'                => (string) $vaRow['va_id'],
+                        'va_id'                => $vid,
                         'name'                 => $firstName,
                         'full_name'            => (string) $vaRow['va_name'],
                         'avatar_url'           => (string) ($vaRow['avatar_url'] ?? ''),
+                        'specialties'          => $specs,
+                        'primary_role'         => $primaryRole,
                         'completion_rate'      => $compRate,
-                        'on_time_rate'         => round((float) ($vaRow['on_time_rate'] ?? 100), 1),
+                        'on_time_rate'         => $slaRate,
                         'avg_turnaround_hours' => $tatHours,
                         'avg_turnaround_days'  => $tatDays,
                         'completed'            => $doneVa,
-                        'in_progress'          => (int) ($vaRow['in_progress'] ?? 0),
+                        'in_progress'          => $inProgVa,
                         'overdue_count'        => $ovdVa,
                         'total_tasks'          => $totVa,
+                        'logged_hours'         => $hrsVa,
                     ];
+
+                    foreach ($specs as $roleName) {
+                        if (!isset($roleBuckets[$roleName])) {
+                            $roleBuckets[$roleName] = [
+                                'role_name'     => $roleName,
+                                'va_ids'        => [],
+                                'total_tasks'   => 0,
+                                'completed'     => 0,
+                                'in_progress'   => 0,
+                                'overdue_count' => 0,
+                                'logged_hours'  => 0.0,
+                                'tat_weighted'  => 0.0,
+                                'tat_done'      => 0,
+                                'sla_sum'       => 0.0,
+                                'sla_count'     => 0,
+                            ];
+                        }
+                        $roleBuckets[$roleName]['va_ids'][$vid] = true;
+                        $roleBuckets[$roleName]['total_tasks'] += $totVa;
+                        $roleBuckets[$roleName]['completed'] += $doneVa;
+                        $roleBuckets[$roleName]['in_progress'] += $inProgVa;
+                        $roleBuckets[$roleName]['overdue_count'] += $ovdVa;
+                        $roleBuckets[$roleName]['logged_hours'] += $hrsVa;
+                        if ($doneVa > 0) {
+                            $roleBuckets[$roleName]['tat_weighted'] += ($tatHours * $doneVa);
+                            $roleBuckets[$roleName]['tat_done'] += $doneVa;
+                        }
+                        $roleBuckets[$roleName]['sla_sum'] += $slaRate;
+                        $roleBuckets[$roleName]['sla_count']++;
+                    }
                 }
                 unset($vaRow);
+
+                $roleBenchmarks = [];
+                foreach ($roleBuckets as $rb) {
+                    $rTot = (int) $rb['total_tasks'];
+                    $rDone = (int) $rb['completed'];
+                    $rCompRate = $rTot > 0 ? round(($rDone / $rTot) * 100, 1) : 0.0;
+                    $rAvgTat = $rb['tat_done'] > 0 ? round($rb['tat_weighted'] / $rb['tat_done'], 1) : 0.0;
+                    $rSla = $rb['sla_count'] > 0 ? round($rb['sla_sum'] / $rb['sla_count'], 1) : 100.0;
+                    $rProd = $rTot > 0 ? round(($rCompRate * 0.65) + ($rSla * 0.35), 1) : 0.0;
+                    $roleBenchmarks[] = [
+                        'role_name'            => $rb['role_name'],
+                        'va_count'             => count($rb['va_ids']),
+                        'total_tasks'          => $rTot,
+                        'completed'            => $rDone,
+                        'in_progress'          => (int) $rb['in_progress'],
+                        'overdue_count'        => (int) $rb['overdue_count'],
+                        'completion_rate'      => $rCompRate,
+                        'on_time_rate'         => $rSla,
+                        'avg_turnaround_hours' => $rAvgTat,
+                        'avg_turnaround_days'  => round($rAvgTat / 24.0, 2),
+                        'logged_hours'         => round((float) $rb['logged_hours'], 1),
+                        'productivity_score'   => $rProd,
+                    ];
+                }
+                usort($roleBenchmarks, static fn(array $a, array $b): int => ($b['total_tasks'] <=> $a['total_tasks']) ?: strcasecmp($a['role_name'], $b['role_name']));
+
                 $podTotalTasks = array_sum($kanbanStatusCounts);
                 $podCompletedTasks = (int) ($kanbanStatusCounts['completed'] ?? 0);
                 $podAvgTatHours = $tatCompletedSum > 0 ? round($tatWeightedSum / $tatCompletedSum, 1) : 0.0;
@@ -600,6 +708,8 @@ final class PageController
                 $res['kanban_status_counts'] = $kanbanStatusCounts;
                 $res['kanban_by_va'] = $kanbanByVa;
                 $res['va_completion_rates'] = $vaPerfRows;
+                $res['role_benchmarks'] = $roleBenchmarks;
+                $res['available_roles'] = array_map(static fn(array $r): string => (string) $r['role_name'], $roleBenchmarks);
                 $res['overdue_total'] = $overdueTotal;
                 $res['va_summary_totals'] = [
                     'pod_completion_rate'      => $podTotalTasks > 0 ? round(($podCompletedTasks / $podTotalTasks) * 100, 1) : 0.0,

@@ -89,12 +89,16 @@ $urgentOpenCount = count(array_filter($activeDeliverables, static fn(array $d): 
   </div>
 </div>
 
+<?php
+$roleBenchmarks = $data['role_benchmarks'] ?? [];
+$availableRoles = $data['available_roles'] ?? [];
+?>
 <!-- Recharts Visual Summary Component: Assigned VA Completion Rates & Average Turnaround Time -->
 <section class="card" style="margin-bottom:22px;" aria-label="Assigned VA Completion Rate and Average Turnaround Summary">
   <div class="tl-perf-head">
     <div>
       <h3>Assigned VA Completion &amp; Turnaround Summary</h3>
-      <p class="muted" style="font-size:12.5px;">Aggregated task completion rate (%) and average turnaround time across your assigned Virtual Assistants.</p>
+      <p class="muted" style="font-size:12.5px;">Interactive completion rate (%), average turnaround time, and VA role filtering across your assigned Virtual Assistants.</p>
     </div>
 
     <div class="tl-perf-summary">
@@ -117,20 +121,22 @@ $urgentOpenCount = count(array_filter($activeDeliverables, static fn(array $d): 
   </div>
 
   <script type="application/json" id="tl-va-summary-json"><?= json_encode([
-      'va_rates' => $vaRates,
-      'totals'   => $vaSummaryTotals,
+      'va_rates'        => $vaRates,
+      'role_benchmarks' => $roleBenchmarks,
+      'available_roles' => $availableRoles,
+      'totals'          => $vaSummaryTotals,
   ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
   <div id="tl-recharts-va-summary-root" class="tl-recharts-host">
     <div class="skeleton-bar" style="height:290px;border-radius:12px;"></div>
   </div>
 </section>
 
-<!-- Recharts Performance Dashboard Component: Team Completion Rates & Overdue Trends -->
-<section class="card" style="margin-bottom:22px;" aria-label="Team Task Completion & Overdue Trends">
+<!-- Recharts Performance Dashboard Component: Turnaround, Completion, Productivity Trends & VA Role Comparison -->
+<section class="card" style="margin-bottom:22px;" aria-label="Team Task Completion, Turnaround & Role Comparison">
   <div class="tl-perf-head">
     <div>
-      <h3>Team Task Completion &amp; Overdue Performance</h3>
-      <p class="muted" style="font-size:12.5px;">Interactive completion rate trajectory, overdue deliverables tracking, and per-VA SLA benchmarks.</p>
+      <h3>Interactive Team Performance &amp; VA Role Benchmarks</h3>
+      <p class="muted" style="font-size:12.5px;">Compare average turnaround time, task completion percentages, and productivity trends across VA specializations and timeframes.</p>
     </div>
 
     <div class="tl-perf-summary">
@@ -150,8 +156,10 @@ $urgentOpenCount = count(array_filter($activeDeliverables, static fn(array $d): 
   </div>
 
   <script type="application/json" id="tl-performance-json"><?= json_encode([
-      'trend'    => $trend,
-      'va_rates' => $vaRates,
+      'trend'           => $trend,
+      'va_rates'        => $vaRates,
+      'role_benchmarks' => $roleBenchmarks,
+      'available_roles' => $availableRoles,
   ], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE) ?></script>
   <div id="tl-recharts-performance-root" class="tl-recharts-host">
     <div class="skeleton-bar" style="height:300px;border-radius:12px;"></div>

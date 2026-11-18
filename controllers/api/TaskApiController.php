@@ -46,8 +46,263 @@ final class TaskApiController
                 )
             ");
             $db->exec("CREATE INDEX IF NOT EXISTS idx_subtask_task ON task_subtasks (task_id, position ASC, created_at ASC)");
+
+            $db->exec("
+                CREATE TABLE IF NOT EXISTS task_templates (
+                    id VARCHAR(64) PRIMARY KEY,
+                    title VARCHAR(160) NOT NULL,
+                    specialty_category VARCHAR(80) NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
+                    default_priority VARCHAR(16) NOT NULL DEFAULT 'medium',
+                    default_estimated_hours NUMERIC(6,2) NOT NULL DEFAULT 2.00,
+                    subtasks_json TEXT NOT NULL DEFAULT '[]',
+                    usage_count INTEGER NOT NULL DEFAULT 0,
+                    is_system BOOLEAN NOT NULL DEFAULT FALSE,
+                    created_by_id VARCHAR(64) DEFAULT NULL,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            ");
+            $db->exec("CREATE INDEX IF NOT EXISTS idx_task_tpl_category ON task_templates (specialty_category ASC, usage_count DESC)");
+
+            $tplCount = (int) $db->query('SELECT COUNT(*)::INTEGER FROM task_templates')->fetchColumn();
+            if ($tplCount === 0) {
+                $seeds = [
+                    [
+                        'id'       => 'tpl-seed-exec-inbox',
+                        'title'    => 'Executive Inbox & Calendar Triage',
+                        'category' => 'Executive Admin',
+                        'desc'     => 'Daily inbox prioritization, calendar conflict resolution, and executive briefing preparation.',
+                        'priority' => 'high',
+                        'hours'    => 2.0,
+                        'steps'    => [
+                            'Audit unread priority emails & flag VIP senders',
+                            'Confirm upcoming 48h calendar invites & buffers',
+                            'Prepare executive meeting briefing packet',
+                            'Send EOD inbox zero status summary',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-exec-meeting',
+                        'title'    => 'Leadership Meeting Prep & Minutes',
+                        'category' => 'Executive Admin',
+                        'desc'     => 'End-to-end agenda coordination, deck compilation, and post-meeting action item tracking.',
+                        'priority' => 'medium',
+                        'hours'    => 1.5,
+                        'steps'    => [
+                            'Collect department status decks & KPIs',
+                            'Compile timeboxed agenda & talking points',
+                            'Verify attendee list & video link access',
+                            'Distribute action-item minutes within 2h',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-smm-sprint',
+                        'title'    => 'Weekly Multi-Channel Content Sprint',
+                        'category' => 'Social Media Manager',
+                        'desc'     => 'Create, schedule, and QA a full weekly batch of social posts across primary client channels.',
+                        'priority' => 'high',
+                        'hours'    => 3.5,
+                        'steps'    => [
+                            'Draft post copy & hook variations',
+                            'Size & export branded visual creatives',
+                            'Schedule posts across LinkedIn, IG & X',
+                            'Tag UTM links & verify first-comment hashtags',
+                            'Log weekly engagement snapshot',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-smm-community',
+                        'title'    => 'Community Engagement & DM Audit',
+                        'category' => 'Social Media Manager',
+                        'desc'     => 'Daily comment moderation, inbound DM routing, and competitor trend monitoring.',
+                        'priority' => 'medium',
+                        'hours'    => 1.5,
+                        'steps'    => [
+                            'Respond to pending comments & mentions',
+                            'Escalate qualified sales/support DMs to CRM',
+                            'Audit competitor & niche trend signals',
+                            'Report top-performing posts & sentiment',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-data-hygiene',
+                        'title'    => 'CRM & Spreadsheet Hygiene Audit',
+                        'category' => 'Data Entry',
+                        'desc'     => 'Standardize, deduplicate, and validate bulk CRM contact and account records.',
+                        'priority' => 'medium',
+                        'hours'    => 2.5,
+                        'steps'    => [
+                            'Deduplicate contact & company rows',
+                            'Standardize phone, email & address formatting',
+                            'Validate missing required CRM fields',
+                            'Cross-check row counts & export clean CSV',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-data-invoice',
+                        'title'    => 'Invoice & Vendor Record Entry',
+                        'category' => 'Data Entry',
+                        'desc'     => 'Structured extraction and ledger entry of vendor bills and client invoice line items.',
+                        'priority' => 'high',
+                        'hours'    => 2.0,
+                        'steps'    => [
+                            'Extract line items from source PDFs',
+                            'Match vendor IDs & cost center codes',
+                            'Verify tax & subtotal calculations',
+                            'Mark batch ready for finance approval',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-dev-release',
+                        'title'    => 'Feature QA & Release Verification',
+                        'category' => 'Development',
+                        'desc'     => 'Pre-release lint, cross-viewport UI verification, and regression test sign-off.',
+                        'priority' => 'high',
+                        'hours'    => 3.0,
+                        'steps'    => [
+                            'Verify staging branch & lint checks',
+                            'Run regression QA pass on core flows',
+                            'Test responsive layout on mobile & desktop',
+                            'Update changelog & deployment notes',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-mkt-campaign',
+                        'title'    => 'Email Campaign Launch & QA',
+                        'category' => 'Marketing',
+                        'desc'     => 'Audience segmentation, copy proofing, link validation, and scheduled campaign dispatch.',
+                        'priority' => 'high',
+                        'hours'    => 2.5,
+                        'steps'    => [
+                            'Segment target audience & suppress unsubscribes',
+                            'Audit brand voice, subject line & preview text',
+                            'Verify merge tags & UTM tracking links',
+                            'Send test proof & schedule final dispatch',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-acc-recon',
+                        'title'    => 'Month-End Bookkeeping Reconciliation',
+                        'category' => 'Accounting',
+                        'desc'     => 'Reconcile bank feeds, categorize expenses, and prepare aging & P&L summaries.',
+                        'priority' => 'high',
+                        'hours'    => 3.5,
+                        'steps'    => [
+                            'Reconcile bank & credit card statements',
+                            'Categorize unreviewed ledger transactions',
+                            'Audit AP/AR aging & overdue invoices',
+                            'Export reconciled P&L variance summary',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-legal-contract',
+                        'title'    => 'Contract Intake & Redline Review',
+                        'category' => 'Legal',
+                        'desc'     => 'Verify contract entities, clauses, and signature readiness before legal archive.',
+                        'priority' => 'urgent',
+                        'hours'    => 2.0,
+                        'steps'    => [
+                            'Verify legal entity names, dates & jurisdiction',
+                            'Cross-check indemnity & renewal clause terms',
+                            'Prepare redline summary for counsel sign-off',
+                            'Archive executed PDF in compliance folder',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-hc-intake',
+                        'title'    => 'Patient Intake & Eligibility Check',
+                        'category' => 'Healthcare',
+                        'desc'     => 'HIPAA-compliant patient verification, insurance check, and EHR record preparation.',
+                        'priority' => 'high',
+                        'hours'    => 1.5,
+                        'steps'    => [
+                            'Verify HIPAA consent & patient demographics',
+                            'Confirm active insurance coverage & copay',
+                            'Flag prior-authorization requirements',
+                            'Log verified intake status in EHR',
+                        ],
+                    ],
+                    [
+                        'id'       => 'tpl-seed-ins-coi',
+                        'title'    => 'Policy Renewal & COI Issuance',
+                        'category' => 'Insurance',
+                        'desc'     => 'Audit expiring carrier policies, gather loss runs, and issue client certificates.',
+                        'priority' => 'medium',
+                        'hours'    => 2.0,
+                        'steps'    => [
+                            'Audit expiring policy limits & coverage',
+                            'Request updated loss runs from carrier portal',
+                            'Prepare renewal quote comparison sheet',
+                            'Send COI & renewal confirmation to client',
+                        ],
+                    ],
+                ];
+
+                $insTpl = $db->prepare("
+                    INSERT INTO task_templates (id, title, specialty_category, description, default_priority, default_estimated_hours, subtasks_json, usage_count, is_system)
+                    VALUES (:id, :title, :cat, :desc, :prio, :hrs, :steps, 0, TRUE)
+                    ON CONFLICT (id) DO NOTHING
+                ");
+                foreach ($seeds as $sd) {
+                    $insTpl->execute([
+                        ':id'    => $sd['id'],
+                        ':title' => $sd['title'],
+                        ':cat'   => $sd['category'],
+                        ':desc'  => $sd['desc'],
+                        ':prio'  => $sd['priority'],
+                        ':hrs'   => $sd['hours'],
+                        ':steps' => json_encode($sd['steps'], JSON_UNESCAPED_UNICODE),
+                    ]);
+                }
+            }
         } catch (Throwable) {
             // Constraints already aligned or restricted
+        }
+    }
+
+    public static function listTaskTemplates(PDO $db, ?string $category = null): array
+    {
+        self::ensureTaskSchemaConstraints($db);
+        try {
+            if ($category !== null && trim($category) !== '' && strtolower(trim($category)) !== 'all') {
+                $stmt = $db->prepare("
+                    SELECT t.id, t.title, t.specialty_category, t.description, t.default_priority,
+                           t.default_estimated_hours, t.subtasks_json, t.usage_count, t.is_system,
+                           t.created_by_id, COALESCE(u.name, 'Workly Standard') AS created_by_name,
+                           t.created_at
+                    FROM task_templates t
+                    LEFT JOIN users u ON t.created_by_id = u.id
+                    WHERE LOWER(t.specialty_category) = LOWER(:cat)
+                    ORDER BY t.usage_count DESC, t.is_system DESC, t.title ASC
+                ");
+                $stmt->execute([':cat' => trim($category)]);
+            } else {
+                $stmt = $db->query("
+                    SELECT t.id, t.title, t.specialty_category, t.description, t.default_priority,
+                           t.default_estimated_hours, t.subtasks_json, t.usage_count, t.is_system,
+                           t.created_by_id, COALESCE(u.name, 'Workly Standard') AS created_by_name,
+                           t.created_at
+                    FROM task_templates t
+                    LEFT JOIN users u ON t.created_by_id = u.id
+                    ORDER BY t.specialty_category ASC, t.usage_count DESC, t.title ASC
+                ");
+            }
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            foreach ($rows as &$r) {
+                $decoded = json_decode((string) ($r['subtasks_json'] ?? '[]'), true);
+                $r['subtasks'] = is_array($decoded)
+                    ? array_values(array_filter(array_map(static fn($s): string => trim((string) $s), $decoded), static fn(string $s): bool => $s !== ''))
+                    : [];
+                $r['default_estimated_hours'] = round((float) ($r['default_estimated_hours'] ?? 2.0), 2);
+                $r['usage_count'] = (int) ($r['usage_count'] ?? 0);
+                $r['is_system'] = filter_var($r['is_system'] ?? false, FILTER_VALIDATE_BOOLEAN);
+                unset($r['subtasks_json']);
+            }
+            unset($r);
+            return $rows;
+        } catch (Throwable) {
+            return [];
         }
     }
 
@@ -181,12 +436,32 @@ final class TaskApiController
         $sub = $parts[4] ?? null;
         $subId = $parts[5] ?? null;
 
+        // /api/v1/tasks/templates/{templateId}
+        if ($taskId === 'templates') {
+            if ($method === 'GET' && !$sub) {
+                $this->listTemplates();
+                return;
+            }
+            if ($method === 'POST' && !$sub) {
+                $this->createTemplate($user);
+                return;
+            }
+            if ($method === 'DELETE' && $sub) {
+                $this->deleteTemplate($sub, $user);
+                return;
+            }
+        }
+
         if ($method === 'GET' && !$taskId) {
             $this->listTasks($user);
             return;
         }
         if ($method === 'GET' && $taskId && $sub === 'activity') {
             $this->getActivity($taskId, $user);
+            return;
+        }
+        if ($method === 'POST' && $taskId && $sub === 'inject-template') {
+            $this->injectTemplateIntoTask($taskId, $user);
             return;
         }
         if ($taskId && $sub === 'subtasks') {
@@ -922,6 +1197,189 @@ final class TaskApiController
             'success'  => true,
             'id'       => $subtaskId,
             'subtasks' => $subtasks,
+        ]);
+    }
+
+    private function listTemplates(): void
+    {
+        $cat = isset($_GET['category']) ? SecurityHelper::sanitizePlainText((string) $_GET['category'], 80) : null;
+        echo json_encode([
+            'success'   => true,
+            'templates' => self::listTaskTemplates($this->db, $cat),
+        ]);
+    }
+
+    private function createTemplate(array $user): void
+    {
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $title = SecurityHelper::sanitizePlainText((string) ($input['title'] ?? ''), 160);
+        $category = SecurityHelper::sanitizePlainText((string) ($input['specialty_category'] ?? ''), 80);
+        $description = SecurityHelper::sanitizePlainText((string) ($input['description'] ?? ''), 1000);
+        $priority = strtolower(SecurityHelper::sanitizePlainText((string) ($input['default_priority'] ?? 'medium'), 16));
+        if (!in_array($priority, self::VALID_PRIORITIES, true)) {
+            $priority = 'medium';
+        }
+        $estHours = max(0.5, min(100.0, (float) ($input['default_estimated_hours'] ?? 2.0)));
+
+        $rawSteps = $input['subtasks'] ?? [];
+        if (is_string($rawSteps)) {
+            $rawSteps = preg_split('/\r?\n/', $rawSteps) ?: [];
+        }
+        $steps = [];
+        $seen = [];
+        if (is_array($rawSteps)) {
+            foreach ($rawSteps as $st) {
+                $clean = SecurityHelper::sanitizePlainText((string) $st, 255);
+                $low = mb_strtolower($clean, 'UTF-8');
+                if ($clean !== '' && !isset($seen[$low])) {
+                    $seen[$low] = true;
+                    $steps[] = $clean;
+                }
+            }
+        }
+
+        if ($title === '' || $category === '' || empty($steps)) {
+            http_response_code(422);
+            echo json_encode(['error' => 'Template title, VA specialization category, and at least one checklist step are required']);
+            return;
+        }
+
+        $id = 'tpl-' . bin2hex(random_bytes(5));
+        $stmt = $this->db->prepare("
+            INSERT INTO task_templates (id, title, specialty_category, description, default_priority, default_estimated_hours, subtasks_json, usage_count, is_system, created_by_id)
+            VALUES (:id, :title, :cat, :desc, :prio, :hrs, :steps, 0, FALSE, :cid)
+        ");
+        $stmt->execute([
+            ':id'    => $id,
+            ':title' => $title,
+            ':cat'   => $category,
+            ':desc'  => $description,
+            ':prio'  => $priority,
+            ':hrs'   => $estHours,
+            ':steps' => json_encode($steps, JSON_UNESCAPED_UNICODE),
+            ':cid'   => $user['id'],
+        ]);
+
+        $this->invalidate();
+        AuditLogger::log('TASK_TEMPLATE_CREATED', 'success', "Created reusable task template '{$title}' ({$category})", $user['id'], $user['role'], $this->db);
+        http_response_code(201);
+        echo json_encode([
+            'success'   => true,
+            'id'        => $id,
+            'templates' => self::listTaskTemplates($this->db),
+        ]);
+    }
+
+    private function deleteTemplate(string $templateId, array $user): void
+    {
+        $tid = SecurityHelper::sanitizePlainText($templateId, 64);
+        $chk = $this->db->prepare('SELECT id, title, created_by_id, is_system FROM task_templates WHERE id = :id LIMIT 1');
+        $chk->execute([':id' => $tid]);
+        $tpl = $chk->fetch(PDO::FETCH_ASSOC);
+        if (!$tpl) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Task template not found']);
+            return;
+        }
+
+        $isOwner = (string) ($tpl['created_by_id'] ?? '') === (string) $user['id'];
+        if (!in_array($user['role'], ['admin', 'team_leader'], true) && !$isOwner) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Insufficient permissions to delete this template']);
+            return;
+        }
+
+        $del = $this->db->prepare('DELETE FROM task_templates WHERE id = :id');
+        $del->execute([':id' => $tid]);
+
+        $this->invalidate();
+        AuditLogger::log('TASK_TEMPLATE_DELETED', 'warning', "Deleted task template {$tid}", $user['id'], $user['role'], $this->db);
+        echo json_encode([
+            'success'   => true,
+            'id'        => $tid,
+            'templates' => self::listTaskTemplates($this->db),
+        ]);
+    }
+
+    private function injectTemplateIntoTask(string $taskId, array $user): void
+    {
+        $this->assertTaskAccess($taskId, $user, 'update');
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $templateId = SecurityHelper::sanitizePlainText((string) ($input['template_id'] ?? ''), 64);
+        if ($templateId === '') {
+            http_response_code(422);
+            echo json_encode(['error' => 'Template ID is required']);
+            return;
+        }
+
+        $tStmt = $this->db->prepare('SELECT id, title, specialty_category, subtasks_json FROM task_templates WHERE id = :id LIMIT 1');
+        $tStmt->execute([':id' => $templateId]);
+        $tpl = $tStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$tpl) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Task template not found']);
+            return;
+        }
+
+        $tplSteps = json_decode((string) ($tpl['subtasks_json'] ?? '[]'), true);
+        if (!is_array($tplSteps) || empty($tplSteps)) {
+            http_response_code(422);
+            echo json_encode(['error' => 'Selected template contains no checklist steps']);
+            return;
+        }
+
+        $existingSubtasks = $this->fetchSubtasksForTask($taskId);
+        $existingMap = [];
+        $maxPos = -1;
+        foreach ($existingSubtasks as $es) {
+            $existingMap[mb_strtolower(trim((string) $es['title']), 'UTF-8')] = true;
+            $maxPos = max($maxPos, (int) ($es['position'] ?? 0));
+        }
+
+        $insStmt = $this->db->prepare("
+            INSERT INTO task_subtasks (id, task_id, title, is_completed, position, created_by_id)
+            VALUES (:id, :tid, :title, FALSE, :pos, :cid)
+        ");
+        $addedCount = 0;
+        foreach ($tplSteps as $step) {
+            $clean = SecurityHelper::sanitizePlainText((string) $step, 255);
+            $low = mb_strtolower($clean, 'UTF-8');
+            if ($clean === '' || isset($existingMap[$low])) {
+                continue;
+            }
+            $existingMap[$low] = true;
+            $maxPos++;
+            $insStmt->execute([
+                ':id'    => 'sub-' . bin2hex(random_bytes(5)),
+                ':tid'   => $taskId,
+                ':title' => $clean,
+                ':pos'   => $maxPos,
+                ':cid'   => $user['id'],
+            ]);
+            $addedCount++;
+        }
+
+        $this->db->prepare('UPDATE task_templates SET usage_count = usage_count + 1, updated_at = NOW() WHERE id = :id')
+            ->execute([':id' => $templateId]);
+
+        $this->invalidate();
+        $subtasks = $this->fetchSubtasksForTask($taskId);
+        AuditLogger::log(
+            'TASK_TEMPLATE_INJECTED',
+            'success',
+            "Injected template '{$tpl['title']}' ({$addedCount} new steps) into task {$taskId}",
+            $user['id'],
+            $user['role'],
+            $this->db
+        );
+
+        echo json_encode([
+            'success'       => true,
+            'task_id'       => $taskId,
+            'template_id'   => $templateId,
+            'template_name' => (string) $tpl['title'],
+            'added_count'   => $addedCount,
+            'subtasks'      => $subtasks,
         ]);
     }
 }
