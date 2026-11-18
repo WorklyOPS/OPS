@@ -48,7 +48,7 @@ foreach ($docs as $d) {
       <?php
         $plainSearch = $doc['title'] . ' ' . $doc['category'] . ' ' . ($doc['client_name'] ?? 'Global') . ' ' . strip_tags((string) $doc['content']);
       ?>
-      <article class="card card-hover kb-doc-card"
+      <article class="card-k card-hover kb-doc-card"
                data-kb-cat="<?= SecurityHelper::e($doc['category']) ?>"
                data-kb-search="<?= SecurityHelper::e($plainSearch) ?>">
       <div class="section-art-one">
@@ -78,7 +78,7 @@ foreach ($docs as $d) {
           </div>
           <div class="kb-rich-fade"></div>
         </div>
-
+      </div>
       <div class="section-art-two">
         <button type="button" class="btn btn-secondary btn-sm kb-expand-btn no-print" data-kb-expand style="margin-bottom:12px;">View More</button>
 
@@ -98,7 +98,7 @@ foreach ($docs as $d) {
                     data-action-method="DELETE">Remove Document</button>
           <?php endif; ?>
         </div>
-        </div>
+      </div>
       </article>
     <?php endforeach; ?>
   </div>
