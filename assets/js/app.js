@@ -84,6 +84,7 @@
     initCookieBanner();
     initMobileDrawer();
     initHeaderPopovers();
+    initGlobalRealtimeNotifications();
     initDrawersAndModals();
     initTabs();
     initCommandPalette();
@@ -459,16 +460,25 @@
           markReadBtn.disabled = true;
           await apiFetch('/api/v1/notifications/read', { method: 'PATCH' });
           const badge = document.getElementById('notif-badge-count');
-          if (badge) badge.remove();
+          if (badge) {
+            badge.textContent = '0';
+            badge.classList.add('is-hidden');
+          }
+          const sideEmailBadge = document.getElementById('sidebar-email-unread-badge');
+          if (sideEmailBadge) {
+            sideEmailBadge.textContent = '0';
+            sideEmailBadge.classList.add('is-hidden');
+          }
           document.querySelectorAll('#notif-popover .notif-item.is-unread').forEach((item) => {
             item.classList.remove('is-unread');
           });
-          const sub = notifPop ? notifPop.querySelector('.popover-head .muted') : null;
+          const sub = document.getElementById('notif-unread-subtitle') || (notifPop ? notifPop.querySelector('.popover-head .muted') : null);
           if (sub) sub.textContent = '0 unread alert(s)';
           markReadBtn.classList.add('is-hidden');
           showToast('All notifications marked read', 'success');
         } catch (err) {
           showToast(err.message, 'error');
+        } finally {
           markReadBtn.disabled = false;
         }
       });
@@ -476,6 +486,171 @@
 
     document.addEventListener('click', () => {
       closeHeaderPopovers();
+    });
+  }
+
+  function renderHeaderNotifications(items, unreadCount) {
+    const badge = document.getElementById('notif-badge-count');
+    const sub = document.getElementById('notif-unread-subtitle');
+    const markBtn = document.getElementById('btn-mark-notifs-read');
+    const list = document.getElementById('notif-popover-list');
+
+    const count = Math.max(0, Number(unreadCount || 0));
+    if (badge) {
+      badge.textContent = String(Math.min(99, count));
+      badge.classList.toggle('is-hidden', count <= 0);
+    }
+    if (sub) {
+      sub.textContent = count + ' unread alert(s)';
+    }
+    if (markBtn) {
+      markBtn.classList.toggle('is-hidden', count <= 0);
+    }
+    if (!list || !Array.isArray(items)) return;
+
+    list.replaceChildren();
+    if (!items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'muted';
+      empty.style.padding = '20px 14px';
+      empty.style.textAlign = 'center';
+      empty.textContent = 'You’re all caught up — no recent alerts.';
+      list.appendChild(empty);
+      return;
+    }
+
+    const catMap = {
+      message: ['Mail', 'badge-info'],
+      pto: ['PTO', 'badge-warn'],
+      comment: ['Task', 'badge-brand'],
+      perk: ['Reward', 'badge-success']
+    };
+
+    items.forEach((nf) => {
+      const a = document.createElement('a');
+      a.href = nf.href || '/';
+      a.className = 'notif-item' + (nf.unread ? ' is-unread' : '');
+
+      const head = document.createElement('div');
+      head.style.display = 'flex';
+      head.style.justifyContent = 'space-between';
+      head.style.alignItems = 'center';
+      head.style.gap = '6px';
+      head.style.marginBottom = '3px';
+
+      const meta = catMap[nf.category] || ['Alert', 'badge-neutral'];
+      const bSpan = document.createElement('span');
+      bSpan.className = 'badge ' + meta[1];
+      bSpan.textContent = meta[0];
+
+      const tSpan = document.createElement('span');
+      tSpan.className = 'muted mono';
+      tSpan.style.fontSize = '10.5px';
+      tSpan.textContent = String(nf.created_at || '').slice(0, 16);
+
+      head.append(bSpan, tSpan);
+
+      const titleEl = document.createElement('strong');
+      titleEl.style.fontSize = '12.5px';
+      titleEl.style.display = 'block';
+      titleEl.style.color = 'var(--ink)';
+      titleEl.textContent = nf.title || 'Alert';
+
+      a.append(head, titleEl);
+
+      if (nf.subtitle) {
+        const subEl = document.createElement('div');
+        subEl.className = 'muted';
+        subEl.style.fontSize = '11.5px';
+        subEl.style.marginTop = '2px';
+        subEl.style.overflow = 'hidden';
+        subEl.style.textOverflow = 'ellipsis';
+        subEl.style.whiteSpace = 'nowrap';
+        subEl.textContent = nf.subtitle;
+        a.appendChild(subEl);
+      }
+
+      list.appendChild(a);
+    });
+  }
+
+  async function refreshHeaderNotifications() {
+    if (!document.getElementById('notif-popover-list')) return;
+    try {
+      const res = await fetch('/api/v1/notifications', {
+        credentials: 'same-origin',
+        headers: { 'Accept': 'application/json' }
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data && Array.isArray(data.data)) {
+        renderHeaderNotifications(data.data, data.unread_count);
+      }
+    } catch (e) {
+      // Silent background refresh
+    }
+  }
+  window.worklyRefreshHeaderNotifications = refreshHeaderNotifications;
+
+  function initGlobalRealtimeNotifications() {
+    // Only run on authenticated workspace pages (skip login/setup)
+    if (!document.getElementById('notif-popover-list')) return;
+    const notifiedEmailIds = new Set();
+
+    async function pollBackgroundEmailAndNotifications() {
+      if (document.hidden) return;
+      const isEmailPage = Boolean(document.getElementById('gmail-hub-bootstrap'));
+
+      if (!isEmailPage) {
+        try {
+          const emailRes = await fetch('/api/v1/email/live?sync=1&summary_only=1', {
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' }
+          });
+          if (emailRes.ok) {
+            const payload = await emailRes.json();
+            const sideBadge = document.getElementById('sidebar-email-unread-badge');
+            const unread = Math.max(0, Number(payload.unread_count || 0));
+            if (sideBadge) {
+              sideBadge.textContent = String(unread);
+              sideBadge.classList.toggle('is-hidden', unread <= 0);
+            }
+            if (Array.isArray(payload.new_messages) && payload.new_messages.length) {
+              const fresh = payload.new_messages.filter((m) => m && m.id && !notifiedEmailIds.has(m.id));
+              if (fresh.length) {
+                fresh.forEach((m) => notifiedEmailIds.add(m.id));
+                const latest = fresh[0];
+                const toastMsg = fresh.length === 1
+                  ? ('New email from ' + (latest.sender_name || latest.sender_email) + ': ' + (latest.subject || '(No Subject)'))
+                  : (fresh.length + ' new Gmail emails received');
+                const existing = document.querySelector('.toast');
+                if (existing) existing.remove();
+                const toast = document.createElement('div');
+                toast.className = 'toast success is-clickable';
+                toast.textContent = toastMsg;
+                toast.addEventListener('click', () => {
+                  window.location.href = latest.thread_id
+                    ? '/email?thread=' + encodeURIComponent(latest.thread_id)
+                    : '/email';
+                });
+                document.body.appendChild(toast);
+                window.setTimeout(() => { if (toast.parentElement) toast.remove(); }, 5500);
+              }
+            }
+          }
+        } catch (e) {
+          // Silent retry on next cycle
+        }
+      }
+
+      await refreshHeaderNotifications();
+    }
+
+    window.setInterval(pollBackgroundEmailAndNotifications, 18000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        pollBackgroundEmailAndNotifications();
+      }
     });
   }
 
@@ -805,12 +980,7 @@
 
   function formatShortTs(ts) {
     if (!ts) return '';
-    return String(ts).replace('T', ' ').slice(0, 10);
-  }
-
-  function formatTime(ts) {
-      if (!ts) return '';
-      return String(ts).replace('T', ' ').slice(11, 16);
+    return String(ts).replace('T', ' ').slice(0, 16);
   }
 
   function saveTaskDataset(allData) {
@@ -1173,26 +1343,13 @@
         });
       });
       merged.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
-      
-      let previousDay = '';
 
       if (merged.length === 0) {
         combinedList.innerHTML = '<div class="collab-empty">No notes or comments on this deliverable yet.</div>';
       } else {
         merged.forEach((item) => {
-          const currentDay = String(item.created_at || '').slice(0, 10);
           const el = document.createElement('article');
           const rolePretty = String(item.author_role || 'va').replace('_', ' ');
-
-          if (currentDay && currentDay !== previousDay) {
-            const separator = document.createElement('div');
-            separator.className = 'collab-day-separator';
-            separator.textContent = formatShortTs(item.created_at);
-
-            combinedList.appendChild(separator);
-            previousDay = currentDay;
-          }
-
           if (item.kind === 'note') {
             el.className = 'collab-note-item';
             el.innerHTML =
@@ -1206,6 +1363,7 @@
                   '</div>' +
                   '<div class="collab-entry-actions">' +
                     buildCollabActionBtn('Reply', 'reply', 'data-author-name', item.author_name) +
+                    buildCollabActionBtn('Copy', 'copy', 'data-copy-text', item.text) +
                   '</div>' +
                 '</div>' +
                 '<p class="collab-entry-text">' + formatTextWithMentionsHtml(item.text, taskId, allData) + '</p>' +
@@ -1222,10 +1380,11 @@
                     '<span class="muted collab-role-sep">·</span>' +
                     '<span class="muted" style="font-size:11.5px;text-transform:capitalize;">' + escapeHtml(rolePretty) + '</span>' +
                     '<span class="muted collab-role-sep">·</span>' +
-                    '<span class="muted mono collab-entry-ts">' + escapeHtml(formatTime(item.created_at)) + '</span>' +
+                    '<span class="muted mono collab-entry-ts">' + escapeHtml(formatShortTs(item.created_at)) + '</span>' +
                   '</div>' +
                   '<div class="collab-entry-actions">' +
                     buildCollabActionBtn('Reply', 'reply', 'data-author-name', item.author_name) +
+                    buildCollabActionBtn('Copy', 'copy', 'data-copy-text', item.text) +
                   '</div>' +
                 '</div>' +
                 '<p class="collab-entry-text">' + formatTextWithMentionsHtml(item.text, taskId, allData) + '</p>' +
@@ -1285,10 +1444,11 @@
                   '<span class="muted collab-role-sep">·</span>' +
                   '<span class="muted" style="font-size:11.5px;text-transform:capitalize;">' + escapeHtml(rolePretty) + '</span>' +
                   '<span class="muted collab-role-sep">·</span>' +
-                  '<span class="muted mono collab-entry-ts">' + escapeHtml(formatTime(c.created_at)) + '</span>' +
+                  '<span class="muted mono collab-entry-ts">' + escapeHtml(formatShortTs(c.created_at)) + '</span>' +
                 '</div>' +
                 '<div class="collab-entry-actions">' +
                   buildCollabActionBtn('Reply', 'reply', 'data-author-name', c.author_name) +
+                  buildCollabActionBtn('Copy', 'copy', 'data-copy-text', c.message) +
                 '</div>' +
               '</div>' +
               '<p class="collab-entry-text">' + formatTextWithMentionsHtml(c.message, taskId, allData) + '</p>' +

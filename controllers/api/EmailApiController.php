@@ -41,6 +41,14 @@ final class EmailApiController
             $this->mailboxStatus($user);
             return;
         }
+        if ($method === 'GET' && $sub === 'live') {
+            $this->liveState($user);
+            return;
+        }
+        if ($method === 'PATCH' && $sub === 'threads' && $arg !== '' && ($parts[5] ?? '') === 'read') {
+            $this->setThreadReadState($arg, $user);
+            return;
+        }
         if ($method === 'POST' && $sub === 'disconnect') {
             $this->disconnectMailbox($user);
             return;
@@ -76,6 +84,8 @@ final class EmailApiController
         try {
             $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS gmail_message_id VARCHAR(128) DEFAULT NULL');
             $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS snippet TEXT DEFAULT NULL');
+            $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS body_html TEXT DEFAULT NULL');
+            $this->db->exec("ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS body_format VARCHAR(16) DEFAULT 'plain'");
             $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS access_token_encrypted TEXT DEFAULT NULL');
             $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT DEFAULT NULL');
             $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ DEFAULT NULL');
@@ -90,9 +100,13 @@ final class EmailApiController
                     size_bytes INTEGER NOT NULL DEFAULT 0,
                     data_base64 TEXT DEFAULT NULL,
                     gmail_attachment_id VARCHAR(255) DEFAULT NULL,
+                    content_id VARCHAR(255) DEFAULT NULL,
+                    is_inline BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             ");
+            $this->db->exec('ALTER TABLE email_attachments ADD COLUMN IF NOT EXISTS content_id VARCHAR(255) DEFAULT NULL');
+            $this->db->exec('ALTER TABLE email_attachments ADD COLUMN IF NOT EXISTS is_inline BOOLEAN NOT NULL DEFAULT FALSE');
         } catch (Throwable) {
         }
     }
@@ -363,11 +377,12 @@ final class EmailApiController
         return $files;
     }
 
-    private function buildRawMime(string $fromEmail, string $fromName, string $to, string $cc, string $subject, string $body, array $attachments): string
+    private function buildRawMime(string $fromEmail, string $fromName, string $to, string $cc, string $subject, string $bodyPlain, array $attachments, string $bodyHtml = ''): string
     {
         $safeSubj = '=?UTF-8?B?' . base64_encode($subject) . '?=';
+        $safeFromName = str_replace(["\r", "\n", '"'], '', $fromName);
         $headers = [
-            "From: {$fromName} <{$fromEmail}>",
+            "From: \"{$safeFromName}\" <{$fromEmail}>",
             "To: {$to}",
         ];
         if ($cc !== '') {
@@ -376,21 +391,45 @@ final class EmailApiController
         $headers[] = "Subject: {$safeSubj}";
         $headers[] = "MIME-Version: 1.0";
 
-        if (empty($attachments)) {
+        $hasHtml = trim($bodyHtml) !== '';
+        $htmlWrapped = $hasHtml
+            ? '<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#1f2937;">' . $bodyHtml . '</body></html>'
+            : '';
+
+        if (empty($attachments) && !$hasHtml) {
             $headers[] = "Content-Type: text/plain; charset=UTF-8";
-            $headers[] = "Content-Transfer-Encoding: 8bit";
-            $raw = implode("\r\n", $headers) . "\r\n\r\n" . $body;
+            $headers[] = "Content-Transfer-Encoding: base64";
+            $raw = implode("\r\n", $headers) . "\r\n\r\n" . chunk_split(base64_encode($bodyPlain));
+        } elseif (empty($attachments) && $hasHtml) {
+            $altBoundary = 'wrk_alt_' . bin2hex(random_bytes(9));
+            $headers[] = "Content-Type: multipart/alternative; boundary=\"{$altBoundary}\"";
+            $altParts = [
+                "--{$altBoundary}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($bodyPlain)),
+                "--{$altBoundary}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($htmlWrapped)),
+                "--{$altBoundary}--",
+            ];
+            $raw = implode("\r\n", $headers) . "\r\n\r\n" . implode("\r\n", $altParts);
         } else {
-            $boundary = 'wrk_' . bin2hex(random_bytes(10));
-            $headers[] = "Content-Type: multipart/mixed; boundary=\"{$boundary}\"";
+            $mixBoundary = 'wrk_mix_' . bin2hex(random_bytes(9));
+            $headers[] = "Content-Type: multipart/mixed; boundary=\"{$mixBoundary}\"";
             $parts = [];
-            $parts[] = "--{$boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n{$body}";
+            if ($hasHtml) {
+                $altBoundary = 'wrk_alt_' . bin2hex(random_bytes(9));
+                $altBody = implode("\r\n", [
+                    "--{$altBoundary}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($bodyPlain)),
+                    "--{$altBoundary}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($htmlWrapped)),
+                    "--{$altBoundary}--",
+                ]);
+                $parts[] = "--{$mixBoundary}\r\nContent-Type: multipart/alternative; boundary=\"{$altBoundary}\"\r\n\r\n{$altBody}";
+            } else {
+                $parts[] = "--{$mixBoundary}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($bodyPlain));
+            }
             foreach ($attachments as $att) {
                 $b64 = chunk_split(base64_encode($att['bytes']));
                 $fname = str_replace('"', '', $att['name']);
-                $parts[] = "--{$boundary}\r\nContent-Type: {$att['mime']}; name=\"{$fname}\"\r\nContent-Disposition: attachment; filename=\"{$fname}\"\r\nContent-Transfer-Encoding: base64\r\n\r\n{$b64}";
+                $parts[] = "--{$mixBoundary}\r\nContent-Type: {$att['mime']}; name=\"{$fname}\"\r\nContent-Disposition: attachment; filename=\"{$fname}\"\r\nContent-Transfer-Encoding: base64\r\n\r\n{$b64}";
             }
-            $parts[] = "--{$boundary}--";
+            $parts[] = "--{$mixBoundary}--";
             $raw = implode("\r\n", $headers) . "\r\n\r\n" . implode("\r\n", $parts);
         }
 
@@ -436,7 +475,11 @@ final class EmailApiController
         $recipient = filter_var($input['recipient_email'] ?? '', FILTER_VALIDATE_EMAIL) ?: '';
         $cc = SecurityHelper::sanitizePlainText($input['cc_email'] ?? '', 191);
         $subject = SecurityHelper::sanitizePlainText($input['subject'] ?? 'Conversation Thread', 255);
-        $body = SecurityHelper::sanitizePlainText($input['body'] ?? '', 8000);
+        $bodyHtml = SecurityHelper::sanitizeEmailHtml((string) ($input['body_html'] ?? ''), 150000);
+        $body = SecurityHelper::sanitizePlainText($input['body'] ?? '', 16000);
+        if ($body === '' && $bodyHtml !== '') {
+            $body = SecurityHelper::htmlToPlainText($bodyHtml, 16000);
+        }
         $clientRef = SecurityHelper::sanitizePlainText($input['client_ref_id'] ?? '', 64) ?: null;
 
         if ($threadId === '' || $recipient === '' || $body === '') {
@@ -455,7 +498,6 @@ final class EmailApiController
             $subject = 'Re: ' . $subject;
         }
 
-        // Send via Gmail API when active OAuth token is provided
         $gmailSentId = null;
         $token = $this->getGoogleAccessToken($user);
         $senderEmail = (string) $user['email'];
@@ -467,7 +509,7 @@ final class EmailApiController
         }
 
         if ($token !== '') {
-            $rawMime = $this->buildRawMime($senderEmail, (string) $user['name'], $recipient, $cc, $subject, $body, $attachments);
+            $rawMime = $this->buildRawMime($senderEmail, (string) $user['name'], $recipient, $cc, $subject, $body, $attachments, $bodyHtml);
             $gResp = $this->gmailRequest('POST', '/messages/send', $token, [
                 'raw'      => $rawMime,
                 'threadId' => str_starts_with($threadId, 'th-') ? null : $threadId,
@@ -478,9 +520,10 @@ final class EmailApiController
         }
 
         $id = 'msg-' . bin2hex(random_bytes(5));
+        $bodyFormat = $bodyHtml !== '' ? 'html' : 'plain';
         $stmt = $this->db->prepare("
-            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, snippet, gmail_message_id, folder, is_read, client_ref_id)
-            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :snip, :gid, 'sent', TRUE, :cid)
+            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id)
+            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, 'sent', TRUE, :cid)
         ");
         $stmt->execute([
             ':id'      => $id,
@@ -491,6 +534,8 @@ final class EmailApiController
             ':cc'      => $cc !== '' ? $cc : null,
             ':subject' => $subject,
             ':body'    => $body,
+            ':bhtml'   => $bodyHtml !== '' ? $bodyHtml : null,
+            ':bfmt'    => $bodyFormat,
             ':snip'    => mb_substr($body, 0, 140, 'UTF-8'),
             ':gid'     => $gmailSentId,
             ':cid'     => $clientRef,
@@ -510,7 +555,11 @@ final class EmailApiController
         $recipient = filter_var($input['recipient_email'] ?? '', FILTER_VALIDATE_EMAIL) ?: '';
         $cc = SecurityHelper::sanitizePlainText($input['cc_email'] ?? '', 191);
         $subject = SecurityHelper::sanitizePlainText($input['subject'] ?? '', 255);
-        $body = SecurityHelper::sanitizePlainText($input['body'] ?? '', 8000);
+        $bodyHtml = SecurityHelper::sanitizeEmailHtml((string) ($input['body_html'] ?? ''), 150000);
+        $body = SecurityHelper::sanitizePlainText($input['body'] ?? '', 16000);
+        if ($body === '' && $bodyHtml !== '') {
+            $body = SecurityHelper::htmlToPlainText($bodyHtml, 16000);
+        }
         $clientRef = SecurityHelper::sanitizePlainText($input['client_ref_id'] ?? '', 64) ?: null;
 
         if ($recipient === '' || $subject === '' || $body === '') {
@@ -538,7 +587,7 @@ final class EmailApiController
         }
 
         if ($token !== '') {
-            $rawMime = $this->buildRawMime($senderEmail, (string) $user['name'], $recipient, $cc, $subject, $body, $attachments);
+            $rawMime = $this->buildRawMime($senderEmail, (string) $user['name'], $recipient, $cc, $subject, $body, $attachments, $bodyHtml);
             $gResp = $this->gmailRequest('POST', '/messages/send', $token, ['raw' => $rawMime]);
             if ($gResp && !empty($gResp['id'])) {
                 $gmailSentId = (string) $gResp['id'];
@@ -549,9 +598,10 @@ final class EmailApiController
         }
 
         $id = 'msg-' . bin2hex(random_bytes(5));
+        $bodyFormat = $bodyHtml !== '' ? 'html' : 'plain';
         $stmt = $this->db->prepare("
-            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, snippet, gmail_message_id, folder, is_read, client_ref_id)
-            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :snip, :gid, 'sent', TRUE, :cid)
+            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id)
+            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, 'sent', TRUE, :cid)
         ");
         $stmt->execute([
             ':id'      => $id,
@@ -562,6 +612,8 @@ final class EmailApiController
             ':cc'      => $cc !== '' ? $cc : null,
             ':subject' => $subject,
             ':body'    => $body,
+            ':bhtml'   => $bodyHtml !== '' ? $bodyHtml : null,
+            ':bfmt'    => $bodyFormat,
             ':snip'    => mb_substr($body, 0, 140, 'UTF-8'),
             ':gid'     => $gmailSentId,
             ':cid'     => $clientRef,
@@ -621,164 +673,586 @@ final class EmailApiController
         return is_string($raw) ? $raw : '';
     }
 
-    private function extractGmailParts(array $payload, string &$plainBody, array &$attachments): void
+    private function extractPartHeaders(array $payload): array
     {
-        $mime = (string) ($payload['mimeType'] ?? '');
-        $filename = (string) ($payload['filename'] ?? '');
+        $map = [];
+        foreach (($payload['headers'] ?? []) as $h) {
+            $name = strtolower(trim((string) ($h['name'] ?? '')));
+            if ($name !== '') {
+                $map[$name] = trim((string) ($h['value'] ?? ''));
+            }
+        }
+        return $map;
+    }
+
+    private function decodeGmailBodyText(string $encoded, array $headers): string
+    {
+        $raw = $this->decodeBase64Url($encoded);
+        if ($raw === '') {
+            return '';
+        }
+        $encoding = strtolower($headers['content-transfer-encoding'] ?? '');
+        if (str_contains($encoding, 'quoted-printable')) {
+            $raw = quoted_printable_decode($raw);
+        }
+        $ctype = $headers['content-type'] ?? '';
+        if (preg_match('/charset\s*=\s*"?([a-zA-Z0-9._-]+)"?/i', $ctype, $cm)) {
+            $charset = strtoupper($cm[1]);
+            if ($charset !== 'UTF-8' && $charset !== 'UTF8' && function_exists('mb_convert_encoding')) {
+                $converted = @mb_convert_encoding($raw, 'UTF-8', $charset);
+                if (is_string($converted) && $converted !== '') {
+                    $raw = $converted;
+                }
+            }
+        }
+        return $raw;
+    }
+
+    private function extractGmailParts(array $payload, string &$plainBody, string &$htmlBody, array &$attachments): void
+    {
+        $mime = strtolower((string) ($payload['mimeType'] ?? ''));
+        $filename = trim((string) ($payload['filename'] ?? ''));
         $bodyData = (string) ($payload['body']['data'] ?? '');
         $attId = (string) ($payload['body']['attachmentId'] ?? '');
+        $hdrs = $this->extractPartHeaders($payload);
 
-        if ($filename !== '' && ($attId !== '' || $bodyData !== '')) {
+        $rawCid = (string) ($hdrs['content-id'] ?? $hdrs['x-attachment-id'] ?? '');
+        $contentId = trim($rawCid, " \t\n\r<>");
+        $disposition = strtolower((string) ($hdrs['content-disposition'] ?? ''));
+        $isInline = ($contentId !== '' || str_starts_with($disposition, 'inline')) && str_starts_with($mime, 'image/');
+        $isAttachment = ($filename !== '' || $attId !== '' || $contentId !== '') && !str_starts_with($mime, 'multipart/') && $mime !== 'text/plain' && $mime !== 'text/html';
+
+        if ($isAttachment && ($attId !== '' || $bodyData !== '')) {
+            $safeName = $filename !== '' ? $filename : ('inline-' . ($contentId !== '' ? preg_replace('/[^a-zA-Z0-9._-]/', '_', $contentId) : bin2hex(random_bytes(3))) . '.' . (explode('/', $mime)[1] ?? 'png'));
             $attachments[] = [
-                'filename'     => SecurityHelper::sanitizePlainText($filename, 180),
+                'filename'     => SecurityHelper::sanitizePlainText($safeName, 180) ?: 'attachment.bin',
                 'mime_type'    => $mime !== '' ? $mime : 'application/octet-stream',
                 'size_bytes'   => (int) ($payload['body']['size'] ?? 0),
                 'gmail_att_id' => $attId !== '' ? $attId : null,
                 'data_base64'  => $bodyData !== '' ? base64_encode($this->decodeBase64Url($bodyData)) : null,
+                'content_id'   => $contentId !== '' ? $contentId : null,
+                'is_inline'    => $isInline,
             ];
         } elseif ($mime === 'text/plain' && $bodyData !== '' && $plainBody === '') {
-            $plainBody = $this->decodeBase64Url($bodyData);
-        } elseif ($mime === 'text/html' && $bodyData !== '' && $plainBody === '') {
-            $plainBody = trim(strip_tags(str_replace(['<br>', '<br/>', '</p>'], "\n", $this->decodeBase64Url($bodyData))));
+            $plainBody = $this->decodeGmailBodyText($bodyData, $hdrs);
+        } elseif ($mime === 'text/html' && $bodyData !== '' && $htmlBody === '') {
+            $htmlBody = $this->decodeGmailBodyText($bodyData, $hdrs);
         }
 
         if (!empty($payload['parts']) && is_array($payload['parts'])) {
             foreach ($payload['parts'] as $part) {
                 if (is_array($part)) {
-                    $this->extractGmailParts($part, $plainBody, $attachments);
+                    $this->extractGmailParts($part, $plainBody, $htmlBody, $attachments);
                 }
             }
         }
     }
 
-    private function syncMailbox(array $user): void
+    private function performGmailSync(array $user, bool $force = false, int $maxResults = 25): array
     {
-        $token = $this->getGoogleAccessToken($user);
-        $syncedCount = 0;
-        $gmailEmail = null;
+        $mbStmt = $this->db->prepare('SELECT email, oauth_status, last_synced_at FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1');
+        $mbStmt->execute([':uid' => $user['id']]);
+        $mailboxRow = $mbStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        $gmailEmail = $mailboxRow ? strtolower((string) $mailboxRow['email']) : null;
 
-        if ($token === '') {
-            http_response_code(409);
-            echo json_encode(['error' => 'Connect your Gmail account before synchronizing.']);
-            return;
+        if (!$force && $mailboxRow && !empty($mailboxRow['last_synced_at'])) {
+            $lastTs = strtotime((string) $mailboxRow['last_synced_at']);
+            if ($lastTs !== false && (time() - $lastTs) < 8) {
+                return [
+                    'connected'    => $mailboxRow['oauth_status'] === 'active',
+                    'gmail_email'  => $gmailEmail,
+                    'synced_at'    => gmdate('c', $lastTs),
+                    'imported'     => 0,
+                    'new_messages' => [],
+                    'throttled'    => true,
+                ];
+            }
         }
 
-        if ($token !== '') {
-            $profile = $this->gmailRequest('GET', '/profile', $token);
-            if ($profile && !empty($profile['emailAddress'])) {
-                $gmailEmail = strtolower((string) $profile['emailAddress']);
-                $upMb = $this->db->prepare("
-                    INSERT INTO staff_connected_mailboxes (user_id, provider, email, oauth_status, sync_interval_minutes, oauth_scope, last_synced_at, updated_at)
-                    VALUES (:uid, 'gmail', :em, 'active', 5, 'gmail.readonly gmail.send', NOW(), NOW())
-                    ON CONFLICT (user_id) DO UPDATE
-                    SET email = EXCLUDED.email, oauth_status = 'active', last_synced_at = NOW(), updated_at = NOW()
-                ");
-                $upMb->execute([':uid' => $user['id'], ':em' => $gmailEmail]);
-            }
+        $token = $this->getGoogleAccessToken($user);
+        if ($token === '') {
+            return [
+                'connected'    => false,
+                'gmail_email'  => null,
+                'synced_at'    => null,
+                'imported'     => 0,
+                'new_messages' => [],
+                'error'        => 'Connect your Gmail account before synchronizing.',
+            ];
+        }
 
-            $list = $this->gmailRequest('GET', '/messages?maxResults=15', $token);
-            if ($list && !empty($list['messages']) && is_array($list['messages'])) {
-                foreach ($list['messages'] as $msgStub) {
-                    $gid = (string) ($msgStub['id'] ?? '');
-                    if ($gid === '') {
-                        continue;
-                    }
-                    $chk = $this->db->prepare('SELECT id FROM email_messages WHERE gmail_message_id = :gid LIMIT 1');
-                    $chk->execute([':gid' => $gid]);
-                    if ($chk->fetch()) {
-                        continue;
-                    }
+        $syncedCount = 0;
+        $newMessages = [];
+        $profile = $this->gmailRequest('GET', '/profile', $token);
+        if ($profile && !empty($profile['emailAddress'])) {
+            $gmailEmail = strtolower((string) $profile['emailAddress']);
+            $upMb = $this->db->prepare("
+                INSERT INTO staff_connected_mailboxes (user_id, provider, email, oauth_status, sync_interval_minutes, oauth_scope, last_synced_at, updated_at)
+                VALUES (:uid, 'gmail', :em, 'active', 1, 'gmail.readonly gmail.send', NOW(), NOW())
+                ON CONFLICT (user_id) DO UPDATE
+                SET email = EXCLUDED.email, oauth_status = 'active', last_synced_at = NOW(), updated_at = NOW()
+            ");
+            $upMb->execute([':uid' => $user['id'], ':em' => $gmailEmail]);
+        }
 
-                    $full = $this->gmailRequest('GET', '/messages/' . rawurlencode($gid) . '?format=full', $token);
-                    if (!$full || empty($full['payload'])) {
-                        continue;
-                    }
-
-                    $hdrMap = [];
-                    foreach (($full['payload']['headers'] ?? []) as $h) {
-                        $hdrMap[strtolower((string) ($h['name'] ?? ''))] = (string) ($h['value'] ?? '');
-                    }
-
-                    $fromRaw = $hdrMap['from'] ?? '';
-                    $fromEmail = $fromRaw;
-                    $fromName = $fromRaw;
-                    if (preg_match('/^(.*?)\s*<([^>]+)>/', $fromRaw, $m)) {
-                        $fromName = trim($m[1], "\"' ") ?: $m[2];
-                        $fromEmail = strtolower(trim($m[2]));
-                    } else {
-                        $fromEmail = strtolower(trim($fromRaw));
-                        $fromName = $fromEmail;
-                    }
-
-                    $toEmail = strtolower(trim($hdrMap['to'] ?? ($gmailEmail ?? $user['email'])));
-                    if (preg_match('/<([^>]+)>/', $toEmail, $tm)) {
-                        $toEmail = strtolower(trim($tm[1]));
-                    }
-                    $ccEmail = trim($hdrMap['cc'] ?? '');
-                    $subject = SecurityHelper::sanitizePlainText($hdrMap['subject'] ?? '(No Subject)', 255);
-                    $snippet = SecurityHelper::sanitizePlainText(html_entity_decode((string) ($full['snippet'] ?? ''), ENT_QUOTES, 'UTF-8'), 500);
-                    $plainBody = '';
-                    $atts = [];
-                    $this->extractGmailParts($full['payload'], $plainBody, $atts);
-                    if (trim($plainBody) === '') {
-                        $plainBody = $snippet !== '' ? $snippet : '(Empty message body)';
-                    }
-
-                    $labels = (array) ($full['labelIds'] ?? []);
-                    $folder = in_array('SENT', $labels, true) ? 'sent' : 'inbox';
-                    $isRead = !in_array('UNREAD', $labels, true);
-                    $threadId = SecurityHelper::sanitizePlainText((string) ($full['threadId'] ?? ('th-' . bin2hex(random_bytes(5)))), 64);
-
-                    $id = 'msg-' . bin2hex(random_bytes(5));
-                    $ins = $this->db->prepare("
-                        INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, snippet, gmail_message_id, folder, is_read)
-                        VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :snip, :gid, :folder, :is_read)
-                    ");
-                    $ins->execute([
-                        ':id'      => $id,
-                        ':tid'     => $threadId,
-                        ':sname'   => SecurityHelper::sanitizePlainText($fromName, 191),
-                        ':semail'  => SecurityHelper::sanitizePlainText($fromEmail, 191),
-                        ':remail'  => SecurityHelper::sanitizePlainText($toEmail, 191),
-                        ':cc'      => $ccEmail !== '' ? SecurityHelper::sanitizePlainText($ccEmail, 191) : null,
-                        ':subject' => $subject,
-                        ':body'    => SecurityHelper::sanitizePlainText($plainBody, 8000),
-                        ':snip'    => $snippet,
-                        ':gid'     => $gid,
-                        ':folder'  => $folder,
-                        ':is_read' => $isRead ? 'true' : 'false',
-                    ]);
-
-                    foreach ($atts as $a) {
-                        $aIns = $this->db->prepare("
-                            INSERT INTO email_attachments (id, email_id, filename, mime_type, size_bytes, data_base64, gmail_attachment_id)
-                            VALUES (:id, :eid, :fname, :mime, :sz, :b64, :gaid)
-                        ");
-                        $aIns->execute([
-                            ':id'    => 'eatt-' . bin2hex(random_bytes(5)),
-                            ':eid'   => $id,
-                            ':fname' => $a['filename'],
-                            ':mime'  => $a['mime_type'],
-                            ':sz'    => $a['size_bytes'],
-                            ':b64'   => $a['data_base64'],
-                            ':gaid'  => $a['gmail_att_id'],
-                        ]);
-                    }
-
-                    $syncedCount++;
+        $limit = max(5, min(40, $maxResults));
+        $list = $this->gmailRequest('GET', '/messages?maxResults=' . $limit, $token);
+        if ($list && !empty($list['messages']) && is_array($list['messages'])) {
+            foreach ($list['messages'] as $msgStub) {
+                $gid = (string) ($msgStub['id'] ?? '');
+                if ($gid === '') {
+                    continue;
                 }
+                $chk = $this->db->prepare('SELECT id, body_html FROM email_messages WHERE gmail_message_id = :gid LIMIT 1');
+                $chk->execute([':gid' => $gid]);
+                $existingRow = $chk->fetch(PDO::FETCH_ASSOC);
+                if ($existingRow && !empty($existingRow['body_html'])) {
+                    continue;
+                }
+
+                $full = $this->gmailRequest('GET', '/messages/' . rawurlencode($gid) . '?format=full', $token);
+                if (!$full || empty($full['payload'])) {
+                    continue;
+                }
+
+                $plainBody = '';
+                $htmlBody = '';
+                $atts = [];
+                $this->extractGmailParts($full['payload'], $plainBody, $htmlBody, $atts);
+
+                // Upgrade legacy pre-HTML synced messages seamlessly if encountered
+                if ($existingRow) {
+                    if ($htmlBody !== '') {
+                        $exId = (string) $existingRow['id'];
+                        $attStmt = $this->db->prepare('SELECT id, content_id FROM email_attachments WHERE email_id = :eid');
+                        $attStmt->execute([':eid' => $exId]);
+                        $cidMap = [];
+                        foreach ($attStmt->fetchAll(PDO::FETCH_ASSOC) as $ea) {
+                            if (!empty($ea['content_id'])) {
+                                $cidMap[strtolower((string) $ea['content_id'])] = (string) $ea['id'];
+                            }
+                        }
+                        $resolvedHtml = $this->resolveCidImages($htmlBody, $cidMap);
+                        $cleanHtml = SecurityHelper::sanitizeEmailHtml($resolvedHtml, 150000);
+                        if ($cleanHtml !== '') {
+                            $upHtml = $this->db->prepare("UPDATE email_messages SET body_html = :bh, body_format = 'html' WHERE id = :id");
+                            $upHtml->execute([':bh' => $cleanHtml, ':id' => $exId]);
+                        }
+                    }
+                    continue;
+                }
+
+                $hdrMap = $this->extractPartHeaders($full['payload']);
+                $fromRaw = $hdrMap['from'] ?? '';
+                if (preg_match('/^(.*?)\s*<([^>]+)>/', $fromRaw, $m)) {
+                    $fromName = trim($m[1], "\"' ") ?: $m[2];
+                    $fromEmail = strtolower(trim($m[2]));
+                } else {
+                    $fromEmail = strtolower(trim($fromRaw));
+                    $fromName = $fromEmail;
+                }
+
+                $toEmail = strtolower(trim($hdrMap['to'] ?? ($gmailEmail ?? $user['email'])));
+                if (preg_match('/<([^>]+)>/', $toEmail, $tm)) {
+                    $toEmail = strtolower(trim($tm[1]));
+                }
+                $ccEmail = trim($hdrMap['cc'] ?? '');
+
+                // Never import admin-involved emails into non-admin accounts
+                if (($user['role'] ?? '') !== 'admin' && ($this->isAdminAddress($fromEmail) || $this->isAdminAddress($toEmail) || $this->containsAdminCc($ccEmail))) {
+                    continue;
+                }
+
+                $subject = SecurityHelper::sanitizePlainText($hdrMap['subject'] ?? '(No Subject)', 255);
+                $snippet = SecurityHelper::sanitizePlainText(html_entity_decode((string) ($full['snippet'] ?? ''), ENT_QUOTES, 'UTF-8'), 500);
+
+                if (trim($plainBody) === '' && $htmlBody !== '') {
+                    $plainBody = SecurityHelper::htmlToPlainText($htmlBody, 16000);
+                }
+                if (trim($plainBody) === '') {
+                    $plainBody = $snippet !== '' ? $snippet : '(Empty message body)';
+                }
+
+                $labels = (array) ($full['labelIds'] ?? []);
+                $folder = in_array('SENT', $labels, true) ? 'sent' : 'inbox';
+                $isRead = !in_array('UNREAD', $labels, true);
+                $threadId = SecurityHelper::sanitizePlainText((string) ($full['threadId'] ?? ('th-' . bin2hex(random_bytes(5)))), 64);
+
+                $createdAtIso = gmdate('c');
+                if (!empty($full['internalDate']) && is_numeric($full['internalDate'])) {
+                    $sec = (int) floor(((float) $full['internalDate']) / 1000.0);
+                    if ($sec > 946684800) {
+                        $createdAtIso = gmdate('c', $sec);
+                    }
+                }
+
+                $id = 'msg-' . bin2hex(random_bytes(5));
+                $ins = $this->db->prepare("
+                    INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, created_at)
+                    VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, :folder, :is_read, :cat)
+                ");
+                $ins->execute([
+                    ':id'      => $id,
+                    ':tid'     => $threadId,
+                    ':sname'   => SecurityHelper::sanitizePlainText($fromName, 191),
+                    ':semail'  => SecurityHelper::sanitizePlainText($fromEmail, 191),
+                    ':remail'  => SecurityHelper::sanitizePlainText($toEmail, 191),
+                    ':cc'      => $ccEmail !== '' ? SecurityHelper::sanitizePlainText($ccEmail, 191) : null,
+                    ':subject' => $subject,
+                    ':body'    => SecurityHelper::sanitizePlainText($plainBody, 16000),
+                    ':bhtml'   => null,
+                    ':bfmt'    => $htmlBody !== '' ? 'html' : 'plain',
+                    ':snip'    => $snippet,
+                    ':gid'     => $gid,
+                    ':folder'  => $folder,
+                    ':is_read' => $isRead ? 'true' : 'false',
+                    ':cat'     => $createdAtIso,
+                ]);
+
+                $cidMap = [];
+                foreach ($atts as $a) {
+                    $attDbId = 'eatt-' . bin2hex(random_bytes(5));
+                    $aIns = $this->db->prepare("
+                        INSERT INTO email_attachments (id, email_id, filename, mime_type, size_bytes, data_base64, gmail_attachment_id, content_id, is_inline)
+                        VALUES (:id, :eid, :fname, :mime, :sz, :b64, :gaid, :cid, :inl)
+                    ");
+                    $aIns->execute([
+                        ':id'    => $attDbId,
+                        ':eid'   => $id,
+                        ':fname' => $a['filename'],
+                        ':mime'  => $a['mime_type'],
+                        ':sz'    => $a['size_bytes'],
+                        ':b64'   => $a['data_base64'],
+                        ':gaid'  => $a['gmail_att_id'],
+                        ':cid'   => $a['content_id'],
+                        ':inl'   => !empty($a['is_inline']) ? 'true' : 'false',
+                    ]);
+                    if (!empty($a['content_id'])) {
+                        $cidMap[strtolower((string) $a['content_id'])] = $attDbId;
+                    }
+                }
+
+                if ($htmlBody !== '') {
+                    $resolvedHtml = $this->resolveCidImages($htmlBody, $cidMap);
+                    $cleanHtml = SecurityHelper::sanitizeEmailHtml($resolvedHtml, 150000);
+                    if ($cleanHtml !== '') {
+                        $upHtml = $this->db->prepare('UPDATE email_messages SET body_html = :bh WHERE id = :id');
+                        $upHtml->execute([':bh' => $cleanHtml, ':id' => $id]);
+                    }
+                }
+
+                if ($folder === 'inbox' && !$isRead && $fromEmail !== strtolower((string) ($gmailEmail ?? '')) && $fromEmail !== strtolower((string) $user['email'])) {
+                    $newMessages[] = [
+                        'id'           => $id,
+                        'thread_id'    => $threadId,
+                        'sender_name'  => SecurityHelper::sanitizePlainText($fromName, 120),
+                        'sender_email' => SecurityHelper::sanitizePlainText($fromEmail, 120),
+                        'subject'      => $subject,
+                        'snippet'      => mb_substr($snippet ?: $plainBody, 0, 120, 'UTF-8'),
+                        'created_at'   => $createdAtIso,
+                    ];
+                }
+
+                $syncedCount++;
             }
         } else {
             $stmt = $this->db->prepare('UPDATE staff_connected_mailboxes SET last_synced_at = NOW(), updated_at = NOW() WHERE user_id = :uid');
             $stmt->execute([':uid' => $user['id']]);
         }
 
-        $this->invalidate();
+        if ($syncedCount > 0) {
+            $this->invalidate();
+        }
+
+        return [
+            'connected'    => true,
+            'gmail_email'  => $gmailEmail,
+            'synced_at'    => gmdate('c'),
+            'imported'     => $syncedCount,
+            'new_messages' => $newMessages,
+            'throttled'    => false,
+        ];
+    }
+
+    private function resolveCidImages(string $html, array $cidMap): string
+    {
+        if (empty($cidMap) || !str_contains(strtolower($html), 'cid:')) {
+            return $html;
+        }
+        return preg_replace_callback('/(["\'])\s*cid:([^"\'\s>]+)\s*\1/i', static function (array $m) use ($cidMap): string {
+            $rawCid = urldecode(trim($m[2], " <>"));
+            $key = strtolower($rawCid);
+            if (isset($cidMap[$key])) {
+                return $m[1] . '/api/v1/email/attachments/' . rawurlencode($cidMap[$key]) . '?inline=1' . $m[1];
+            }
+            return $m[0];
+        }, $html) ?? $html;
+    }
+
+    private function syncMailbox(array $user): void
+    {
+        $res = $this->performGmailSync($user, true, 25);
+        if (empty($res['connected']) && !empty($res['error'])) {
+            http_response_code(409);
+            echo json_encode(['error' => $res['error']]);
+            return;
+        }
         echo json_encode([
-            'success'       => true,
-            'synced_at'     => gmdate('c'),
-            'gmail_email'   => $gmailEmail,
-            'imported'      => $syncedCount,
+            'success'      => true,
+            'synced_at'    => $res['synced_at'],
+            'gmail_email'  => $res['gmail_email'],
+            'imported'     => $res['imported'],
+            'new_messages' => $res['new_messages'],
+        ]);
+    }
+
+    private function getHiddenAdminEmails(array $user): array
+    {
+        if (($user['role'] ?? '') === 'admin') {
+            return [];
+        }
+        $lookup = [];
+        try {
+            $stmt = $this->db->query("
+                SELECT LOWER(email) FROM users WHERE role = 'admin'
+                UNION
+                SELECT LOWER(m.email) FROM staff_connected_mailboxes m JOIN users u ON m.user_id = u.id WHERE u.role = 'admin'
+            ");
+            foreach ($stmt->fetchAll(PDO::FETCH_COLUMN) as $ae) {
+                $clean = strtolower(trim((string) $ae));
+                if ($clean !== '') {
+                    $lookup[$clean] = true;
+                }
+            }
+        } catch (Throwable) {
+        }
+        return $lookup;
+    }
+
+    private function messageInvolvesAdmin(array $row, array $adminEmails): bool
+    {
+        if (empty($adminEmails)) {
+            return false;
+        }
+        $sender = strtolower(trim((string) ($row['sender_email'] ?? '')));
+        $recip = strtolower(trim((string) ($row['recipient_email'] ?? '')));
+        if (isset($adminEmails[$sender]) || isset($adminEmails[$recip])) {
+            return true;
+        }
+        $cc = strtolower(trim((string) ($row['cc_email'] ?? '')));
+        if ($cc !== '') {
+            foreach (array_keys($adminEmails) as $ae) {
+                if (str_contains($cc, $ae)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private function setThreadReadState(string $threadId, array $user): void
+    {
+        $cleanTid = SecurityHelper::sanitizePlainText($threadId, 64);
+        if ($cleanTid === '') {
+            http_response_code(422);
+            echo json_encode(['error' => 'Invalid thread id']);
+            return;
+        }
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $isRead = array_key_exists('is_read', $input) ? (bool) $input['is_read'] : true;
+
+        $mbStmt = $this->db->prepare('SELECT email FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1');
+        $mbStmt->execute([':uid' => $user['id']]);
+        $linkedEmail = (string) ($mbStmt->fetchColumn() ?: $user['email']);
+
+        $stmt = $this->db->prepare("
+            UPDATE email_messages
+            SET is_read = :read_flag
+            WHERE thread_id = :tid
+              AND (LOWER(recipient_email) IN (LOWER(:e1), LOWER(:l1)) OR LOWER(COALESCE(cc_email, '')) LIKE LOWER(:c1))
+        ");
+        $stmt->execute([
+            ':read_flag' => $isRead ? 'true' : 'false',
+            ':tid'       => $cleanTid,
+            ':e1'        => (string) $user['email'],
+            ':l1'        => $linkedEmail,
+            ':c1'        => '%' . $linkedEmail . '%',
+        ]);
+        $this->invalidate();
+        echo json_encode(['success' => true, 'thread_id' => $cleanTid, 'is_read' => $isRead]);
+    }
+
+    private function liveState(array $user): void
+    {
+        $shouldSync = ($_GET['sync'] ?? '1') === '1';
+        $summaryOnly = ($_GET['summary_only'] ?? '0') === '1';
+        $folder = SecurityHelper::sanitizePlainText($_GET['folder'] ?? 'all', 16);
+        $query = trim(SecurityHelper::sanitizePlainText($_GET['q'] ?? '', 120));
+        $selectedThread = SecurityHelper::sanitizePlainText($_GET['thread'] ?? '', 64);
+        $markRead = ($_GET['mark_read'] ?? '1') === '1';
+
+        $syncRes = ['imported' => 0, 'new_messages' => [], 'synced_at' => null];
+        if ($shouldSync) {
+            $syncRes = $this->performGmailSync($user, false, 20);
+        }
+
+        $mbStmt = $this->db->prepare("SELECT email, oauth_status, last_synced_at FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1");
+        $mbStmt->execute([':uid' => $user['id']]);
+        $mailbox = $mbStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+        $connected = $mailbox && $mailbox['oauth_status'] === 'active';
+
+        $email = (string) $user['email'];
+        $linkedEmail = ($mailbox && !empty($mailbox['email'])) ? (string) $mailbox['email'] : $email;
+        $adminEmails = $this->getHiddenAdminEmails($user);
+
+        // Fetch all visible messages summary scoped to user
+        if (($user['role'] ?? '') === 'admin' && empty($mailbox)) {
+            $allStmt = $this->db->query("
+                SELECT DISTINCT ON (m.thread_id)
+                       m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email,
+                       m.body, m.snippet, m.folder, m.is_read, m.created_at,
+                       (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
+                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND ea.is_inline = FALSE) AS att_count
+                FROM email_messages m
+                ORDER BY m.thread_id, m.created_at DESC
+            ");
+        } else {
+            $allStmt = $this->db->prepare("
+                SELECT DISTINCT ON (m.thread_id)
+                       m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email,
+                       m.body, m.snippet, m.folder, m.is_read, m.created_at,
+                       (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
+                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND ea.is_inline = FALSE) AS att_count
+                FROM email_messages m
+                WHERE (
+                    LOWER(m.sender_email) IN (LOWER(:e1), LOWER(:l1))
+                    OR LOWER(m.recipient_email) IN (LOWER(:e2), LOWER(:l2))
+                    OR LOWER(COALESCE(m.cc_email, '')) LIKE LOWER(:c1)
+                )
+                ORDER BY m.thread_id, m.created_at DESC
+            ");
+            $allStmt->execute([
+                ':e1' => $email,
+                ':l1' => $linkedEmail,
+                ':e2' => $email,
+                ':l2' => $linkedEmail,
+                ':c1' => '%' . $linkedEmail . '%',
+            ]);
+        }
+
+        $allThreads = $allStmt->fetchAll(PDO::FETCH_ASSOC);
+        if (!empty($adminEmails)) {
+            $allThreads = array_values(array_filter($allThreads, fn(array $row): bool => !$this->messageInvolvesAdmin($row, $adminEmails)));
+        }
+
+        // Compute unread email count and check incoming unread
+        $unreadCount = 0;
+        $selfLow = strtolower($email);
+        $linkLow = strtolower($linkedEmail);
+        foreach ($allThreads as &$thRow) {
+            $sLow = strtolower((string) ($thRow['sender_email'] ?? ''));
+            $isForMe = $sLow !== $selfLow && $sLow !== $linkLow;
+            $thRow['is_unread'] = !$thRow['is_read'] && $isForMe;
+            if ($thRow['is_unread']) {
+                $unreadCount++;
+            }
+            if (empty($thRow['snippet'])) {
+                $thRow['snippet'] = mb_substr(trim(strip_tags((string) ($thRow['body'] ?? ''))), 0, 140, 'UTF-8');
+            }
+            unset($thRow['body']);
+        }
+        unset($thRow);
+
+        usort($allThreads, static fn(array $a, array $b): int => strcmp((string) $b['created_at'], (string) $a['created_at']));
+
+        if ($summaryOnly) {
+            echo json_encode([
+                'connected'    => (bool) $connected,
+                'gmail_email'  => $connected ? $mailbox['email'] : null,
+                'last_synced'  => $mailbox['last_synced_at'] ?? $syncRes['synced_at'],
+                'imported'     => (int) ($syncRes['imported'] ?? 0),
+                'unread_count' => $unreadCount,
+                'new_messages' => $syncRes['new_messages'] ?? [],
+                'latest_unread' => array_values(array_slice(array_filter($allThreads, static fn(array $t): bool => !empty($t['is_unread'])), 0, 3)),
+            ]);
+            return;
+        }
+
+        $threads = array_values(array_filter($allThreads, static function (array $th) use ($folder, $query): bool {
+            if ($folder === 'inbox' && ($th['folder'] ?? '') !== 'inbox') {
+                return false;
+            }
+            if ($folder === 'sent' && ($th['folder'] ?? '') !== 'sent') {
+                return false;
+            }
+            if ($folder === 'unread' && empty($th['is_unread'])) {
+                return false;
+            }
+            if ($query !== '') {
+                $hay = strtolower(($th['sender_name'] ?? '') . ' ' . ($th['sender_email'] ?? '') . ' ' . ($th['subject'] ?? '') . ' ' . ($th['snippet'] ?? ''));
+                if (!str_contains($hay, strtolower($query))) {
+                    return false;
+                }
+            }
+            return true;
+        }));
+
+        if ($selectedThread === '' && !empty($threads)) {
+            $selectedThread = (string) $threads[0]['thread_id'];
+        }
+
+        $threadMessages = [];
+        $attachmentsByMsg = [];
+        if ($selectedThread !== '') {
+            $mStmt = $this->db->prepare('SELECT id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, folder, is_read, created_at FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC');
+            $mStmt->execute([':tid' => $selectedThread]);
+            $threadMessages = $mStmt->fetchAll(PDO::FETCH_ASSOC);
+
+            if (!empty($adminEmails)) {
+                $threadMessages = array_values(array_filter($threadMessages, fn(array $m): bool => !$this->messageInvolvesAdmin($m, $adminEmails)));
+            }
+
+            if (!empty($threadMessages)) {
+                if ($markRead) {
+                    $mk = $this->db->prepare('UPDATE email_messages SET is_read = TRUE WHERE thread_id = :tid AND is_read = FALSE AND (LOWER(recipient_email) IN (LOWER(:e1), LOWER(:l1)) OR LOWER(COALESCE(cc_email, \'\')) LIKE LOWER(:c1))');
+                    $mk->execute([':tid' => $selectedThread, ':e1' => $email, ':l1' => $linkedEmail, ':c1' => '%' . $linkedEmail . '%']);
+                    if ($mk->rowCount() > 0) {
+                        $this->invalidate();
+                        foreach ($threads as &$tItem) {
+                            if ($tItem['thread_id'] === $selectedThread && !empty($tItem['is_unread'])) {
+                                $tItem['is_unread'] = false;
+                                $tItem['is_read'] = true;
+                                $unreadCount = max(0, $unreadCount - 1);
+                            }
+                        }
+                        unset($tItem);
+                    }
+                }
+
+                $msgIds = array_column($threadMessages, 'id');
+                if (!empty($msgIds)) {
+                    $ph = implode(',', array_fill(0, count($msgIds), '?'));
+                    $aStmt = $this->db->prepare("SELECT id, email_id, filename, mime_type, size_bytes, content_id, is_inline FROM email_attachments WHERE email_id IN ({$ph}) ORDER BY created_at ASC");
+                    $aStmt->execute($msgIds);
+                    foreach ($aStmt->fetchAll(PDO::FETCH_ASSOC) as $att) {
+                        $attachmentsByMsg[$att['email_id']][] = $att;
+                    }
+                }
+            }
+        }
+
+        echo json_encode([
+            'connected'       => (bool) $connected,
+            'gmail_email'     => $connected ? $mailbox['email'] : null,
+            'last_synced'     => $mailbox['last_synced_at'] ?? $syncRes['synced_at'],
+            'imported'        => (int) ($syncRes['imported'] ?? 0),
+            'unread_count'    => $unreadCount,
+            'total_threads'   => count($allThreads),
+            'threads'         => $threads,
+            'selected_thread' => $selectedThread,
+            'messages'        => $threadMessages,
+            'attachments'     => $attachmentsByMsg,
+            'new_messages'    => $syncRes['new_messages'] ?? [],
         ]);
     }
 
@@ -799,6 +1273,13 @@ final class EmailApiController
             return;
         }
 
+        $adminEmails = $this->getHiddenAdminEmails($user);
+        if (!empty($adminEmails) && $this->messageInvolvesAdmin($att, $adminEmails)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Attachment unavailable']);
+            return;
+        }
+
         $bytes = '';
         if (!empty($att['data_base64'])) {
             $decoded = base64_decode((string) $att['data_base64'], true);
@@ -815,6 +1296,13 @@ final class EmailApiController
                 );
                 if ($resp && !empty($resp['data'])) {
                     $bytes = $this->decodeBase64Url((string) $resp['data']);
+                    if ($bytes !== '' && strlen($bytes) <= 4194304) {
+                        try {
+                            $cacheStmt = $this->db->prepare('UPDATE email_attachments SET data_base64 = :b64 WHERE id = :id');
+                            $cacheStmt->execute([':b64' => base64_encode($bytes), ':id' => $attId]);
+                        } catch (Throwable) {
+                        }
+                    }
                 }
             }
         }
@@ -829,9 +1317,12 @@ final class EmailApiController
             @ob_end_clean();
         }
         $fname = str_replace(['"', "\r", "\n"], '', (string) $att['filename']);
-        header('Content-Type: ' . ($att['mime_type'] ?: 'application/octet-stream'));
-        header('Content-Disposition: attachment; filename="' . $fname . '"');
+        $mime = (string) ($att['mime_type'] ?: 'application/octet-stream');
+        $isInlineReq = ($_GET['inline'] ?? '') === '1' && str_starts_with(strtolower($mime), 'image/');
+        header('Content-Type: ' . $mime);
+        header('Content-Disposition: ' . ($isInlineReq ? 'inline' : 'attachment') . '; filename="' . $fname . '"');
         header('Content-Length: ' . strlen($bytes));
+        header('Cache-Control: private, max-age=86400');
         header('X-Content-Type-Options: nosniff');
         echo $bytes;
         exit;

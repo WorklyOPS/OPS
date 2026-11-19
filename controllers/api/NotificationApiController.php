@@ -26,7 +26,12 @@ final class NotificationApiController
         $sub = $parts[3] ?? '';
 
         if ($method === 'GET' && $sub === '') {
-            echo json_encode(['data' => self::fetchForUser($this->db, $user)]);
+            $items = self::fetchForUser($this->db, $user);
+            $unreadCount = count(array_filter($items, static fn(array $n): bool => !empty($n['unread'])));
+            echo json_encode([
+                'data'         => $items,
+                'unread_count' => $unreadCount,
+            ]);
             return;
         }
 
@@ -151,23 +156,54 @@ final class NotificationApiController
         } catch (Throwable) {
         }
 
-        // 1. Direct incoming emails / messages addressed to this user
+        // 1. Direct incoming emails / messages addressed to this user (including linked Gmail mailbox)
         try {
+            $linkedEmail = $email;
+            $mbStmt = $db->prepare('SELECT email FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1');
+            $mbStmt->execute([':uid' => $uid]);
+            $foundMb = $mbStmt->fetchColumn();
+            if ($foundMb) {
+                $linkedEmail = (string) $foundMb;
+            }
+            $adminSkipSql = '';
+            if ($role !== 'admin') {
+                $adminSkipSql = "
+                    AND LOWER(sender_email) NOT IN (
+                        SELECT LOWER(email) FROM users WHERE role = 'admin'
+                        UNION
+                        SELECT LOWER(m2.email) FROM staff_connected_mailboxes m2 JOIN users u2 ON m2.user_id = u2.id WHERE u2.role = 'admin'
+                    )
+                ";
+            }
+
             $eStmt = $db->prepare("
                 SELECT id, thread_id, sender_name, subject, created_at
                 FROM email_messages
                 WHERE is_read = FALSE
-                  AND (LOWER(recipient_email) = LOWER(:em) OR LOWER(COALESCE(cc_email, '')) LIKE LOWER(:cc))
+                  AND LOWER(sender_email) NOT IN (LOWER(:s1), LOWER(:s2))
+                  AND (
+                    LOWER(recipient_email) IN (LOWER(:em), LOWER(:lem))
+                    OR LOWER(COALESCE(cc_email, '')) LIKE LOWER(:cc)
+                    OR LOWER(COALESCE(cc_email, '')) LIKE LOWER(:lcc)
+                  )
+                  {$adminSkipSql}
                 ORDER BY created_at DESC
-                LIMIT 6
+                LIMIT 8
             ");
-            $eStmt->execute([':em' => $email, ':cc' => '%' . $email . '%']);
+            $eStmt->execute([
+                ':s1'  => $email,
+                ':s2'  => $linkedEmail,
+                ':em'  => $email,
+                ':lem' => $linkedEmail,
+                ':cc'  => '%' . $email . '%',
+                ':lcc' => '%' . $linkedEmail . '%',
+            ]);
             foreach ($eStmt->fetchAll(PDO::FETCH_ASSOC) as $row) {
                 $nid = 'mail-' . $row['id'];
                 $items[] = [
                     'id'         => $nid,
                     'category'   => 'message',
-                    'title'      => 'Message from ' . $row['sender_name'],
+                    'title'      => 'Email from ' . $row['sender_name'],
                     'subtitle'   => (string) $row['subject'],
                     'href'       => '/email?thread=' . rawurlencode((string) $row['thread_id']),
                     'created_at' => (string) $row['created_at'],

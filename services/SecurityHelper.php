@@ -548,6 +548,216 @@ final class SecurityHelper
         return $sanitized;
     }
 
+    public static function sanitizeEmailImageSrc(?string $src): string
+    {
+        if ($src === null || trim($src) === '') {
+            return '';
+        }
+        $trimmed = trim($src);
+        if (str_starts_with($trimmed, '/api/v1/email/attachments/')) {
+            return $trimmed;
+        }
+        $compact = strtolower(preg_replace('/\s+/', '', $trimmed) ?? '');
+        if (str_starts_with($compact, 'javascript:') || str_starts_with($compact, 'vbscript:')) {
+            return '';
+        }
+        if (preg_match('/^data:image\/(png|jpeg|jpg|gif|webp);base64,[a-zA-Z0-9+\/=]+$/i', $compact)) {
+            if (strlen($trimmed) <= 262144) {
+                return $trimmed;
+            }
+            return '';
+        }
+        return self::sanitizeUrl($trimmed);
+    }
+
+    public static function sanitizeEmailHtml(?string $html, int $maxLength = 150000): string
+    {
+        if ($html === null || trim($html) === '') {
+            return '';
+        }
+
+        // Remove active content, head/meta containers, stylesheets, scripts, and embedded objects
+        $raw = preg_replace('#<(script|style|head|title|iframe|object|embed|applet|form|input|button|textarea|select|svg|math)[^>]*>.*?</\1>#is', '', $html) ?? '';
+        $raw = preg_replace('#<(script|style|head|title|iframe|object|embed|applet|form|input|button|meta|link|base|svg)[^>]*?/?>#is', '', $raw) ?? '';
+        $raw = preg_replace('/<!--.*?-->/s', '', $raw) ?? '';
+
+        $allowed = strip_tags(
+            $raw,
+            '<p><br><div><span><b><strong><i><em><u><s><strike><del><h1><h2><h3><h4><h5><h6><ul><ol><li><a><blockquote><code><pre><hr><table><caption><thead><tbody><tfoot><tr><th><td><img><font><center><small><sub><sup><figure><figcaption><header><footer>'
+        );
+
+        // Strip all event handlers and dangerous identifiers
+        $allowed = preg_replace('/\son[a-z]+\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $allowed) ?? '';
+        $allowed = preg_replace('/\s(id|class|srcset|data-[a-z0-9_-]+)\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $allowed) ?? '';
+
+        // Rebuild tags while whitelisting attributes safely per tag
+        $allowed = preg_replace_callback('/<([a-z][a-z0-9]*)(\s+[^>]*)?>/i', static function (array $match): string {
+            $tag = strtolower($match[1]);
+            $rawAttrs = $match[2] ?? '';
+            $isSelfClosing = str_ends_with(trim($match[0]), '/>') || $tag === 'br' || $tag === 'hr' || $tag === 'img';
+
+            if ($rawAttrs === '') {
+                return $tag === 'a' ? '<a target="_blank" rel="noopener noreferrer">' : '<' . $tag . ($isSelfClosing && $tag !== 'br' && $tag !== 'hr' ? ' />' : '>');
+            }
+
+            $attrs = [];
+            if (preg_match_all('/([a-z][a-z0-9_-]*)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))/i', $rawAttrs, $am, PREG_SET_ORDER)) {
+                foreach ($am as $item) {
+                    $k = strtolower($item[1]);
+                    $v = html_entity_decode($item[2] !== '' ? $item[2] : ($item[3] !== '' ? $item[3] : ($item[4] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8');
+                    $attrs[$k] = $v;
+                }
+            }
+
+            $outAttrs = [];
+
+            if (isset($attrs['style'])) {
+                $cleanStyle = self::sanitizeEmailInlineStyle($attrs['style']);
+                if ($cleanStyle !== '') {
+                    $outAttrs[] = 'style="' . self::e($cleanStyle) . '"';
+                }
+            }
+
+            if ($tag === 'a') {
+                $href = self::sanitizeUrl($attrs['href'] ?? '');
+                if ($href !== '') {
+                    $outAttrs[] = 'href="' . self::e($href) . '"';
+                }
+                $outAttrs[] = 'target="_blank"';
+                $outAttrs[] = 'rel="noopener noreferrer"';
+            } elseif ($tag === 'img') {
+                $src = self::sanitizeEmailImageSrc($attrs['src'] ?? '');
+                if ($src === '') {
+                    return '';
+                }
+                $outAttrs[] = 'src="' . self::e($src) . '"';
+                $alt = self::sanitizePlainText($attrs['alt'] ?? 'Email image', 180);
+                $outAttrs[] = 'alt="' . self::e($alt) . '"';
+                $outAttrs[] = 'loading="lazy"';
+                foreach (['width', 'height'] as $dimKey) {
+                    if (isset($attrs[$dimKey]) && preg_match('/^\d{1,4}(?:px|%)?$/', trim($attrs[$dimKey]))) {
+                        $outAttrs[] = $dimKey . '="' . self::e(trim($attrs[$dimKey])) . '"';
+                    }
+                }
+            } else {
+                $presentational = ['align', 'valign', 'width', 'height', 'bgcolor', 'border', 'cellpadding', 'cellspacing', 'colspan', 'rowspan', 'color', 'face', 'size'];
+                foreach ($presentational as $pKey) {
+                    if (!isset($attrs[$pKey])) {
+                        continue;
+                    }
+                    $val = trim($attrs[$pKey]);
+                    if ($val !== '' && preg_match('/^[a-zA-Z0-9\s#%(),.\-_+]+$/', $val)) {
+                        $outAttrs[] = $pKey . '="' . self::e(mb_substr($val, 0, 80, 'UTF-8')) . '"';
+                    }
+                }
+            }
+
+            $attrStr = empty($outAttrs) ? '' : ' ' . implode(' ', $outAttrs);
+            return '<' . $tag . $attrStr . '>';
+        }, $allowed) ?? '';
+
+        return mb_substr(trim($allowed), 0, $maxLength, 'UTF-8');
+    }
+
+    private static function sanitizeEmailInlineStyle(string $rawStyle): string
+    {
+        if (trim($rawStyle) === '') {
+            return '';
+        }
+        $allowedProps = [
+            'font-size'        => true,
+            'font-family'      => true,
+            'font-weight'      => true,
+            'font-style'       => true,
+            'color'            => true,
+            'background'       => true,
+            'background-color' => true,
+            'text-align'       => true,
+            'text-transform'   => true,
+            'text-decoration'  => true,
+            'line-height'      => true,
+            'letter-spacing'   => true,
+            'margin'           => true,
+            'margin-top'       => true,
+            'margin-right'     => true,
+            'margin-bottom'    => true,
+            'margin-left'      => true,
+            'padding'          => true,
+            'padding-top'      => true,
+            'padding-right'    => true,
+            'padding-bottom'   => true,
+            'padding-left'     => true,
+            'border'           => true,
+            'border-top'       => true,
+            'border-right'     => true,
+            'border-bottom'    => true,
+            'border-left'      => true,
+            'border-color'     => true,
+            'border-radius'    => true,
+            'border-collapse'  => true,
+            'border-spacing'   => true,
+            'width'            => true,
+            'max-width'        => true,
+            'min-width'        => true,
+            'height'           => true,
+            'display'          => true,
+            'vertical-align'   => true,
+            'white-space'      => true,
+            'list-style'       => true,
+            'list-style-type'  => true,
+        ];
+
+        $safeParts = [];
+        foreach (explode(';', $rawStyle) as $decl) {
+            if (!str_contains($decl, ':')) {
+                continue;
+            }
+            [$prop, $val] = explode(':', $decl, 2);
+            $prop = strtolower(trim($prop));
+            $val = trim($val);
+            if (!isset($allowedProps[$prop]) || $val === '') {
+                continue;
+            }
+            $valLow = strtolower($val);
+            if (
+                str_contains($valLow, 'url(') ||
+                str_contains($valLow, 'expression(') ||
+                str_contains($valLow, 'javascript:') ||
+                str_contains($valLow, 'vbscript:') ||
+                str_contains($valLow, '@import') ||
+                str_contains($valLow, 'behavior:') ||
+                str_contains($valLow, '-moz-binding') ||
+                preg_match('/[<>{}\\\\]/', $val)
+            ) {
+                continue;
+            }
+            if ($prop === 'display' && in_array($valLow, ['fixed', 'sticky'], true)) {
+                continue;
+            }
+            if (!preg_match('/^[a-zA-Z0-9\s#%(),.\'"\-_+!\/]+$/', $val)) {
+                continue;
+            }
+            $safeParts[] = $prop . ': ' . mb_substr($val, 0, 160, 'UTF-8');
+        }
+        return implode('; ', $safeParts);
+    }
+
+    public static function htmlToPlainText(string $html, int $maxLength = 16000): string
+    {
+        if (trim($html) === '') {
+            return '';
+        }
+        $clean = preg_replace('#<(script|style|head|title)[^>]*>.*?</\1>#is', '', $html) ?? $html;
+        $clean = preg_replace('/<\s*br\s*\/?>/i', "\n", $clean) ?? $clean;
+        $clean = preg_replace('/<\/\s*(p|div|li|tr|h[1-6]|blockquote|table|section|article|header|footer)\s*>/i', "\n", $clean) ?? $clean;
+        $clean = preg_replace('/<\/\s*(td|th)\s*>/i', "  ", $clean) ?? $clean;
+        $text = strip_tags($clean);
+        $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = preg_replace('/\r\n|\r/', "\n", $text) ?? $text;
+        $text = preg_replace("/\n{3,}/", "\n\n", $text) ?? $text;
+        return self::sanitizePlainText($text, $maxLength);
+    }
+
     public static function verifyTurnstile(string $token): bool
     {
         $secret = Secrets::get('CLOUDFLARE_TURNSTILE_SECRET_KEY');

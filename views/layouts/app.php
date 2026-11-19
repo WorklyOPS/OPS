@@ -67,23 +67,19 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
         <div class="header-menu-wrap no-print">
           <button type="button" id="btn-notif-bell" class="notif-btn" aria-label="Notifications" aria-expanded="false">
             <?= workly_icon_svg('Bell', 18) ?>
-            <?php if ($unreadNotifCount > 0): ?>
-              <span class="notif-count-badge" id="notif-badge-count"><?= min(99, $unreadNotifCount) ?></span>
-            <?php endif; ?>
+            <span class="notif-count-badge <?= $unreadNotifCount > 0 ? '' : 'is-hidden' ?>" id="notif-badge-count"><?= $unreadNotifCount > 0 ? min(99, $unreadNotifCount) : '0' ?></span>
           </button>
 
           <div id="notif-popover" class="header-popover notif-popover is-hidden" role="region" aria-label="Incoming Notifications">
             <div class="popover-head">
               <div>
                 <strong style="font-size:13.5px;">Notifications</strong>
-                <div class="muted" style="font-size:11px;"><?= $unreadNotifCount ?> unread alert(s)</div>
+                <div class="muted" id="notif-unread-subtitle" style="font-size:11px;"><?= $unreadNotifCount ?> unread alert(s)</div>
               </div>
-              <?php if ($unreadNotifCount > 0): ?>
-                <button type="button" id="btn-mark-notifs-read" class="btn btn-secondary btn-sm">Mark all read</button>
-              <?php endif; ?>
+              <button type="button" id="btn-mark-notifs-read" class="btn btn-secondary btn-sm <?= $unreadNotifCount > 0 ? '' : 'is-hidden' ?>">Mark all read</button>
             </div>
 
-            <div class="popover-list">
+            <div class="popover-list" id="notif-popover-list">
               <?php if (empty($headerNotifications)): ?>
                 <div style="padding:20px 14px;text-align:center;" class="muted">You’re all caught up — no recent alerts.</div>
               <?php else: ?>
@@ -222,9 +218,7 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg>
             <span>Email Hub</span>
           </span>
-          <?php if (($alerts['unread_emails'] ?? 0) > 0): ?>
-            <span class="nav-badge"><?= (int) $alerts['unread_emails'] ?></span>
-          <?php endif; ?>
+          <span class="nav-badge <?= ($alerts['unread_emails'] ?? 0) > 0 ? '' : 'is-hidden' ?>" id="sidebar-email-unread-badge"><?= (int) ($alerts['unread_emails'] ?? 0) ?></span>
         </a>
 
         <a href="/knowledge" class="nav-link <?= $activeSection === 'knowledge' ? 'active' : '' ?>">

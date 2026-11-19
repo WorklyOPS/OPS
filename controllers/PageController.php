@@ -83,12 +83,46 @@ final class PageController
         $uid = $user['id'];
 
         return CacheService::remember($this->db, "alerts:{$role}:{$uid}", 20, function () use ($role, $uid, $user): array {
+            $linkedEmail = (string) $user['email'];
+            try {
+                $mbQ = $this->db->prepare('SELECT email FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1');
+                $mbQ->execute([':uid' => $uid]);
+                $foundMb = $mbQ->fetchColumn();
+                if ($foundMb) {
+                    $linkedEmail = (string) $foundMb;
+                }
+            } catch (Throwable) {
+            }
+
+            $adminExclusionSql = '';
+            if ($role !== 'admin') {
+                $adminExclusionSql = "
+                    AND LOWER(sender_email) NOT IN (
+                        SELECT LOWER(email) FROM users WHERE role = 'admin'
+                        UNION
+                        SELECT LOWER(m2.email) FROM staff_connected_mailboxes m2 JOIN users u2 ON m2.user_id = u2.id WHERE u2.role = 'admin'
+                    )
+                ";
+            }
+
             $unreadEmailsStmt = $this->db->prepare("
-                SELECT COUNT(*)::INTEGER
+                SELECT COUNT(DISTINCT thread_id)::INTEGER
                 FROM email_messages
-                WHERE is_read = FALSE AND recipient_email = :email
+                WHERE is_read = FALSE
+                  AND LOWER(sender_email) NOT IN (LOWER(:se1), LOWER(:se2))
+                  AND (
+                    LOWER(recipient_email) IN (LOWER(:e1), LOWER(:l1))
+                    OR LOWER(COALESCE(cc_email, '')) LIKE LOWER(:c1)
+                  )
+                  {$adminExclusionSql}
             ");
-            $unreadEmailsStmt->execute([':email' => $user['email']]);
+            $unreadEmailsStmt->execute([
+                ':se1' => $user['email'],
+                ':se2' => $linkedEmail,
+                ':e1'  => $user['email'],
+                ':l1'  => $linkedEmail,
+                ':c1'  => '%' . $linkedEmail . '%',
+            ]);
             $unreadEmails = (int) $unreadEmailsStmt->fetchColumn();
 
             $pendingPto = 0;
@@ -1572,6 +1606,8 @@ final class PageController
     {
         try {
             $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS snippet TEXT DEFAULT NULL');
+            $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS body_html TEXT DEFAULT NULL');
+            $this->db->exec("ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS body_format VARCHAR(16) DEFAULT 'plain'");
             $this->db->exec("
                 CREATE TABLE IF NOT EXISTS email_attachments (
                     id VARCHAR(64) PRIMARY KEY,
@@ -1581,9 +1617,13 @@ final class PageController
                     size_bytes INTEGER NOT NULL DEFAULT 0,
                     data_base64 TEXT DEFAULT NULL,
                     gmail_attachment_id VARCHAR(255) DEFAULT NULL,
+                    content_id VARCHAR(255) DEFAULT NULL,
+                    is_inline BOOLEAN NOT NULL DEFAULT FALSE,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             ");
+            $this->db->exec('ALTER TABLE email_attachments ADD COLUMN IF NOT EXISTS content_id VARCHAR(255) DEFAULT NULL');
+            $this->db->exec('ALTER TABLE email_attachments ADD COLUMN IF NOT EXISTS is_inline BOOLEAN NOT NULL DEFAULT FALSE');
         } catch (Throwable) {
         }
 
@@ -1592,35 +1632,35 @@ final class PageController
         $mailbox = $mbStmt->fetch(PDO::FETCH_ASSOC);
 
         $email = (string) $user['email'];
-        $linkedEmail = $mailbox ? (string) $mailbox['email'] : $email;
+        $linkedEmail = ($mailbox && !empty($mailbox['email'])) ? (string) $mailbox['email'] : $email;
         $selectedThread = SecurityHelper::sanitizePlainText($_GET['thread'] ?? '', 64);
         $folder = SecurityHelper::sanitizePlainText($_GET['folder'] ?? 'all', 16);
-
-        $folderClause = match ($folder) {
-            'inbox' => " AND folder = 'inbox' ",
-            'sent'  => " AND folder = 'sent' ",
-            default => '',
-        };
+        if (!in_array($folder, ['all', 'inbox', 'unread', 'sent'], true)) {
+            $folder = 'all';
+        }
 
         if ($user['role'] === 'admin' && empty($mailbox)) {
             $stmt = $this->db->query("
-                SELECT DISTINCT ON (thread_id)
-                       thread_id, subject, sender_name, sender_email, recipient_email, cc_email, body, snippet, folder, is_read, created_at
-                FROM email_messages
-                WHERE 1=1 {$folderClause}
-                ORDER BY thread_id, created_at DESC
+                SELECT DISTINCT ON (m.thread_id)
+                       m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email, m.body, m.snippet, m.folder, m.is_read, m.created_at,
+                       (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
+                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND ea.is_inline = FALSE) AS att_count
+                FROM email_messages m
+                ORDER BY m.thread_id, m.created_at DESC
             ");
         } else {
             $stmt = $this->db->prepare("
-                SELECT DISTINCT ON (thread_id)
-                       thread_id, subject, sender_name, sender_email, recipient_email, cc_email, body, snippet, folder, is_read, created_at
-                FROM email_messages
+                SELECT DISTINCT ON (m.thread_id)
+                       m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email, m.body, m.snippet, m.folder, m.is_read, m.created_at,
+                       (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
+                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND ea.is_inline = FALSE) AS att_count
+                FROM email_messages m
                 WHERE (
-                    LOWER(sender_email) IN (LOWER(:e1), LOWER(:l1))
-                    OR LOWER(recipient_email) IN (LOWER(:e2), LOWER(:l2))
-                    OR LOWER(COALESCE(cc_email, '')) LIKE LOWER(:c1)
-                ) {$folderClause}
-                ORDER BY thread_id, created_at DESC
+                    LOWER(m.sender_email) IN (LOWER(:e1), LOWER(:l1))
+                    OR LOWER(m.recipient_email) IN (LOWER(:e2), LOWER(:l2))
+                    OR LOWER(COALESCE(m.cc_email, '')) LIKE LOWER(:c1)
+                )
+                ORDER BY m.thread_id, m.created_at DESC
             ");
             $stmt->execute([
                 ':e1' => $email,
@@ -1630,7 +1670,7 @@ final class PageController
                 ':c1' => '%' . $linkedEmail . '%',
             ]);
         }
-        $threads = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $allThreads = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         // Hide Admin users and admin-involved threads/messages from all non-admin users
         $adminEmailLookup = [];
@@ -1671,15 +1711,40 @@ final class PageController
                 return false;
             };
 
-            $threads = array_values(array_filter($threads, static fn(array $th): bool => !$containsAdminEmail($th)));
+            $allThreads = array_values(array_filter($allThreads, static fn(array $th): bool => !$containsAdminEmail($th)));
         }
 
-        usort($threads, static fn(array $a, array $b) => strcmp((string) $b['created_at'], (string) $a['created_at']));
+        $selfLow = strtolower($email);
+        $linkLow = strtolower($linkedEmail);
+        $unreadCount = 0;
+        foreach ($allThreads as &$thRow) {
+            $sLow = strtolower(trim((string) ($thRow['sender_email'] ?? '')));
+            $thRow['is_unread'] = !$thRow['is_read'] && $sLow !== $selfLow && $sLow !== $linkLow;
+            if ($thRow['is_unread']) {
+                $unreadCount++;
+            }
+        }
+        unset($thRow);
+
+        usort($allThreads, static fn(array $a, array $b) => strcmp((string) $b['created_at'], (string) $a['created_at']));
+
+        $threads = array_values(array_filter($allThreads, static function (array $th) use ($folder): bool {
+            if ($folder === 'inbox') {
+                return ($th['folder'] ?? '') === 'inbox';
+            }
+            if ($folder === 'sent') {
+                return ($th['folder'] ?? '') === 'sent';
+            }
+            if ($folder === 'unread') {
+                return !empty($th['is_unread']);
+            }
+            return true;
+        }));
 
         if ($selectedThread === '' && !empty($threads)) {
             $selectedThread = (string) $threads[0]['thread_id'];
         } elseif ($selectedThread !== '' && ($user['role'] ?? '') !== 'admin') {
-            $visibleThreadIds = array_flip(array_map(static fn(array $th): string => (string) $th['thread_id'], $threads));
+            $visibleThreadIds = array_flip(array_map(static fn(array $th): string => (string) $th['thread_id'], $allThreads));
             if (!isset($visibleThreadIds[$selectedThread])) {
                 $selectedThread = !empty($threads) ? (string) $threads[0]['thread_id'] : '';
             }
@@ -1688,7 +1753,7 @@ final class PageController
         $threadMessages = [];
         $attachmentsByMsg = [];
         if ($selectedThread !== '') {
-            $mStmt = $this->db->prepare('SELECT * FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC');
+            $mStmt = $this->db->prepare('SELECT id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, folder, is_read, created_at FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC');
             $mStmt->execute([':tid' => $selectedThread]);
             $threadMessages = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -1701,13 +1766,24 @@ final class PageController
             }
 
             if (!empty($threadMessages)) {
-                $markStmt = $this->db->prepare('UPDATE email_messages SET is_read = TRUE WHERE thread_id = :tid AND (LOWER(recipient_email) = LOWER(:email) OR LOWER(recipient_email) = LOWER(:lemail))');
-                $markStmt->execute([':tid' => $selectedThread, ':email' => $email, ':lemail' => $linkedEmail]);
+                $markStmt = $this->db->prepare("UPDATE email_messages SET is_read = TRUE WHERE thread_id = :tid AND is_read = FALSE AND (LOWER(recipient_email) IN (LOWER(:email), LOWER(:lemail)) OR LOWER(COALESCE(cc_email, '')) LIKE LOWER(:cemail))");
+                $markStmt->execute([':tid' => $selectedThread, ':email' => $email, ':lemail' => $linkedEmail, ':cemail' => '%' . $linkedEmail . '%']);
+                if ($markStmt->rowCount() > 0) {
+                    CacheService::invalidatePrefix($this->db, 'alerts:');
+                    foreach ($threads as &$tMark) {
+                        if ($tMark['thread_id'] === $selectedThread && !empty($tMark['is_unread'])) {
+                            $tMark['is_unread'] = false;
+                            $tMark['is_read'] = true;
+                            $unreadCount = max(0, $unreadCount - 1);
+                        }
+                    }
+                    unset($tMark);
+                }
 
                 $msgIds = array_column($threadMessages, 'id');
                 if (!empty($msgIds)) {
                     $ph = implode(',', array_fill(0, count($msgIds), '?'));
-                    $aStmt = $this->db->prepare("SELECT id, email_id, filename, mime_type, size_bytes FROM email_attachments WHERE email_id IN ({$ph}) ORDER BY created_at ASC");
+                    $aStmt = $this->db->prepare("SELECT id, email_id, filename, mime_type, size_bytes, content_id, is_inline FROM email_attachments WHERE email_id IN ({$ph}) ORDER BY created_at ASC");
                     $aStmt->execute($msgIds);
                     foreach ($aStmt->fetchAll(PDO::FETCH_ASSOC) as $att) {
                         $attachmentsByMsg[$att['email_id']][] = $att;
@@ -1722,9 +1798,10 @@ final class PageController
             $contacts = $this->db->query("SELECT name, email, role FROM users WHERE is_active = TRUE AND role <> 'admin' ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
         }
 
-
         return [
             'threads'          => $threads,
+            'total_threads'    => count($allThreads),
+            'unread_count'     => $unreadCount,
             'selected_thread'  => $selectedThread,
             'selected_folder'  => $folder,
             'messages'         => $threadMessages,
