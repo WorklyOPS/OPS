@@ -3135,11 +3135,11 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
 }
 
 .collab-day-separator::before {
-    margin-right: 12px;
+    margin-right: 11px;
 }
 
 .collab-day-separator::after {
-    margin-left: 12px;
+    margin-left: 11px;
 }
 
 /* Live Tasks Combined Timeline: Interactive Filter, Warm Highlighted Notes & Clean Neutral Comments */
