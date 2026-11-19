@@ -814,25 +814,36 @@ final class PageController
 
         $sql = "
             SELECT v.*, u.avatar_url, u.phone, u.bio, u.hire_date, u.team_leader_id,
+                   u.is_active, u.is_suspended, u.suspended_reason,
+                   COALESCE(tl.name, '') AS tl_name,
                    COALESCE(STRING_AGG(DISTINCT s.specialty, '||'), '') AS specialties_joined,
                    COALESCE(STRING_AGG(DISTINCT s.specialty, ', '), '') AS specialties_csv
             FROM v_va_performance_summary v
             JOIN users u ON v.va_id = u.id
+            LEFT JOIN users tl ON u.team_leader_id = tl.id
             LEFT JOIN va_specialties s ON u.id = s.va_id
-            WHERE u.is_active = TRUE
         ";
+        $where = [];
         $params = [];
+        if ($role !== 'admin') {
+            $where[] = 'u.is_active = TRUE';
+        }
         if ($role === 'team_leader') {
-            $sql .= ' AND u.team_leader_id = :tl';
+            $where[] = 'u.team_leader_id = :tl';
             $params[':tl'] = $uid;
         }
-        $sql .= ' GROUP BY v.va_id, v.va_name, v.va_email, v.hourly_rate, v.total_earnings, v.pto_balance_days, v.pto_taken_days, v.total_tasks, v.completed_tasks, v.in_progress_tasks, v.total_estimated_hours, v.total_extra_hours, v.on_time_rate, v.velocity_score, u.avatar_url, u.phone, u.bio, u.hire_date, u.team_leader_id ORDER BY v.va_name ASC';
+        if (!empty($where)) {
+            $sql .= ' WHERE ' . implode(' AND ', $where);
+        }
+        $sql .= ' GROUP BY v.va_id, v.va_name, v.va_email, v.hourly_rate, v.total_earnings, v.pto_balance_days, v.pto_taken_days, v.total_tasks, v.completed_tasks, v.in_progress_tasks, v.total_estimated_hours, v.total_extra_hours, v.on_time_rate, v.velocity_score, u.avatar_url, u.phone, u.bio, u.hire_date, u.team_leader_id, u.is_active, u.is_suspended, u.suspended_reason, tl.name ORDER BY v.va_name ASC';
 
         $stmt = $this->db->prepare($sql);
         $stmt->execute($params);
         $vas = $stmt->fetchAll(PDO::FETCH_ASSOC);
         foreach ($vas as &$v) {
             $v['specialties'] = $v['specialties_joined'] !== '' ? explode('||', (string) $v['specialties_joined']) : [];
+            $v['is_active'] = (bool) ($v['is_active'] ?? true);
+            $v['is_suspended'] = (bool) ($v['is_suspended'] ?? false);
             unset($v['specialties_joined']);
         }
         unset($v);
@@ -1732,7 +1743,7 @@ final class PageController
             return ($tb <=> $ta) ?: strcmp((string) ($b['id'] ?? ''), (string) ($a['id'] ?? ''));
         });
 
-        $threads = array_values(array_filter($allThreads, static function (array $th) use ($folder): bool {
+        $threads = array_values(array_filter($allThreads, static function (array $th) use ($folder, $selectedThread): bool {
             if ($folder === 'inbox') {
                 return ($th['folder'] ?? '') === 'inbox';
             }
@@ -1740,7 +1751,7 @@ final class PageController
                 return ($th['folder'] ?? '') === 'sent';
             }
             if ($folder === 'unread') {
-                return !empty($th['is_unread']);
+                return !empty($th['is_unread']) || ($selectedThread !== '' && ($th['thread_id'] ?? '') === $selectedThread);
             }
             return true;
         }));

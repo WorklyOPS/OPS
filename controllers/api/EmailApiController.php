@@ -1139,6 +1139,16 @@ final class EmailApiController
         $query = trim(SecurityHelper::sanitizePlainText($_GET['q'] ?? '', 120));
         $selectedThread = SecurityHelper::sanitizePlainText($_GET['thread'] ?? '', 64);
         $markRead = ($_GET['mark_read'] ?? '1') === '1';
+        $keepThreadsRaw = (string) ($_GET['keep_threads'] ?? '');
+        $keepThreadSet = [];
+        if ($folder === 'unread' && $keepThreadsRaw !== '') {
+            foreach (explode(',', $keepThreadsRaw) as $kt) {
+                $cleanKt = SecurityHelper::sanitizePlainText($kt, 64);
+                if ($cleanKt !== '') {
+                    $keepThreadSet[$cleanKt] = true;
+                }
+            }
+        }
 
         $syncRes = ['imported' => 0, 'new_messages' => [], 'synced_at' => null];
         if ($shouldSync) {
@@ -1231,14 +1241,15 @@ final class EmailApiController
             return;
         }
 
-        $threads = array_values(array_filter($allThreads, static function (array $th) use ($folder, $query): bool {
+        $threads = array_values(array_filter($allThreads, static function (array $th) use ($folder, $query, $keepThreadSet): bool {
+            $tid = (string) ($th['thread_id'] ?? '');
             if ($folder === 'inbox' && ($th['folder'] ?? '') !== 'inbox') {
                 return false;
             }
             if ($folder === 'sent' && ($th['folder'] ?? '') !== 'sent') {
                 return false;
             }
-            if ($folder === 'unread' && empty($th['is_unread'])) {
+            if ($folder === 'unread' && empty($th['is_unread']) && !isset($keepThreadSet[$tid])) {
                 return false;
             }
             if ($query !== '') {

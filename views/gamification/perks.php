@@ -101,6 +101,25 @@ $historyMeta = static function (string $eventType): array {
     </button>
   </div>
 
+  <?php
+    $perksByCategory = [];
+    foreach ($perks as $pkRow) {
+        $catLabel = trim((string) ($pkRow['category'] ?? 'General Benefits')) ?: 'General Benefits';
+        $perksByCategory[$catLabel][] = $pkRow;
+    }
+    ksort($perksByCategory, SORT_NATURAL | SORT_FLAG_CASE);
+
+    $tierOrder = ['diamond' => 'Diamond Tier', 'gold' => 'Gold Tier', 'silver' => 'Silver Tier', 'bronze' => 'Bronze Tier'];
+    $badgesByTier = [];
+    foreach ($badges as $bdgRow) {
+        $tSlug = strtolower(preg_replace('/[^a-z]/', '', (string) ($bdgRow['tier'] ?? 'silver')) ?: 'silver');
+        if (!isset($tierOrder[$tSlug])) {
+            $tSlug = 'silver';
+        }
+        $badgesByTier[$tSlug][] = $bdgRow;
+    }
+  ?>
+
   <!-- Tab 1: Perks & Benefits -->
   <section data-tab-group="perks-workspace" data-tab-panel="perks" aria-label="Benefit and Perk Programs">
     <?php if (empty($perks)): ?>
@@ -112,104 +131,135 @@ $historyMeta = static function (string $eventType): array {
         <?php endif; ?>
       </div>
     <?php else: ?>
-      <div class="perks-card-grid">
-        <?php foreach ($perks as $pk): ?>
-          <?php
-            $pid = (string) $pk['id'];
-            $holders = $grantsByPerk[$pid] ?? [];
-            $holderIds = $grantUserIdsByPerk[$pid] ?? [];
-          ?>
-          <article class="card perk-program-card" data-perk-card="<?= SecurityHelper::e($pid) ?>">
-            <div class="perk-card-head">
-              <div style="display:flex;align-items:center;gap:12px;min-width:0;">
-                <span class="tier-icon-wrap tier-gold">
-                  <?= workly_icon_svg((string) ($pk['icon_name'] ?? 'Award'), 19) ?>
-                </span>
-                <div style="min-width:0;">
-                  <h3 class="perk-card-title"><?= SecurityHelper::e($pk['title']) ?></h3>
-                  <div class="perk-card-meta">
-                    <span><?= SecurityHelper::e($pk['category']) ?></span>
-                    <span>·</span>
-                    <strong class="tabular-nums">$<?= number_format((float) $pk['value'], 0) ?> value</strong>
-                  </div>
-                </div>
+      <div class="perks-cat-toolbar" role="group" aria-label="Filter benefits by category">
+        <button type="button" class="perks-cat-tab is-active" data-perk-cat-filter="all">
+          <span>All Categories</span>
+          <span class="perks-cat-num tabular-nums"><?= count($perks) ?></span>
+        </button>
+        <?php foreach ($perksByCategory as $catName => $catItems): ?>
+          <?php $catSlug = strtolower(preg_replace('/[^a-z0-9]+/', '-', $catName) ?: 'general'); ?>
+          <button type="button" class="perks-cat-tab" data-perk-cat-filter="<?= SecurityHelper::e($catSlug) ?>">
+            <span><?= SecurityHelper::e($catName) ?></span>
+            <span class="perks-cat-num tabular-nums" data-perk-cat-count="<?= SecurityHelper::e($catSlug) ?>"><?= count($catItems) ?></span>
+          </button>
+        <?php endforeach; ?>
+      </div>
+
+      <div class="perks-category-sections">
+        <?php foreach ($perksByCategory as $catName => $catItems): ?>
+          <?php $catSlug = strtolower(preg_replace('/[^a-z0-9]+/', '-', $catName) ?: 'general'); ?>
+          <div class="perks-category-section" data-perk-cat-group="<?= SecurityHelper::e($catSlug) ?>">
+            <div class="perks-category-header">
+              <div class="perks-category-title-wrap">
+                <h3><?= SecurityHelper::e($catName) ?></h3>
+                <span class="muted tabular-nums" data-perk-section-count="<?= SecurityHelper::e($catSlug) ?>"><?= count($catItems) ?> <?= count($catItems) === 1 ? 'program' : 'programs' ?></span>
               </div>
-              <?php if ($canManagePerks): ?>
-                <button type="button"
-                        class="btn btn-secondary btn-sm perk-card-del-btn"
-                        title="Delete Perk Program"
-                        data-perk-delete-url="/api/v1/perks/<?= SecurityHelper::e($pid) ?>"
-                        data-perk-delete-id="<?= SecurityHelper::e($pid) ?>">Delete</button>
-              <?php endif; ?>
             </div>
 
-            <p class="perk-card-desc"><?= SecurityHelper::e($pk['description']) ?></p>
-
-            <?php if ($canManagePerks && !empty($vas)): ?>
-              <form data-api-form="/api/v1/perks/<?= SecurityHelper::e($pid) ?>/grant"
-                    data-api-method="POST"
-                    data-no-reload="1"
-                    data-perk-assign-form="perk"
-                    data-perk-item-id="<?= SecurityHelper::e($pid) ?>">
-                <input type="hidden" name="sync_recipients" value="1">
-                <div class="va-ms" data-va-multiselect data-ms-kind="perk" data-ms-item-id="<?= SecurityHelper::e($pid) ?>">
-                  <div class="va-ms-top">
-                    <span class="form-label" style="margin-bottom:0;">Select VA Recipients</span>
-                    <span class="muted tabular-nums" style="font-size:11.5px;" data-va-ms-counter><?= count($holderIds) ?> selected</span>
-                  </div>
-
-                  <div class="va-ms-avatars <?= empty($holderIds) ? 'is-empty' : '' ?>" data-va-ms-avatars aria-label="Selected Virtual Assistants">
-                    <span class="va-ms-empty-hint">No VAs selected</span>
-                  </div>
-
-                  <div class="perk-assign-bar">
-                    <div class="va-ms-dropdown">
-                      <button type="button" class="select va-ms-trigger" data-va-ms-trigger aria-expanded="false">
-                        <span data-va-ms-trigger-text>Select Virtual Assistants...</span>
-                      </button>
-                      <div class="va-ms-menu is-hidden" data-va-ms-menu>
-                        <div class="va-ms-menu-head">
-                          <input type="search" class="input va-ms-search" data-va-ms-search placeholder="Search VAs...">
-                          <button type="button" class="btn-select-all-vas" data-select-all-vas>
-                            <?= workly_icon_svg('Check', 13) ?>
-                            <span>Select All</span>
-                          </button>
-                          <button type="button" class="btn btn-secondary btn-sm" data-va-ms-done>Done</button>
-                        </div>
-                        <div class="va-ms-list" data-va-ms-list>
-                          <?php foreach ($vas as $v): ?>
-                            <?php
-                              $vid = (string) $v['id'];
-                              $vInit = strtoupper(substr((string) $v['name'], 0, 2));
-                              $isChecked = isset($holderIds[$vid]);
-                            ?>
-                            <label class="va-ms-option" data-va-option-name="<?= SecurityHelper::e(strtolower((string) $v['name'])) ?>">
-                              <input type="checkbox"
-                                     name="user_ids[]"
-                                     value="<?= SecurityHelper::e($vid) ?>"
-                                     data-va-name="<?= SecurityHelper::e($v['name']) ?>"
-                                     data-va-avatar="<?= SecurityHelper::e((string) ($v['avatar_url'] ?? '')) ?>"
-                                     data-va-initials="<?= SecurityHelper::e($vInit) ?>"
-                                     <?= $isChecked ? 'checked' : '' ?>>
-                              <?php if (!empty($v['avatar_url'])): ?>
-                                <img src="<?= SecurityHelper::e($v['avatar_url']) ?>" alt="<?= SecurityHelper::e($v['name']) ?>" class="avatar-xs">
-                              <?php else: ?>
-                                <span class="avatar-xs"><?= SecurityHelper::e($vInit) ?></span>
-                              <?php endif; ?>
-                              <span class="va-ms-opt-name"><?= SecurityHelper::e($v['name']) ?></span>
-                            </label>
-                          <?php endforeach; ?>
+            <div class="perks-card-grid">
+              <?php foreach ($catItems as $pk): ?>
+                <?php
+                  $pid = (string) $pk['id'];
+                  $holders = $grantsByPerk[$pid] ?? [];
+                  $holderIds = $grantUserIdsByPerk[$pid] ?? [];
+                ?>
+                <article class="card perk-program-card" data-perk-card="<?= SecurityHelper::e($pid) ?>" data-perk-category="<?= SecurityHelper::e($catSlug) ?>">
+                  <div class="perk-card-top-block">
+                    <div class="perk-card-head">
+                      <div class="perk-card-identity">
+                        <span class="tier-icon-wrap tier-gold">
+                          <?= workly_icon_svg((string) ($pk['icon_name'] ?? 'Award'), 19) ?>
+                        </span>
+                        <div style="min-width:0;">
+                          <h3 class="perk-card-title"><?= SecurityHelper::e($pk['title']) ?></h3>
+                          <div class="perk-card-meta">
+                            <span><?= SecurityHelper::e($pk['category']) ?></span>
+                            <span>·</span>
+                            <strong class="tabular-nums">$<?= number_format((float) $pk['value'], 0) ?> value</strong>
+                          </div>
                         </div>
                       </div>
+                      <?php if ($canManagePerks): ?>
+                        <button type="button"
+                                class="btn btn-secondary btn-sm perk-card-del-btn"
+                                title="Delete Perk Program"
+                                data-perk-delete-url="/api/v1/perks/<?= SecurityHelper::e($pid) ?>"
+                                data-perk-delete-id="<?= SecurityHelper::e($pid) ?>">Delete</button>
+                      <?php endif; ?>
                     </div>
-                    <button type="submit" class="btn btn-primary btn-sm perk-assign-submit">Save Recipients</button>
+
+                    <p class="perk-card-desc"><?= SecurityHelper::e($pk['description']) ?></p>
                   </div>
-                </div>
-              </form>
-            <?php elseif ($canManagePerks): ?>
-              <p class="muted" style="font-size:12px;">No active Virtual Assistants available to assign.</p>
-            <?php endif; ?>
-          </article>
+
+                  <?php if ($canManagePerks && !empty($vas)): ?>
+                    <form class="perk-assign-panel"
+                          data-api-form="/api/v1/perks/<?= SecurityHelper::e($pid) ?>/grant"
+                          data-api-method="POST"
+                          data-no-reload="1"
+                          data-perk-assign-form="perk"
+                          data-perk-item-id="<?= SecurityHelper::e($pid) ?>">
+                      <input type="hidden" name="sync_recipients" value="1">
+                      <div class="va-ms" data-va-multiselect data-ms-kind="perk" data-ms-item-id="<?= SecurityHelper::e($pid) ?>">
+                        <div class="va-ms-top">
+                          <span class="form-label" style="margin-bottom:0;">Select VA Recipients</span>
+                          <span class="muted tabular-nums" style="font-size:11.5px;" data-va-ms-counter><?= count($holderIds) ?> selected</span>
+                        </div>
+
+                        <div class="va-ms-avatars <?= empty($holderIds) ? 'is-empty' : '' ?>" data-va-ms-avatars aria-label="Selected Virtual Assistants">
+                          <span class="va-ms-empty-hint">No VAs selected</span>
+                        </div>
+
+                        <div class="perk-assign-bar">
+                          <div class="va-ms-dropdown">
+                            <button type="button" class="select va-ms-trigger" data-va-ms-trigger aria-expanded="false">
+                              <span data-va-ms-trigger-text>Select Virtual Assistants...</span>
+                            </button>
+                            <div class="va-ms-menu is-hidden" data-va-ms-menu>
+                              <div class="va-ms-menu-head">
+                                <input type="search" class="input va-ms-search" data-va-ms-search placeholder="Search VAs...">
+                                <button type="button" class="btn-select-all-vas" data-select-all-vas>
+                                  <?= workly_icon_svg('Check', 13) ?>
+                                  <span>Select All</span>
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" data-va-ms-done>Done</button>
+                              </div>
+                              <div class="va-ms-list" data-va-ms-list>
+                                <?php foreach ($vas as $v): ?>
+                                  <?php
+                                    $vid = (string) $v['id'];
+                                    $vInit = strtoupper(substr((string) $v['name'], 0, 2));
+                                    $isChecked = isset($holderIds[$vid]);
+                                  ?>
+                                  <label class="va-ms-option" data-va-option-name="<?= SecurityHelper::e(strtolower((string) $v['name'])) ?>">
+                                    <input type="checkbox"
+                                           name="user_ids[]"
+                                           value="<?= SecurityHelper::e($vid) ?>"
+                                           data-va-name="<?= SecurityHelper::e($v['name']) ?>"
+                                           data-va-avatar="<?= SecurityHelper::e((string) ($v['avatar_url'] ?? '')) ?>"
+                                           data-va-initials="<?= SecurityHelper::e($vInit) ?>"
+                                           <?= $isChecked ? 'checked' : '' ?>>
+                                    <?php if (!empty($v['avatar_url'])): ?>
+                                      <img src="<?= SecurityHelper::e($v['avatar_url']) ?>" alt="<?= SecurityHelper::e($v['name']) ?>" class="avatar-xs">
+                                    <?php else: ?>
+                                      <span class="avatar-xs"><?= SecurityHelper::e($vInit) ?></span>
+                                    <?php endif; ?>
+                                    <span class="va-ms-opt-name"><?= SecurityHelper::e($v['name']) ?></span>
+                                  </label>
+                                <?php endforeach; ?>
+                              </div>
+                            </div>
+                          </div>
+                          <button type="submit" class="btn btn-primary btn-sm perk-assign-submit">Save Recipients</button>
+                        </div>
+                      </div>
+                    </form>
+                  <?php elseif ($canManagePerks): ?>
+                    <p class="muted" style="font-size:12px;">No active Virtual Assistants available to assign.</p>
+                  <?php endif; ?>
+                </article>
+              <?php endforeach; ?>
+            </div>
+          </div>
         <?php endforeach; ?>
       </div>
     <?php endif; ?>
@@ -226,102 +276,130 @@ $historyMeta = static function (string $eventType): array {
         <?php endif; ?>
       </div>
     <?php else: ?>
-      <div class="perks-card-grid">
-        <?php foreach ($badges as $bdg): ?>
-          <?php
-            $bid = (string) $bdg['id'];
-            $tierSlug = strtolower(preg_replace('/[^a-z]/', '', (string) ($bdg['tier'] ?? 'silver')) ?: 'silver');
-            $holders = $awardsByBadge[$bid] ?? [];
-            $holderIds = $awardUserIdsByBadge[$bid] ?? [];
-          ?>
-          <article class="card perk-program-card" data-badge-card="<?= SecurityHelper::e($bid) ?>">
-        <div class="perk-info">
-          <div class="perk-card-head">
-              <div style="display:flex;align-items:center;gap:12px;min-width:0;">
-                <span class="tier-icon-wrap tier-<?= SecurityHelper::e($tierSlug) ?>">
-                  <?= workly_icon_svg((string) ($bdg['icon_name'] ?? 'Medal'), 19) ?>
-                </span>
-                <div style="min-width:0;">
-                  <h3 class="perk-card-title"><?= SecurityHelper::e($bdg['title']) ?></h3>
-                  <div class="perk-card-meta">
-                    <span class="perk-tier-tag tier-<?= SecurityHelper::e($tierSlug) ?>"><?= SecurityHelper::e(ucfirst($tierSlug)) ?> Tier</span>
-                    <span>·</span>
-                    <span>Recognition Medal</span>
-                  </div>
-                </div>
+      <div class="perks-cat-toolbar" role="group" aria-label="Filter recognition badges by tier">
+        <button type="button" class="perks-cat-tab is-active" data-badge-tier-filter="all">
+          <span>All Tiers</span>
+          <span class="perks-cat-num tabular-nums"><?= count($badges) ?></span>
+        </button>
+        <?php foreach ($tierOrder as $tSlug => $tLabel): ?>
+          <?php if (!empty($badgesByTier[$tSlug])): ?>
+            <button type="button" class="perks-cat-tab" data-badge-tier-filter="<?= SecurityHelper::e($tSlug) ?>">
+              <span><?= SecurityHelper::e($tLabel) ?></span>
+              <span class="perks-cat-num tabular-nums"><?= count($badgesByTier[$tSlug]) ?></span>
+            </button>
+          <?php endif; ?>
+        <?php endforeach; ?>
+      </div>
+
+      <div class="perks-category-sections">
+        <?php foreach ($tierOrder as $tSlug => $tLabel): ?>
+          <?php if (empty($badgesByTier[$tSlug])) continue; ?>
+          <?php $tierItems = $badgesByTier[$tSlug]; ?>
+          <div class="perks-category-section" data-badge-tier-group="<?= SecurityHelper::e($tSlug) ?>">
+            <div class="perks-category-header">
+              <div class="perks-category-title-wrap">
+                <h3 class="perk-tier-tag tier-<?= SecurityHelper::e($tSlug) ?>"><?= SecurityHelper::e($tLabel) ?></h3>
+                <span class="muted tabular-nums"><?= count($tierItems) ?> <?= count($tierItems) === 1 ? 'badge' : 'badges' ?></span>
               </div>
             </div>
 
-            <p class="perk-card-desc"><?= SecurityHelper::e($bdg['description']) ?></p>
-        </div>
-
-            <?php if ($canManagePerks && !empty($vas)): ?>
-            <div class="form-perks-va">
-              <form data-api-form="/api/v1/perks/badges/<?= SecurityHelper::e($bid) ?>/award"
-                    data-api-method="POST"
-                    data-no-reload="1"
-                    data-perk-assign-form="badge"
-                    data-perk-item-id="<?= SecurityHelper::e($bid) ?>">
-                <input type="hidden" name="sync_recipients" value="1">
-                <div class="va-ms" data-va-multiselect data-ms-kind="badge" data-ms-item-id="<?= SecurityHelper::e($bid) ?>">
-                  <div class="va-ms-top">
-                    <span class="form-label" style="margin-bottom:0;">Select VA Recipients</span>
-                    <span class="muted tabular-nums" style="font-size:11.5px;" data-va-ms-counter><?= count($holderIds) ?> selected</span>
-                  </div>
-
-                  <div class="va-ms-avatars <?= empty($holderIds) ? 'is-empty' : '' ?>" data-va-ms-avatars aria-label="Selected Virtual Assistants">
-                    <span class="va-ms-empty-hint">No VAs selected</span>
-                  </div>
-
-                  <div class="perk-assign-bar">
-                    <div class="va-ms-dropdown">
-                      <button type="button" class="select va-ms-trigger" data-va-ms-trigger aria-expanded="false">
-                        <span data-va-ms-trigger-text>Select Virtual Assistants...</span>
-                      </button>
-                      <div class="va-ms-menu is-hidden" data-va-ms-menu>
-                        <div class="va-ms-menu-head">
-                          <input type="search" class="input va-ms-search" data-va-ms-search placeholder="Search VAs...">
-                          <button type="button" class="btn-select-all-vas" data-select-all-vas>
-                            <?= workly_icon_svg('Check', 13) ?>
-                            <span>Select All</span>
-                          </button>
-                          <button type="button" class="btn btn-secondary btn-sm" data-va-ms-done>Done</button>
-                        </div>
-                        <div class="va-ms-list" data-va-ms-list>
-                          <?php foreach ($vas as $v): ?>
-                            <?php
-                              $vid = (string) $v['id'];
-                              $vInit = strtoupper(substr((string) $v['name'], 0, 2));
-                              $isChecked = isset($holderIds[$vid]);
-                            ?>
-                            <label class="va-ms-option" data-va-option-name="<?= SecurityHelper::e(strtolower((string) $v['name'])) ?>">
-                              <input type="checkbox"
-                                     name="user_ids[]"
-                                     value="<?= SecurityHelper::e($vid) ?>"
-                                     data-va-name="<?= SecurityHelper::e($v['name']) ?>"
-                                     data-va-avatar="<?= SecurityHelper::e((string) ($v['avatar_url'] ?? '')) ?>"
-                                     data-va-initials="<?= SecurityHelper::e($vInit) ?>"
-                                     <?= $isChecked ? 'checked' : '' ?>>
-                              <?php if (!empty($v['avatar_url'])): ?>
-                                <img src="<?= SecurityHelper::e($v['avatar_url']) ?>" alt="<?= SecurityHelper::e($v['name']) ?>" class="avatar-xs">
-                              <?php else: ?>
-                                <span class="avatar-xs"><?= SecurityHelper::e($vInit) ?></span>
-                              <?php endif; ?>
-                              <span class="va-ms-opt-name"><?= SecurityHelper::e($v['name']) ?></span>
-                            </label>
-                          <?php endforeach; ?>
+            <div class="perks-card-grid">
+              <?php foreach ($tierItems as $bdg): ?>
+                <?php
+                  $bid = (string) $bdg['id'];
+                  $holders = $awardsByBadge[$bid] ?? [];
+                  $holderIds = $awardUserIdsByBadge[$bid] ?? [];
+                ?>
+                <article class="card perk-program-card" data-badge-card="<?= SecurityHelper::e($bid) ?>">
+                  <div class="perk-card-top-block">
+                    <div class="perk-card-head">
+                      <div class="perk-card-identity">
+                        <span class="tier-icon-wrap tier-<?= SecurityHelper::e($tSlug) ?>">
+                          <?= workly_icon_svg((string) ($bdg['icon_name'] ?? 'Medal'), 19) ?>
+                        </span>
+                        <div style="min-width:0;">
+                          <h3 class="perk-card-title"><?= SecurityHelper::e($bdg['title']) ?></h3>
+                          <div class="perk-card-meta">
+                            <span class="perk-tier-tag tier-<?= SecurityHelper::e($tSlug) ?>"><?= SecurityHelper::e($tLabel) ?></span>
+                            <span>·</span>
+                            <span>Recognition Medal</span>
+                          </div>
                         </div>
                       </div>
                     </div>
-                    <button type="submit" class="btn btn-primary btn-sm perk-assign-submit">Save Awardees</button>
+
+                    <p class="perk-card-desc"><?= SecurityHelper::e($bdg['description']) ?></p>
                   </div>
-                </div>
-              </form>
+
+                  <?php if ($canManagePerks && !empty($vas)): ?>
+                    <form class="perk-assign-panel"
+                          data-api-form="/api/v1/perks/badges/<?= SecurityHelper::e($bid) ?>/award"
+                          data-api-method="POST"
+                          data-no-reload="1"
+                          data-perk-assign-form="badge"
+                          data-perk-item-id="<?= SecurityHelper::e($bid) ?>">
+                      <input type="hidden" name="sync_recipients" value="1">
+                      <div class="va-ms" data-va-multiselect data-ms-kind="badge" data-ms-item-id="<?= SecurityHelper::e($bid) ?>">
+                        <div class="va-ms-top">
+                          <span class="form-label" style="margin-bottom:0;">Select VA Recipients</span>
+                          <span class="muted tabular-nums" style="font-size:11.5px;" data-va-ms-counter><?= count($holderIds) ?> selected</span>
+                        </div>
+
+                        <div class="va-ms-avatars <?= empty($holderIds) ? 'is-empty' : '' ?>" data-va-ms-avatars aria-label="Selected Virtual Assistants">
+                          <span class="va-ms-empty-hint">No VAs selected</span>
+                        </div>
+
+                        <div class="perk-assign-bar">
+                          <div class="va-ms-dropdown">
+                            <button type="button" class="select va-ms-trigger" data-va-ms-trigger aria-expanded="false">
+                              <span data-va-ms-trigger-text>Select Virtual Assistants...</span>
+                            </button>
+                            <div class="va-ms-menu is-hidden" data-va-ms-menu>
+                              <div class="va-ms-menu-head">
+                                <input type="search" class="input va-ms-search" data-va-ms-search placeholder="Search VAs...">
+                                <button type="button" class="btn-select-all-vas" data-select-all-vas>
+                                  <?= workly_icon_svg('Check', 13) ?>
+                                  <span>Select All</span>
+                                </button>
+                                <button type="button" class="btn btn-secondary btn-sm" data-va-ms-done>Done</button>
+                              </div>
+                              <div class="va-ms-list" data-va-ms-list>
+                                <?php foreach ($vas as $v): ?>
+                                  <?php
+                                    $vid = (string) $v['id'];
+                                    $vInit = strtoupper(substr((string) $v['name'], 0, 2));
+                                    $isChecked = isset($holderIds[$vid]);
+                                  ?>
+                                  <label class="va-ms-option" data-va-option-name="<?= SecurityHelper::e(strtolower((string) $v['name'])) ?>">
+                                    <input type="checkbox"
+                                           name="user_ids[]"
+                                           value="<?= SecurityHelper::e($vid) ?>"
+                                           data-va-name="<?= SecurityHelper::e($v['name']) ?>"
+                                           data-va-avatar="<?= SecurityHelper::e((string) ($v['avatar_url'] ?? '')) ?>"
+                                           data-va-initials="<?= SecurityHelper::e($vInit) ?>"
+                                           <?= $isChecked ? 'checked' : '' ?>>
+                                    <?php if (!empty($v['avatar_url'])): ?>
+                                      <img src="<?= SecurityHelper::e($v['avatar_url']) ?>" alt="<?= SecurityHelper::e($v['name']) ?>" class="avatar-xs">
+                                    <?php else: ?>
+                                      <span class="avatar-xs"><?= SecurityHelper::e($vInit) ?></span>
+                                    <?php endif; ?>
+                                    <span class="va-ms-opt-name"><?= SecurityHelper::e($v['name']) ?></span>
+                                  </label>
+                                <?php endforeach; ?>
+                              </div>
+                            </div>
+                          </div>
+                          <button type="submit" class="btn btn-primary btn-sm perk-assign-submit">Save Awardees</button>
+                        </div>
+                      </div>
+                    </form>
+                  <?php elseif ($canManagePerks): ?>
+                    <p class="muted" style="font-size:12px;">No active Virtual Assistants available to assign.</p>
+                  <?php endif; ?>
+                </article>
+              <?php endforeach; ?>
             </div>
-            <?php elseif ($canManagePerks): ?>
-              <p class="muted" style="font-size:12px;">No active Virtual Assistants available to assign.</p>
-            <?php endif; ?>
-          </article>
+          </div>
         <?php endforeach; ?>
       </div>
     <?php endif; ?>

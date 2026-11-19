@@ -18,7 +18,7 @@ $roleCats = $data['roles'] ?? [
     <h1>System Administrator Governance</h1>
     <p class="muted">Manage staff accounts, numeric IDs, role assignments, VA specialty categories, Gmail linkage, and security audit logs.</p>
   </div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap;">
+  <div class="page-header-actions">
     <button type="button" class="btn btn-secondary" data-open-drawer="drawer-link-gmail">Link Staff Mailbox</button>
     <button type="button" class="btn btn-primary" data-open-drawer="drawer-create-user">+ Add Staff Account</button>
   </div>
@@ -71,11 +71,12 @@ $roleCats = $data['roles'] ?? [
           <th>Status</th>
           <th>Connected Mailbox</th>
           <th>Rate / PTO</th>
-          <th>Actions</th>
+          <th style="text-align:right;">Actions</th>
         </tr>
       </thead>
       <tbody>
         <?php foreach (($data['all_users'] ?? []) as $u): ?>
+          <?php $isUserPaused = !empty($u['is_suspended']) || empty($u['is_active']); ?>
           <tr>
             <td>
               <div style="display:flex;align-items:center;gap:10px;">
@@ -92,7 +93,7 @@ $roleCats = $data['roles'] ?? [
             </td>
             <td><span class="badge badge-brand"><?= SecurityHelper::e(strtoupper((string) $u['role'])) ?></span></td>
             <td>
-              <?php if ($u['is_suspended'] || !$u['is_active']): ?>
+              <?php if ($isUserPaused): ?>
                 <span class="badge badge-danger">Suspended</span>
               <?php else: ?>
                 <span class="badge badge-success">Active</span>
@@ -105,34 +106,48 @@ $roleCats = $data['roles'] ?? [
                 <span class="muted">Not linked</span>
               <?php endif; ?>
             </td>
-            <td>
-              $<?= number_format((float) $u['hourly_rate'], 2) ?>/hr • <?= (int) $u['pto_balance_days'] ?>d PTO
+            <td class="tabular-nums">
+              $<?= number_format((float) $u['hourly_rate'], 2) ?>/hr · <?= (int) $u['pto_balance_days'] ?>d PTO
             </td>
-            <td>
-              <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                <button type="button" class="btn btn-secondary btn-sm" data-edit-user="<?= SecurityHelper::e($u['id']) ?>">Edit</button>
-                <a class="btn btn-secondary btn-sm" href="/profile?va_id=<?= urlencode((string) $u['id']) ?>">Profile</a>
-                <a class="btn btn-secondary btn-sm" href="/api/v1/logs?download=1&user_id=<?= urlencode((string) $u['id']) ?>">Log .txt</a>
-
-                <?php if ($u['id'] !== $user['id']): ?>
-                  <?php if ($u['is_suspended'] || !$u['is_active']): ?>
+            <td style="text-align:right;white-space:nowrap;">
+              <div class="action-dropdown" data-action-dropdown>
+                <button type="button"
+                        class="btn btn-secondary btn-sm action-dropdown-trigger"
+                        data-action-menu-trigger
+                        aria-haspopup="true"
+                        aria-expanded="false">
+                  <span>Actions</span>
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                </button>
+                <div class="action-dropdown-menu is-hidden" data-action-menu role="menu">
+                  <button type="button" class="action-dropdown-item" role="menuitem" data-edit-user="<?= SecurityHelper::e($u['id']) ?>">Edit Account</button>
+                  <a class="action-dropdown-item" role="menuitem" href="/profile?va_id=<?= urlencode((string) $u['id']) ?>">View Profile</a>
+                  <a class="action-dropdown-item" role="menuitem" href="/api/v1/logs?download=1&user_id=<?= urlencode((string) $u['id']) ?>">Export Log (.txt)</a>
+                  <?php if ($u['id'] !== $user['id']): ?>
+                    <div class="action-dropdown-divider" role="separator"></div>
+                    <?php if ($isUserPaused): ?>
+                      <button type="button"
+                              class="action-dropdown-item"
+                              role="menuitem"
+                              data-action-url="/api/v1/users/<?= SecurityHelper::e($u['id']) ?>/reactivate"
+                              data-action-method="PATCH">Reactivate Account</button>
+                    <?php else: ?>
+                      <button type="button"
+                              class="action-dropdown-item"
+                              role="menuitem"
+                              data-action-url="/api/v1/users/<?= SecurityHelper::e($u['id']) ?>/suspend"
+                              data-action-method="PATCH"
+                              data-action-body='{"reason":"Administrative hold"}'
+                              data-action-confirm="Suspend Account||Suspend <?= SecurityHelper::e($u['name']) ?>? They will immediately lose workspace access until reactivated.||Suspend||warn">Suspend Account</button>
+                    <?php endif; ?>
                     <button type="button"
-                            class="btn btn-secondary btn-sm"
-                            data-action-url="/api/v1/users/<?= SecurityHelper::e($u['id']) ?>/reactivate"
-                            data-action-method="PATCH">Reactivate</button>
-                  <?php else: ?>
-                    <button type="button"
-                            class="btn btn-secondary btn-sm"
-                            data-action-url="/api/v1/users/<?= SecurityHelper::e($u['id']) ?>/suspend"
-                            data-action-method="PATCH"
-                            data-action-body='{"reason":"Administrative hold"}'>Suspend</button>
+                            class="action-dropdown-item is-danger"
+                            role="menuitem"
+                            data-action-url="/api/v1/users/<?= SecurityHelper::e($u['id']) ?>"
+                            data-action-method="DELETE"
+                            data-action-confirm="Delete Account||Permanently delete <?= SecurityHelper::e($u['name']) ?>? This action cannot be undone.||Delete Account||danger">Delete Account</button>
                   <?php endif; ?>
-
-                  <button type="button"
-                          class="btn btn-danger btn-sm"
-                          data-action-url="/api/v1/users/<?= SecurityHelper::e($u['id']) ?>"
-                          data-action-method="DELETE">Delete</button>
-                <?php endif; ?>
+                </div>
               </div>
             </td>
           </tr>

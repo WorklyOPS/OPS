@@ -28,7 +28,8 @@
     currentAttachments: {},
     pendingConfirmForm: null,
     savedRanges: { reply: null, compose: null },
-    sourceMode: { reply: false, compose: false }
+    sourceMode: { reply: false, compose: false },
+    unreadSessionOpened: new Set()
   };
 
   function showGmailToast(message, type, onClick) {
@@ -570,13 +571,21 @@
     if (state.pollInFlight && !opts.force) return;
     state.pollInFlight = true;
     try {
-      const qs = new URLSearchParams({
+      const shouldMarkRead = opts.markRead === false
+        ? false
+        : (state.folder !== 'unread' || state.unreadSessionOpened.has(state.selectedThread));
+
+      const paramsObj = {
         sync: opts.sync === false ? '0' : '1',
         folder: state.folder,
         thread: state.selectedThread || '',
         q: state.query || '',
-        mark_read: opts.markRead === false ? '0' : '1'
-      });
+        mark_read: shouldMarkRead ? '1' : '0'
+      };
+      if (state.folder === 'unread' && state.unreadSessionOpened.size > 0) {
+        paramsObj.keep_threads = Array.from(state.unreadSessionOpened).join(',');
+      }
+      const qs = new URLSearchParams(paramsObj);
       const data = await requestJson('/api/v1/email/live?' + qs.toString());
 
       updateGmailUiState(Boolean(data.connected), data.gmail_email || '', data.last_synced || '');
@@ -603,6 +612,9 @@
 
   async function selectThread(threadId) {
     if (!threadId) return;
+    if (state.folder === 'unread') {
+      state.unreadSessionOpened.add(threadId);
+    }
     state.selectedThread = threadId;
     state.knownMessagesSnapshot = '';
     const splitShell = document.getElementById('gmail-split-shell');
@@ -618,13 +630,22 @@
   }
 
   async function switchFolder(folder) {
-    state.folder = folder || 'all';
+    const nextFolder = folder || 'all';
+    if (nextFolder !== state.folder) {
+      state.unreadSessionOpened.clear();
+      if (nextFolder === 'unread') {
+        state.selectedThread = '';
+        state.knownMessagesSnapshot = '';
+      }
+    }
+    state.folder = nextFolder;
+    state.knownThreadSnapshot = '';
     document.querySelectorAll('[data-email-folder]').forEach((tab) => {
       tab.classList.toggle('active', tab.getAttribute('data-email-folder') === state.folder);
     });
     const url = '/email?folder=' + encodeURIComponent(state.folder) + (state.selectedThread ? '&thread=' + encodeURIComponent(state.selectedThread) : '');
     window.history.replaceState({}, document.title, url);
-    await refreshLiveState({ sync: false, silent: true, force: true });
+    await refreshLiveState({ sync: false, silent: true, force: true, markRead: state.folder !== 'unread' });
   }
 
   async function loadGmailStatus() {
@@ -1247,6 +1268,7 @@
             headers: { 'X-CSRF-Token': csrfToken, 'Content-Type': 'application/json', 'Accept': 'application/json' },
             body: JSON.stringify({ is_read: false })
           });
+          state.unreadSessionOpened.delete(tid);
           showGmailToast('Conversation marked as unread.', 'success');
           state.knownThreadSnapshot = '';
           if (splitShell) splitShell.classList.remove('has-mobile-thread');
@@ -1334,6 +1356,10 @@
         });
       });
     });
+
+    if (state.folder === 'unread' && state.selectedThread) {
+      state.unreadSessionOpened.add(state.selectedThread);
+    }
 
     loadGmailStatus();
     startRealtimePolling();

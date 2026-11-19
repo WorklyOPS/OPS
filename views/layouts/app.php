@@ -545,6 +545,22 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
     </div>
   </div>
 
+  <div id="modal-workly-confirm" class="modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="workly-confirm-title">
+    <div class="modal-panel confirm-modal-panel">
+      <div class="modal-head">
+        <h3 id="workly-confirm-title">Confirm Action</h3>
+        <button type="button" class="btn btn-secondary btn-sm" data-confirm-cancel>Close</button>
+      </div>
+      <div class="modal-body">
+        <p id="workly-confirm-message" class="muted" style="margin:0 0 18px;font-size:13.5px;line-height:1.55;">Are you sure you want to continue?</p>
+        <div class="confirm-modal-actions">
+          <button type="button" class="btn btn-secondary" data-confirm-cancel>Cancel</button>
+          <button type="button" id="btn-workly-confirm-go" class="btn btn-danger">Confirm</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <?php require __DIR__ . '/../partials/cookie_banner.php'; ?>
 
   <script src="/assets/js/app.js"></script>

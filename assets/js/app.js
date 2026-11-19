@@ -86,6 +86,7 @@
     initHeaderPopovers();
     initGlobalRealtimeNotifications();
     initDrawersAndModals();
+    initActionDropdowns();
     initTabs();
     initCommandPalette();
     initChartTooltipsAndToggles();
@@ -3618,31 +3619,206 @@
   }
 
   // ------------------------------------------------------------------------
-  // VA Directory Search, Specialty Category Filter & Admin Edit VA Drawer
+  // Viewport-Safe Floating Actions Dropdown Menus (No Clipping in .table-wrap)
+  // ------------------------------------------------------------------------
+  function initActionDropdowns() {
+    const closeAllActionMenus = (exceptMenu) => {
+      document.querySelectorAll('[data-action-menu]').forEach((menu) => {
+        if (menu === exceptMenu) return;
+        menu.classList.add('is-hidden');
+        const dd = menu.closest('[data-action-dropdown]');
+        const trig = dd ? dd.querySelector('[data-action-menu-trigger]') : null;
+        if (trig) trig.setAttribute('aria-expanded', 'false');
+      });
+    };
+
+    const positionMenu = (trigger, menu) => {
+      const rect = trigger.getBoundingClientRect();
+      menu.style.visibility = 'hidden';
+      menu.classList.remove('is-hidden');
+      const menuW = menu.offsetWidth || 184;
+      const menuH = menu.offsetHeight || 160;
+      const left = Math.max(10, Math.min(window.innerWidth - menuW - 10, rect.right - menuW));
+      const fitsBelow = (rect.bottom + 6 + menuH) <= (window.innerHeight - 10);
+      const top = fitsBelow
+        ? (rect.bottom + 6)
+        : Math.max(10, rect.top - menuH - 6);
+      menu.style.left = Math.round(left) + 'px';
+      menu.style.top = Math.round(top) + 'px';
+      menu.style.visibility = '';
+    };
+
+    document.addEventListener('click', (e) => {
+      const trigger = e.target.closest('[data-action-menu-trigger]');
+      if (trigger) {
+        e.preventDefault();
+        e.stopPropagation();
+        const dd = trigger.closest('[data-action-dropdown]');
+        const menu = dd ? dd.querySelector('[data-action-menu]') : null;
+        if (!menu) return;
+        const willOpen = menu.classList.contains('is-hidden');
+        closeAllActionMenus(willOpen ? menu : null);
+        if (willOpen) {
+          positionMenu(trigger, menu);
+          trigger.setAttribute('aria-expanded', 'true');
+        } else {
+          menu.classList.add('is-hidden');
+          trigger.setAttribute('aria-expanded', 'false');
+        }
+        return;
+      }
+
+      if (e.target.closest('.action-dropdown-item')) {
+        closeAllActionMenus(null);
+        return;
+      }
+
+      if (!e.target.closest('[data-action-menu]')) {
+        closeAllActionMenus(null);
+      }
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeAllActionMenus(null);
+    });
+    window.addEventListener('resize', () => closeAllActionMenus(null));
+    document.addEventListener('scroll', () => closeAllActionMenus(null), true);
+  }
+
+  // ------------------------------------------------------------------------
+  // Shared Custom Confirmation Modal (CSP Safe · No window.confirm)
+  // ------------------------------------------------------------------------
+  function worklyConfirmAction(opts) {
+    const modal = document.getElementById('modal-workly-confirm');
+    const titleEl = document.getElementById('workly-confirm-title');
+    const msgEl = document.getElementById('workly-confirm-message');
+    const goBtn = document.getElementById('btn-workly-confirm-go');
+    if (!modal || !goBtn) return Promise.resolve(true);
+
+    const cfg = opts || {};
+    if (titleEl) titleEl.textContent = cfg.title || 'Confirm Action';
+    if (msgEl) msgEl.textContent = cfg.message || 'Are you sure you want to continue?';
+    goBtn.textContent = cfg.confirmLabel || 'Confirm';
+    goBtn.className = 'btn ' + (cfg.tone === 'warn' ? 'btn-primary' : 'btn-danger');
+
+    modal.classList.remove('is-closing', 'is-hidden');
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        modal.classList.add('is-hidden');
+        goBtn.removeEventListener('click', onConfirm);
+        modal.querySelectorAll('[data-confirm-cancel]').forEach((b) => b.removeEventListener('click', onCancel));
+        modal.removeEventListener('click', onBackdrop);
+        document.removeEventListener('keydown', onEsc);
+        resolve(ok);
+      };
+      const onConfirm = () => finish(true);
+      const onCancel = () => finish(false);
+      const onBackdrop = (ev) => {
+        if (ev.target === modal) finish(false);
+      };
+      const onEsc = (ev) => {
+        if (ev.key === 'Escape') finish(false);
+      };
+
+      goBtn.addEventListener('click', onConfirm);
+      modal.querySelectorAll('[data-confirm-cancel]').forEach((b) => b.addEventListener('click', onCancel));
+      modal.addEventListener('click', onBackdrop);
+      document.addEventListener('keydown', onEsc);
+    });
+  }
+
+  // ------------------------------------------------------------------------
+  // VA Directory CRM Search, Status/Specialty/Sort Controls & Admin Lifecycle
   // ------------------------------------------------------------------------
   function initVaDirectory() {
     const dirSearch = document.getElementById('va-dir-search');
     const dirSpec = document.getElementById('va-dir-spec-filter');
+    const dirSort = document.getElementById('va-dir-sort-select');
     const dirCount = document.getElementById('va-dir-count');
+    const dirResetBtn = document.getElementById('va-dir-reset-filters');
+    const dirEmptyClearBtn = document.getElementById('va-dir-empty-clear');
+    const dirEmptyState = document.getElementById('va-dir-filter-empty');
+    const dirTable = document.getElementById('va-dir-table');
+    const dirTbody = document.getElementById('va-dir-tbody');
+    const statusTabs = Array.from(document.querySelectorAll('[data-va-status-filter]'));
 
-    if (dirSearch || dirSpec) {
-      const filterVas = () => {
+    let activeStatus = 'all';
+
+    if (dirTbody) {
+      const rows = Array.from(dirTbody.querySelectorAll('.crm-contact-row[data-va-row]'));
+      const totalCount = rows.length;
+
+      const sortRows = () => {
+        const mode = dirSort ? dirSort.value : 'name_asc';
+        const sorted = rows.slice().sort((a, b) => {
+          if (mode === 'sla_desc') {
+            return parseFloat(b.getAttribute('data-va-sla') || '0') - parseFloat(a.getAttribute('data-va-sla') || '0');
+          }
+          if (mode === 'tasks_desc') {
+            return parseInt(b.getAttribute('data-va-tasks') || '0', 10) - parseInt(a.getAttribute('data-va-tasks') || '0', 10);
+          }
+          if (mode === 'rate_desc') {
+            return parseFloat(b.getAttribute('data-va-rate') || '0') - parseFloat(a.getAttribute('data-va-rate') || '0');
+          }
+          return (a.getAttribute('data-va-name') || '').localeCompare(b.getAttribute('data-va-name') || '');
+        });
+        sorted.forEach((tr) => dirTbody.appendChild(tr));
+      };
+
+      const applyVaFilters = () => {
         const q = dirSearch ? dirSearch.value.trim().toLowerCase() : '';
         const spec = dirSpec ? dirSpec.value.trim().toLowerCase() : '';
         let visible = 0;
-        document.querySelectorAll('.va-dir-row[data-va-search]').forEach((row) => {
+
+        rows.forEach((row) => {
           const hay = (row.getAttribute('data-va-search') || '').toLowerCase();
+          const st = (row.getAttribute('data-va-status') || 'active').toLowerCase();
           const specsList = (row.getAttribute('data-va-specs') || '').toLowerCase().split('||').filter(Boolean);
-          const matchQ = (q === '' || hay.includes(q));
-          const matchS = (spec === '' || specsList.includes(spec));
-          const show = matchQ && matchS;
+
+          const matchQ = q === '' || hay.includes(q);
+          const matchStatus = activeStatus === 'all' || st === activeStatus;
+          const matchSpec = spec === '' || specsList.includes(spec);
+          const show = matchQ && matchStatus && matchSpec;
           row.style.display = show ? '' : 'none';
           if (show) visible++;
         });
-        if (dirCount) dirCount.textContent = String(visible);
+
+        if (dirCount) dirCount.textContent = visible + ' of ' + totalCount;
+        const hasFilters = q !== '' || spec !== '' || activeStatus !== 'all';
+        if (dirResetBtn) dirResetBtn.classList.toggle('is-hidden', !hasFilters);
+        if (dirTable) dirTable.classList.toggle('is-hidden', visible === 0);
+        if (dirEmptyState) dirEmptyState.classList.toggle('is-hidden', visible > 0);
       };
-      if (dirSearch) dirSearch.addEventListener('input', filterVas);
-      if (dirSpec) dirSpec.addEventListener('change', filterVas);
+
+      const resetVaFilters = () => {
+        if (dirSearch) dirSearch.value = '';
+        if (dirSpec) dirSpec.value = '';
+        activeStatus = 'all';
+        statusTabs.forEach((t) => t.classList.toggle('is-active', t.getAttribute('data-va-status-filter') === 'all'));
+        applyVaFilters();
+      };
+
+      if (dirSearch) dirSearch.addEventListener('input', applyVaFilters);
+      if (dirSpec) dirSpec.addEventListener('change', applyVaFilters);
+      if (dirSort) {
+        dirSort.addEventListener('change', () => {
+          sortRows();
+          applyVaFilters();
+        });
+      }
+      statusTabs.forEach((tab) => {
+        tab.addEventListener('click', () => {
+          activeStatus = tab.getAttribute('data-va-status-filter') || 'all';
+          statusTabs.forEach((t) => t.classList.toggle('is-active', t === tab));
+          applyVaFilters();
+        });
+      });
+      if (dirResetBtn) dirResetBtn.addEventListener('click', resetVaFilters);
+      if (dirEmptyClearBtn) dirEmptyClearBtn.addEventListener('click', resetVaFilters);
     }
 
     const store = document.getElementById('va-dir-json');
@@ -3668,49 +3844,135 @@
       });
     }
 
-    document.querySelectorAll('[data-dir-edit-va]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const vaId = btn.getAttribute('data-dir-edit-va');
-        const map = JSON.parse(store.textContent || '{}');
-        const va = map[vaId];
-        const drawer = document.getElementById('drawer-dir-edit-va');
-        if (!va || !drawer) return;
+    const dirSuspendBtn = document.getElementById('btn-dir-va-suspend');
+    const dirReactivateBtn = document.getElementById('btn-dir-va-reactivate');
+    const dirDeleteBtn = document.getElementById('btn-dir-va-delete');
 
-        const previewEl = drawer.querySelector('#dir-va-avatar-preview');
-        if (previewEl) previewEl.innerHTML = renderAvatarMarkup(va.avatar_url, va.va_name);
-
-        const uidInput = drawer.querySelector('#dir-va-avatar-id');
-        if (uidInput) uidInput.value = vaId;
-
-        if (delDirAvatarBtn) {
-          delDirAvatarBtn.setAttribute('data-user-id', vaId);
-          delDirAvatarBtn.classList.toggle('is-hidden', !va.avatar_url);
-        }
-
-        const form = drawer.querySelector('#form-dir-edit-va');
-        if (form) {
-          form.setAttribute('data-api-form', '/api/v1/users/' + encodeURIComponent(vaId));
-          form.querySelector('[name="name"]').value = va.va_name || '';
-          form.querySelector('[name="email"]').value = va.va_email || '';
-          form.querySelector('[name="hourly_rate"]').value = va.hourly_rate || 0;
-          const tlSel = form.querySelector('[name="team_leader_id"]');
-          if (tlSel) tlSel.value = va.team_leader_id || '';
-          const phoneInp = form.querySelector('[name="phone"]');
-          if (phoneInp) phoneInp.value = va.phone || '';
-          const bioInp = form.querySelector('[name="bio"]');
-          if (bioInp) bioInp.value = va.bio || '';
-
-          const specs = String(va.specialties_csv || '')
-            .split(',')
-            .map((s) => s.trim())
-            .filter(Boolean);
-          form.querySelectorAll('input[name="specialties[]"]').forEach((cb) => {
-            cb.checked = specs.includes(cb.value);
+    if (dirSuspendBtn) {
+      dirSuspendBtn.addEventListener('click', async () => {
+        const uid = dirSuspendBtn.getAttribute('data-user-id') || '';
+        const vaName = dirSuspendBtn.getAttribute('data-va-name') || 'this Virtual Assistant';
+        if (!uid) return;
+        const ok = await worklyConfirmAction({
+          title: 'Deactivate Virtual Assistant',
+          message: 'Deactivate ' + vaName + '? They will lose workspace access until reactivated by an Admin.',
+          confirmLabel: 'Deactivate VA',
+          tone: 'warn'
+        });
+        if (!ok) return;
+        try {
+          dirSuspendBtn.disabled = true;
+          await apiFetch('/api/v1/users/' + encodeURIComponent(uid) + '/suspend', {
+            method: 'PATCH',
+            body: JSON.stringify({ reason: 'Deactivated via VA Directory' })
           });
+          showToast('Virtual Assistant deactivated', 'success');
+          window.setTimeout(() => window.location.reload(), 320);
+        } catch (err) {
+          showToast(err.message, 'error');
+          dirSuspendBtn.disabled = false;
         }
-
-        openDrawer('drawer-dir-edit-va');
       });
+    }
+
+    if (dirReactivateBtn) {
+      dirReactivateBtn.addEventListener('click', async () => {
+        const uid = dirReactivateBtn.getAttribute('data-user-id') || '';
+        if (!uid) return;
+        try {
+          dirReactivateBtn.disabled = true;
+          await apiFetch('/api/v1/users/' + encodeURIComponent(uid) + '/reactivate', { method: 'PATCH' });
+          showToast('Virtual Assistant reactivated', 'success');
+          window.setTimeout(() => window.location.reload(), 320);
+        } catch (err) {
+          showToast(err.message, 'error');
+          dirReactivateBtn.disabled = false;
+        }
+      });
+    }
+
+    if (dirDeleteBtn) {
+      dirDeleteBtn.addEventListener('click', async () => {
+        const uid = dirDeleteBtn.getAttribute('data-user-id') || '';
+        const vaName = dirDeleteBtn.getAttribute('data-va-name') || 'this Virtual Assistant';
+        if (!uid) return;
+        const ok = await worklyConfirmAction({
+          title: 'Delete Virtual Assistant',
+          message: 'Permanently delete ' + vaName + '? This action removes their account and cannot be undone.',
+          confirmLabel: 'Delete VA',
+          tone: 'danger'
+        });
+        if (!ok) return;
+        try {
+          dirDeleteBtn.disabled = true;
+          await apiFetch('/api/v1/users/' + encodeURIComponent(uid), { method: 'DELETE' });
+          showToast('Virtual Assistant deleted', 'success');
+          window.setTimeout(() => window.location.reload(), 320);
+        } catch (err) {
+          showToast(err.message, 'error');
+          dirDeleteBtn.disabled = false;
+        }
+      });
+    }
+
+    document.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-dir-edit-va]');
+      if (!btn) return;
+      const vaId = btn.getAttribute('data-dir-edit-va');
+      const map = JSON.parse(store.textContent || '{}');
+      const va = map[vaId];
+      const drawer = document.getElementById('drawer-dir-edit-va');
+      if (!va || !drawer) return;
+
+      const previewEl = drawer.querySelector('#dir-va-avatar-preview');
+      if (previewEl) previewEl.innerHTML = renderAvatarMarkup(va.avatar_url, va.va_name);
+
+      const uidInput = drawer.querySelector('#dir-va-avatar-id');
+      if (uidInput) uidInput.value = vaId;
+
+      if (delDirAvatarBtn) {
+        delDirAvatarBtn.setAttribute('data-user-id', vaId);
+        delDirAvatarBtn.classList.toggle('is-hidden', !va.avatar_url);
+      }
+
+      const isPaused = Boolean(va.is_suspended) || !Boolean(va.is_active);
+      if (dirSuspendBtn) {
+        dirSuspendBtn.setAttribute('data-user-id', vaId);
+        dirSuspendBtn.setAttribute('data-va-name', va.va_name || 'VA');
+        dirSuspendBtn.classList.toggle('is-hidden', isPaused);
+      }
+      if (dirReactivateBtn) {
+        dirReactivateBtn.setAttribute('data-user-id', vaId);
+        dirReactivateBtn.classList.toggle('is-hidden', !isPaused);
+      }
+      if (dirDeleteBtn) {
+        dirDeleteBtn.setAttribute('data-user-id', vaId);
+        dirDeleteBtn.setAttribute('data-va-name', va.va_name || 'VA');
+      }
+
+      const form = drawer.querySelector('#form-dir-edit-va');
+      if (form) {
+        form.setAttribute('data-api-form', '/api/v1/users/' + encodeURIComponent(vaId));
+        form.querySelector('[name="name"]').value = va.va_name || '';
+        form.querySelector('[name="email"]').value = va.va_email || '';
+        form.querySelector('[name="hourly_rate"]').value = va.hourly_rate || 0;
+        const tlSel = form.querySelector('[name="team_leader_id"]');
+        if (tlSel) tlSel.value = va.team_leader_id || '';
+        const phoneInp = form.querySelector('[name="phone"]');
+        if (phoneInp) phoneInp.value = va.phone || '';
+        const bioInp = form.querySelector('[name="bio"]');
+        if (bioInp) bioInp.value = va.bio || '';
+
+        const specs = String(va.specialties_csv || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean);
+        form.querySelectorAll('input[name="specialties[]"]').forEach((cb) => {
+          cb.checked = specs.includes(cb.value);
+        });
+      }
+
+      openDrawer('drawer-dir-edit-va');
     });
   }
 
@@ -4779,7 +5041,21 @@
           const res = await apiFetch(url, { method: 'DELETE' });
           if (pid) {
             const card = perksView.querySelector('[data-perk-card="' + CSS.escape(pid) + '"]');
+            const section = card ? card.closest('.perks-category-section') : null;
+            const catSlug = section ? (section.getAttribute('data-perk-cat-group') || '') : '';
             if (card) card.remove();
+            if (section && catSlug) {
+              const rem = section.querySelectorAll('[data-perk-card]').length;
+              const secCnt = perksView.querySelector('[data-perk-section-count="' + CSS.escape(catSlug) + '"]');
+              const tabCnt = perksView.querySelector('[data-perk-cat-count="' + CSS.escape(catSlug) + '"]');
+              if (secCnt) secCnt.textContent = rem + ' ' + (rem === 1 ? 'program' : 'programs');
+              if (tabCnt) tabCnt.textContent = String(rem);
+              if (rem === 0) {
+                section.classList.add('is-hidden');
+                const catBtn = perksView.querySelector('[data-perk-cat-filter="' + CSS.escape(catSlug) + '"]');
+                if (catBtn) catBtn.classList.add('is-hidden');
+              }
+            }
           }
           if (res && res.board) renderPerksBoard(res.board, { forceSyncOpenMenus: true });
           showToast('Perk program deleted', 'success');
@@ -4788,6 +5064,33 @@
           delPerkBtn.disabled = false;
         }
       }
+    });
+
+    // Category filter tabs (Tab 1: Perks & Benefits)
+    perksView.querySelectorAll('[data-perk-cat-filter]').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const targetCat = tab.getAttribute('data-perk-cat-filter') || 'all';
+        perksView.querySelectorAll('[data-perk-cat-filter]').forEach((t) => t.classList.toggle('is-active', t === tab));
+        perksView.querySelectorAll('[data-perk-cat-group]').forEach((sec) => {
+          const slug = sec.getAttribute('data-perk-cat-group') || '';
+          const hasCards = sec.querySelectorAll('[data-perk-card]').length > 0;
+          const visible = hasCards && (targetCat === 'all' || slug === targetCat);
+          sec.classList.toggle('is-hidden', !visible);
+        });
+      });
+    });
+
+    // Tier filter tabs (Tab 2: Achievement Badges)
+    perksView.querySelectorAll('[data-badge-tier-filter]').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const targetTier = tab.getAttribute('data-badge-tier-filter') || 'all';
+        perksView.querySelectorAll('[data-badge-tier-filter]').forEach((t) => t.classList.toggle('is-active', t === tab));
+        perksView.querySelectorAll('[data-badge-tier-group]').forEach((sec) => {
+          const slug = sec.getAttribute('data-badge-tier-group') || '';
+          const visible = targetTier === 'all' || slug === targetTier;
+          sec.classList.toggle('is-hidden', !visible);
+        });
+      });
     });
 
     function applyDomHistoryFilter() {
@@ -5367,6 +5670,18 @@
       const url = btn.getAttribute('data-action-url');
       const method = btn.getAttribute('data-action-method') || 'POST';
       const bodyRaw = btn.getAttribute('data-action-body');
+      const confirmSpec = btn.getAttribute('data-action-confirm');
+
+      if (confirmSpec) {
+        const parts = confirmSpec.split('||');
+        const ok = await worklyConfirmAction({
+          title: parts[0] || 'Confirm Action',
+          message: parts[1] || 'Are you sure you want to continue?',
+          confirmLabel: parts[2] || 'Confirm',
+          tone: parts[3] || 'danger'
+        });
+        if (!ok) return;
+      }
 
       try {
         btn.disabled = true;
