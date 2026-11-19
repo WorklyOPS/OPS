@@ -135,9 +135,7 @@ final class EmailApiController
         }
 
         try {
-            $client = GmailOAuthService::client();
-            $client->fetchAccessTokenWithRefreshToken($refreshToken);
-            $token = $client->getAccessToken();
+            $token = GmailOAuthService::refreshAccessToken($refreshToken);
             $newAccessToken = (string) ($token['access_token'] ?? '');
             if ($newAccessToken === '') {
                 $this->markMailboxNeedsAuth((string) $user['id']);
@@ -210,10 +208,9 @@ final class EmailApiController
             $cleanup->execute();
             $stateStmt = $this->db->prepare("INSERT INTO gmail_oauth_states (state_hash, user_id, expires_at) VALUES (:hash, :uid, NOW() + INTERVAL '10 minutes')");
             $stateStmt->execute([':hash' => hash('sha256', $state), ':uid' => $user['id']]);
-            $client = GmailOAuthService::client();
-            $client->setState($state);
+            $authorizationUrl = GmailOAuthService::createAuthorizationUrl($state);
             header('Cache-Control: no-store');
-            header('Location: ' . $client->createAuthUrl(), true, 302);
+            header('Location: ' . $authorizationUrl, true, 302);
             exit;
         } catch (Throwable $e) {
             error_log('Workly Gmail OAuth start failed: ' . $e->getMessage());
@@ -241,8 +238,7 @@ final class EmailApiController
         }
 
         try {
-            $client = GmailOAuthService::client();
-            $token = $client->fetchAccessTokenWithAuthCode((string) $_GET['code']);
+            $token = GmailOAuthService::exchangeAuthorizationCode((string) $_GET['code']);
             if (!is_array($token) || !empty($token['error']) || empty($token['access_token'])) {
                 throw new RuntimeException('Google did not return a valid access token.');
             }
