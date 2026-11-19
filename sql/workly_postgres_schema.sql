@@ -299,23 +299,10 @@ CREATE TABLE IF NOT EXISTS staff_connected_mailboxes (
   oauth_status VARCHAR(32) NOT NULL DEFAULT 'active' CHECK (oauth_status IN ('active', 'needs_auth', 'syncing')),
   sync_interval_minutes INTEGER NOT NULL DEFAULT 5,
   oauth_scope TEXT DEFAULT NULL,
-  access_token_encrypted TEXT DEFAULT NULL,
-  refresh_token_encrypted TEXT DEFAULT NULL,
-  token_expires_at TIMESTAMPTZ DEFAULT NULL,
-  token_type VARCHAR(32) DEFAULT NULL,
   last_synced_at TIMESTAMPTZ DEFAULT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-CREATE TABLE IF NOT EXISTS gmail_oauth_states (
-  state_hash CHAR(64) PRIMARY KEY,
-  user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_gmail_oauth_states_expiry ON gmail_oauth_states (expires_at);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id VARCHAR(64) PRIMARY KEY,
