@@ -1644,23 +1644,23 @@ final class PageController
                 SELECT DISTINCT ON (m.thread_id)
                        m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email, m.body, m.snippet, m.folder, m.is_read, m.created_at,
                        (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
-                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND ea.is_inline = FALSE) AS att_count
+                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND (ea.is_inline = FALSE OR ea.size_bytes >= 1024)) AS att_count
                 FROM email_messages m
-                ORDER BY m.thread_id, m.created_at DESC
+                ORDER BY m.thread_id, m.created_at DESC, m.id DESC
             ");
         } else {
             $stmt = $this->db->prepare("
                 SELECT DISTINCT ON (m.thread_id)
                        m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email, m.body, m.snippet, m.folder, m.is_read, m.created_at,
                        (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
-                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND ea.is_inline = FALSE) AS att_count
+                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND (ea.is_inline = FALSE OR ea.size_bytes >= 1024)) AS att_count
                 FROM email_messages m
                 WHERE (
                     LOWER(m.sender_email) IN (LOWER(:e1), LOWER(:l1))
                     OR LOWER(m.recipient_email) IN (LOWER(:e2), LOWER(:l2))
                     OR LOWER(COALESCE(m.cc_email, '')) LIKE LOWER(:c1)
                 )
-                ORDER BY m.thread_id, m.created_at DESC
+                ORDER BY m.thread_id, m.created_at DESC, m.id DESC
             ");
             $stmt->execute([
                 ':e1' => $email,
@@ -1726,7 +1726,11 @@ final class PageController
         }
         unset($thRow);
 
-        usort($allThreads, static fn(array $a, array $b) => strcmp((string) $b['created_at'], (string) $a['created_at']));
+        usort($allThreads, static function (array $a, array $b): int {
+            $ta = strtotime((string) ($a['created_at'] ?? '')) ?: 0;
+            $tb = strtotime((string) ($b['created_at'] ?? '')) ?: 0;
+            return ($tb <=> $ta) ?: strcmp((string) ($b['id'] ?? ''), (string) ($a['id'] ?? ''));
+        });
 
         $threads = array_values(array_filter($allThreads, static function (array $th) use ($folder): bool {
             if ($folder === 'inbox') {
@@ -1753,7 +1757,7 @@ final class PageController
         $threadMessages = [];
         $attachmentsByMsg = [];
         if ($selectedThread !== '') {
-            $mStmt = $this->db->prepare('SELECT id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, folder, is_read, created_at FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC');
+            $mStmt = $this->db->prepare('SELECT id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, folder, is_read, created_at FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC, id ASC');
             $mStmt->execute([':tid' => $selectedThread]);
             $threadMessages = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 

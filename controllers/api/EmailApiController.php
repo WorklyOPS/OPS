@@ -475,7 +475,7 @@ final class EmailApiController
         $recipient = filter_var($input['recipient_email'] ?? '', FILTER_VALIDATE_EMAIL) ?: '';
         $cc = SecurityHelper::sanitizePlainText($input['cc_email'] ?? '', 191);
         $subject = SecurityHelper::sanitizePlainText($input['subject'] ?? 'Conversation Thread', 255);
-        $bodyHtml = SecurityHelper::sanitizeEmailHtml((string) ($input['body_html'] ?? ''), 150000);
+        $bodyHtml = SecurityHelper::sanitizeEmailHtml((string) ($input['body_html'] ?? ''), 300000);
         $body = SecurityHelper::sanitizePlainText($input['body'] ?? '', 16000);
         if ($body === '' && $bodyHtml !== '') {
             $body = SecurityHelper::htmlToPlainText($bodyHtml, 16000);
@@ -521,9 +521,10 @@ final class EmailApiController
 
         $id = 'msg-' . bin2hex(random_bytes(5));
         $bodyFormat = $bodyHtml !== '' ? 'html' : 'plain';
+        $createdAtIso = gmdate('c');
         $stmt = $this->db->prepare("
-            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id)
-            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, 'sent', TRUE, :cid)
+            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id, created_at)
+            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, 'sent', TRUE, :cid, :cat)
         ");
         $stmt->execute([
             ':id'      => $id,
@@ -539,6 +540,7 @@ final class EmailApiController
             ':snip'    => mb_substr($body, 0, 140, 'UTF-8'),
             ':gid'     => $gmailSentId,
             ':cid'     => $clientRef,
+            ':cat'     => $createdAtIso,
         ]);
 
         $this->storeAttachments($id, $attachments);
@@ -555,7 +557,7 @@ final class EmailApiController
         $recipient = filter_var($input['recipient_email'] ?? '', FILTER_VALIDATE_EMAIL) ?: '';
         $cc = SecurityHelper::sanitizePlainText($input['cc_email'] ?? '', 191);
         $subject = SecurityHelper::sanitizePlainText($input['subject'] ?? '', 255);
-        $bodyHtml = SecurityHelper::sanitizeEmailHtml((string) ($input['body_html'] ?? ''), 150000);
+        $bodyHtml = SecurityHelper::sanitizeEmailHtml((string) ($input['body_html'] ?? ''), 300000);
         $body = SecurityHelper::sanitizePlainText($input['body'] ?? '', 16000);
         if ($body === '' && $bodyHtml !== '') {
             $body = SecurityHelper::htmlToPlainText($bodyHtml, 16000);
@@ -599,9 +601,10 @@ final class EmailApiController
 
         $id = 'msg-' . bin2hex(random_bytes(5));
         $bodyFormat = $bodyHtml !== '' ? 'html' : 'plain';
+        $createdAtIso = gmdate('c');
         $stmt = $this->db->prepare("
-            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id)
-            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, 'sent', TRUE, :cid)
+            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id, created_at)
+            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, 'sent', TRUE, :cid, :cat)
         ");
         $stmt->execute([
             ':id'      => $id,
@@ -617,6 +620,7 @@ final class EmailApiController
             ':snip'    => mb_substr($body, 0, 140, 'UTF-8'),
             ':gid'     => $gmailSentId,
             ':cid'     => $clientRef,
+            ':cat'     => $createdAtIso,
         ]);
 
         $this->storeAttachments($id, $attachments);
@@ -719,23 +723,34 @@ final class EmailApiController
         $rawCid = (string) ($hdrs['content-id'] ?? $hdrs['x-attachment-id'] ?? '');
         $contentId = trim($rawCid, " \t\n\r<>");
         $disposition = strtolower((string) ($hdrs['content-disposition'] ?? ''));
-        $isInline = ($contentId !== '' || str_starts_with($disposition, 'inline')) && str_starts_with($mime, 'image/');
-        $isAttachment = ($filename !== '' || $attId !== '' || $contentId !== '') && !str_starts_with($mime, 'multipart/') && $mime !== 'text/plain' && $mime !== 'text/html';
+        $isExplicitAttachment = str_starts_with($disposition, 'attachment');
+        $isInline = !$isExplicitAttachment && ($contentId !== '' || str_starts_with($disposition, 'inline')) && str_starts_with($mime, 'image/');
+        $isTextBody = ($mime === 'text/plain' || $mime === 'text/html') && !$isExplicitAttachment && $filename === '';
+        $isAttachment = ($filename !== '' || $attId !== '' || $contentId !== '' || $isExplicitAttachment)
+            && !str_starts_with($mime, 'multipart/')
+            && !$isTextBody;
 
         if ($isAttachment && ($attId !== '' || $bodyData !== '')) {
-            $safeName = $filename !== '' ? $filename : ('inline-' . ($contentId !== '' ? preg_replace('/[^a-zA-Z0-9._-]/', '_', $contentId) : bin2hex(random_bytes(3))) . '.' . (explode('/', $mime)[1] ?? 'png'));
+            $ext = explode('/', $mime)[1] ?? 'bin';
+            $ext = preg_replace('/[^a-zA-Z0-9]/', '', explode(';', $ext)[0]) ?: 'bin';
+            $safeName = $filename !== '' ? $filename : ('attachment-' . ($contentId !== '' ? preg_replace('/[^a-zA-Z0-9._-]/', '_', $contentId) : bin2hex(random_bytes(3))) . '.' . $ext);
+            $decodedBytes = $bodyData !== '' ? $this->decodeBase64Url($bodyData) : '';
+            $rawSize = (int) ($payload['body']['size'] ?? 0);
+            if ($rawSize <= 0 && $decodedBytes !== '') {
+                $rawSize = strlen($decodedBytes);
+            }
             $attachments[] = [
                 'filename'     => SecurityHelper::sanitizePlainText($safeName, 180) ?: 'attachment.bin',
                 'mime_type'    => $mime !== '' ? $mime : 'application/octet-stream',
-                'size_bytes'   => (int) ($payload['body']['size'] ?? 0),
+                'size_bytes'   => $rawSize,
                 'gmail_att_id' => $attId !== '' ? $attId : null,
-                'data_base64'  => $bodyData !== '' ? base64_encode($this->decodeBase64Url($bodyData)) : null,
+                'data_base64'  => $decodedBytes !== '' ? base64_encode($decodedBytes) : null,
                 'content_id'   => $contentId !== '' ? $contentId : null,
                 'is_inline'    => $isInline,
             ];
-        } elseif ($mime === 'text/plain' && $bodyData !== '' && $plainBody === '') {
+        } elseif ($mime === 'text/plain' && $bodyData !== '' && $plainBody === '' && !$isExplicitAttachment) {
             $plainBody = $this->decodeGmailBodyText($bodyData, $hdrs);
-        } elseif ($mime === 'text/html' && $bodyData !== '' && $htmlBody === '') {
+        } elseif ($mime === 'text/html' && $bodyData !== '' && $htmlBody === '' && !$isExplicitAttachment) {
             $htmlBody = $this->decodeGmailBodyText($bodyData, $hdrs);
         }
 
@@ -803,10 +818,16 @@ final class EmailApiController
                 if ($gid === '') {
                     continue;
                 }
-                $chk = $this->db->prepare('SELECT id, body_html FROM email_messages WHERE gmail_message_id = :gid LIMIT 1');
+                $chk = $this->db->prepare('
+                    SELECT m.id, m.body_html,
+                           (SELECT COUNT(*)::INT FROM email_attachments ea WHERE ea.email_id = m.id) AS att_cnt
+                    FROM email_messages m
+                    WHERE m.gmail_message_id = :gid
+                    LIMIT 1
+                ');
                 $chk->execute([':gid' => $gid]);
                 $existingRow = $chk->fetch(PDO::FETCH_ASSOC);
-                if ($existingRow && !empty($existingRow['body_html'])) {
+                if ($existingRow && !empty($existingRow['body_html']) && (!$force || (int) ($existingRow['att_cnt'] ?? 0) > 0)) {
                     continue;
                 }
 
@@ -820,23 +841,51 @@ final class EmailApiController
                 $atts = [];
                 $this->extractGmailParts($full['payload'], $plainBody, $htmlBody, $atts);
 
-                // Upgrade legacy pre-HTML synced messages seamlessly if encountered
+                // Upgrade legacy pre-HTML / pre-attachment synced messages seamlessly if encountered
                 if ($existingRow) {
-                    if ($htmlBody !== '') {
-                        $exId = (string) $existingRow['id'];
-                        $attStmt = $this->db->prepare('SELECT id, content_id FROM email_attachments WHERE email_id = :eid');
-                        $attStmt->execute([':eid' => $exId]);
-                        $cidMap = [];
-                        foreach ($attStmt->fetchAll(PDO::FETCH_ASSOC) as $ea) {
-                            if (!empty($ea['content_id'])) {
-                                $cidMap[strtolower((string) $ea['content_id'])] = (string) $ea['id'];
+                    $exId = (string) $existingRow['id'];
+                    $attStmt = $this->db->prepare('SELECT id, content_id FROM email_attachments WHERE email_id = :eid');
+                    $attStmt->execute([':eid' => $exId]);
+                    $existingAtts = $attStmt->fetchAll(PDO::FETCH_ASSOC);
+                    $cidMap = [];
+                    foreach ($existingAtts as $ea) {
+                        if (!empty($ea['content_id'])) {
+                            $cidMap[strtolower((string) $ea['content_id'])] = (string) $ea['id'];
+                        }
+                    }
+
+                    if (empty($existingAtts) && !empty($atts)) {
+                        foreach ($atts as $a) {
+                            $attDbId = 'eatt-' . bin2hex(random_bytes(5));
+                            $aIns = $this->db->prepare("
+                                INSERT INTO email_attachments (id, email_id, filename, mime_type, size_bytes, data_base64, gmail_attachment_id, content_id, is_inline)
+                                VALUES (:id, :eid, :fname, :mime, :sz, :b64, :gaid, :cid, :inl)
+                            ");
+                            $aIns->execute([
+                                ':id'    => $attDbId,
+                                ':eid'   => $exId,
+                                ':fname' => $a['filename'],
+                                ':mime'  => $a['mime_type'],
+                                ':sz'    => $a['size_bytes'],
+                                ':b64'   => $a['data_base64'],
+                                ':gaid'  => $a['gmail_att_id'],
+                                ':cid'   => $a['content_id'],
+                                ':inl'   => !empty($a['is_inline']) ? 'true' : 'false',
+                            ]);
+                            if (!empty($a['content_id'])) {
+                                $cidMap[strtolower((string) $a['content_id'])] = $attDbId;
                             }
                         }
+                        $syncedCount++;
+                    }
+
+                    if (empty($existingRow['body_html']) && $htmlBody !== '') {
                         $resolvedHtml = $this->resolveCidImages($htmlBody, $cidMap);
-                        $cleanHtml = SecurityHelper::sanitizeEmailHtml($resolvedHtml, 150000);
+                        $cleanHtml = SecurityHelper::sanitizeEmailHtml($resolvedHtml, 300000);
                         if ($cleanHtml !== '') {
                             $upHtml = $this->db->prepare("UPDATE email_messages SET body_html = :bh, body_format = 'html' WHERE id = :id");
                             $upHtml->execute([':bh' => $cleanHtml, ':id' => $exId]);
+                            $syncedCount++;
                         }
                     }
                     continue;
@@ -934,7 +983,7 @@ final class EmailApiController
 
                 if ($htmlBody !== '') {
                     $resolvedHtml = $this->resolveCidImages($htmlBody, $cidMap);
-                    $cleanHtml = SecurityHelper::sanitizeEmailHtml($resolvedHtml, 150000);
+                    $cleanHtml = SecurityHelper::sanitizeEmailHtml($resolvedHtml, 300000);
                     if ($cleanHtml !== '') {
                         $upHtml = $this->db->prepare('UPDATE email_messages SET body_html = :bh WHERE id = :id');
                         $upHtml->execute([':bh' => $cleanHtml, ':id' => $id]);
@@ -1112,9 +1161,9 @@ final class EmailApiController
                        m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email,
                        m.body, m.snippet, m.folder, m.is_read, m.created_at,
                        (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
-                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND ea.is_inline = FALSE) AS att_count
+                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND (ea.is_inline = FALSE OR ea.size_bytes >= 1024)) AS att_count
                 FROM email_messages m
-                ORDER BY m.thread_id, m.created_at DESC
+                ORDER BY m.thread_id, m.created_at DESC, m.id DESC
             ");
         } else {
             $allStmt = $this->db->prepare("
@@ -1122,14 +1171,14 @@ final class EmailApiController
                        m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email,
                        m.body, m.snippet, m.folder, m.is_read, m.created_at,
                        (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
-                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND ea.is_inline = FALSE) AS att_count
+                       (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND (ea.is_inline = FALSE OR ea.size_bytes >= 1024)) AS att_count
                 FROM email_messages m
                 WHERE (
                     LOWER(m.sender_email) IN (LOWER(:e1), LOWER(:l1))
                     OR LOWER(m.recipient_email) IN (LOWER(:e2), LOWER(:l2))
                     OR LOWER(COALESCE(m.cc_email, '')) LIKE LOWER(:c1)
                 )
-                ORDER BY m.thread_id, m.created_at DESC
+                ORDER BY m.thread_id, m.created_at DESC, m.id DESC
             ");
             $allStmt->execute([
                 ':e1' => $email,
@@ -1163,7 +1212,11 @@ final class EmailApiController
         }
         unset($thRow);
 
-        usort($allThreads, static fn(array $a, array $b): int => strcmp((string) $b['created_at'], (string) $a['created_at']));
+        usort($allThreads, static function (array $a, array $b): int {
+            $ta = strtotime((string) ($a['created_at'] ?? '')) ?: 0;
+            $tb = strtotime((string) ($b['created_at'] ?? '')) ?: 0;
+            return ($tb <=> $ta) ?: strcmp((string) ($b['id'] ?? ''), (string) ($a['id'] ?? ''));
+        });
 
         if ($summaryOnly) {
             echo json_encode([
@@ -1204,7 +1257,7 @@ final class EmailApiController
         $threadMessages = [];
         $attachmentsByMsg = [];
         if ($selectedThread !== '') {
-            $mStmt = $this->db->prepare('SELECT id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, folder, is_read, created_at FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC');
+            $mStmt = $this->db->prepare('SELECT id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, folder, is_read, created_at FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC, id ASC');
             $mStmt->execute([':tid' => $selectedThread]);
             $threadMessages = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 

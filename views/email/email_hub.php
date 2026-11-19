@@ -22,8 +22,24 @@ if ($lastMsg) {
         ? (string) $lastMsg['recipient_email']
         : (string) $lastMsg['sender_email'];
 }
-$defaultBadgeLabel = $isMailboxActive ? ('Gmail: ' . $linkedEmail) : 'Workspace Mail Ready';
-$defaultBadgeClass = $isMailboxActive ? 'badge badge-success' : 'badge badge-neutral';
+
+$formatMailTime = static function (?string $raw, bool $full = false): string {
+    if (!$raw) {
+        return '';
+    }
+    $ts = strtotime($raw);
+    if ($ts === false) {
+        return substr($raw, 0, 16);
+    }
+    if ($full) {
+        return date('M j, Y · g:i A', $ts);
+    }
+    return date('Y-m-d', $ts) === date('Y-m-d') ? date('g:i A', $ts) : date('M j', $ts);
+};
+
+$lastSyncStr = !empty($mailbox['last_synced_at'])
+    ? ('Live · ' . date('g:i A', strtotime((string) $mailbox['last_synced_at']) ?: time()))
+    : 'Live';
 
 $renderRichToolbar = static function (string $editorId): void {
     ?>
@@ -35,12 +51,12 @@ $renderRichToolbar = static function (string $editorId): void {
         <button type="button" class="gmail-tool-btn" data-rich-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
       </div>
       <div class="gmail-toolbar-group">
-        <select class="gmail-tool-select" data-rich-block="<?= SecurityHelper::e($editorId) ?>" title="Text block style" aria-label="Text block style">
+        <select class="gmail-tool-select" data-rich-block="<?= SecurityHelper::e($editorId) ?>" title="Text style" aria-label="Text style">
           <option value="P">Normal</option>
           <option value="H2">Heading</option>
           <option value="H3">Subheading</option>
           <option value="BLOCKQUOTE">Quote</option>
-          <option value="PRE">&lt;&gt; Code Block</option>
+          <option value="PRE">Code Block</option>
         </select>
         <label class="gmail-color-btn" title="Text color">
           <span>A</span>
@@ -50,12 +66,12 @@ $renderRichToolbar = static function (string $editorId): void {
       <div class="gmail-toolbar-group">
         <button type="button" class="gmail-tool-btn" data-rich-cmd="insertUnorderedList" title="Bulleted list">• List</button>
         <button type="button" class="gmail-tool-btn" data-rich-cmd="insertOrderedList" title="Numbered list">1. List</button>
-        <button type="button" class="gmail-tool-btn" data-rich-inline-code="<?= SecurityHelper::e($editorId) ?>" title="Wrap selection in code &lt;&gt;">&lt;code&gt;</button>
+        <button type="button" class="gmail-tool-btn" data-rich-inline-code="<?= SecurityHelper::e($editorId) ?>" title="Inline code">&lt;/&gt;</button>
       </div>
       <div class="gmail-toolbar-group">
-        <button type="button" class="gmail-tool-btn" data-rich-link-toggle="<?= SecurityHelper::e($editorId) ?>" title="Insert hyperlink">Link</button>
+        <button type="button" class="gmail-tool-btn" data-rich-link-toggle="<?= SecurityHelper::e($editorId) ?>" title="Insert link">Link</button>
         <button type="button" class="gmail-tool-btn" data-rich-cmd="removeFormat" title="Clear formatting">Clear</button>
-        <button type="button" class="gmail-tool-btn gmail-tool-btn-code" data-rich-source-toggle="<?= SecurityHelper::e($editorId) ?>" title="Toggle raw HTML &lt;&gt; source">&lt;&gt; HTML</button>
+        <button type="button" class="gmail-tool-btn gmail-tool-btn-code" data-rich-source-toggle="<?= SecurityHelper::e($editorId) ?>" title="Formatted source">Source</button>
       </div>
     </div>
     <div class="gmail-link-popover is-hidden" data-rich-link-bar="<?= SecurityHelper::e($editorId) ?>">
@@ -78,22 +94,35 @@ $renderRichToolbar = static function (string $editorId): void {
 </div>
 
 <div class="page-header gmail-hub-header">
-  <div>
-    <h1>Email Communications Hub</h1>
-    <p class="muted">Real-time Gmail OAuth 2.0 sync, full rich HTML &amp; image rendering, CC delivery, and &lt;&gt; rich composition.</p>
+  <div class="gmail-header-intro">
+    <h1>Email Hub</h1>
+    <p class="muted">Inbox, conversations, attachments, and team email.</p>
   </div>
-  <div class="gmail-header-actions">
-    <span id="gmail-live-sync-pill" class="gmail-live-pill <?= $isMailboxActive ? '' : 'is-hidden' ?>" title="Real-time Gmail background synchronization active">
-      <span class="gmail-live-dot"></span>
-      <span id="gmail-live-sync-text">Live Sync Active</span>
-    </span>
 
-    <span id="gmail-oauth-status-badge"
-          class="<?= $defaultBadgeClass ?>"
-          data-default-label="<?= SecurityHelper::e($defaultBadgeLabel) ?>"
-          data-default-class="<?= SecurityHelper::e($defaultBadgeClass) ?>">
-      <?= SecurityHelper::e($defaultBadgeLabel) ?>
-    </span>
+  <div class="gmail-header-controls">
+    <div id="gmail-account-capsule" class="gmail-account-capsule <?= $isMailboxActive ? '' : 'is-hidden' ?>">
+      <span id="gmail-live-sync-pill" class="gmail-live-segment" title="Automatic mail updates active">
+        <span class="gmail-live-dot"></span>
+        <span id="gmail-live-sync-text"><?= SecurityHelper::e($lastSyncStr) ?></span>
+      </span>
+
+      <span class="gmail-capsule-divider" aria-hidden="true"></span>
+
+      <span id="gmail-oauth-status-badge" class="gmail-account-email-chip" title="<?= SecurityHelper::e($linkedEmail) ?>">
+        <?= workly_icon_svg('Mail', 14) ?>
+        <span id="gmail-connected-email-text"><?= SecurityHelper::e($linkedEmail !== '' ? $linkedEmail : 'Connected') ?></span>
+      </span>
+
+      <div class="gmail-capsule-actions">
+        <button type="button" id="btn-gmail-sync-now" class="gmail-capsule-btn" title="Refresh mailbox now">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>
+          </svg>
+          <span>Sync Now</span>
+        </button>
+        <button type="button" id="btn-gmail-disconnect" class="gmail-capsule-btn gmail-capsule-btn-danger">Disconnect</button>
+      </div>
+    </div>
 
     <button type="button" id="btn-google-signin-gmail" class="gsi-material-button <?= $isMailboxActive ? 'is-hidden' : '' ?>">
       <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
@@ -105,9 +134,10 @@ $renderRichToolbar = static function (string $editorId): void {
       <span>Connect Gmail</span>
     </button>
 
-    <button type="button" id="btn-gmail-sync-now" class="btn btn-secondary btn-sm <?= $isMailboxActive ? '' : 'is-hidden' ?>">Sync Now</button>
-    <button type="button" id="btn-gmail-disconnect" class="btn btn-secondary btn-sm <?= $isMailboxActive ? '' : 'is-hidden' ?>">Disconnect</button>
-    <button type="button" id="btn-open-compose" class="btn btn-primary" data-open-drawer="drawer-compose-email">+ Compose</button>
+    <button type="button" id="btn-open-compose" class="btn btn-primary gmail-compose-cta">
+      <?= workly_icon_svg('Plus', 15) ?>
+      <span>Compose</span>
+    </button>
   </div>
 </div>
 
@@ -133,13 +163,13 @@ $renderRichToolbar = static function (string $editorId): void {
   </div>
 </div>
 
-<div class="email-layout email-hub-split">
-  <!-- Conversation Thread Rail -->
+<div id="gmail-split-shell" class="email-layout email-hub-split">
+  <!-- Conversation Thread Rail (Newest to Oldest) -->
   <div class="card gmail-list-card">
     <div class="gmail-list-head">
       <h4>Conversations (<span id="gmail-thread-count-label"><?= count($threads) ?></span>)</h4>
       <span class="muted mono" id="gmail-last-sync-label" style="font-size:11px;">
-        <?= !empty($mailbox['last_synced_at']) ? SecurityHelper::e('Synced ' . substr((string) $mailbox['last_synced_at'], 11, 5)) : 'Ready' ?>
+        <?= !empty($mailbox['last_synced_at']) ? SecurityHelper::e('Updated ' . date('g:i A', strtotime((string) $mailbox['last_synced_at']) ?: time())) : 'Ready' ?>
       </span>
     </div>
 
@@ -168,7 +198,7 @@ $renderRichToolbar = static function (string $editorId): void {
             <div class="gmail-thread-row-body">
               <div class="gmail-thread-row-top">
                 <strong class="gmail-thread-sender"><?= SecurityHelper::e($senderName) ?></strong>
-                <span class="gmail-thread-time mono"><?= SecurityHelper::e(substr((string) $th['created_at'], 5, 11)) ?></span>
+                <span class="gmail-thread-time mono"><?= SecurityHelper::e($formatMailTime((string) $th['created_at'], false)) ?></span>
               </div>
               <div class="gmail-thread-subject-line">
                 <?php if ($isUnread): ?><span class="gmail-unread-dot" aria-label="Unread"></span><?php endif; ?>
@@ -192,18 +222,22 @@ $renderRichToolbar = static function (string $editorId): void {
   <div class="card gmail-reader-card" id="gmail-reading-pane">
     <div id="gmail-reader-empty" class="gmail-empty-state <?= empty($messages) ? '' : 'is-hidden' ?>" style="min-height:420px;">
       <div class="gmail-empty-icon"><?= workly_icon_svg('Mail', 28) ?></div>
-      <h3 style="margin-bottom:6px;">Select an Email Conversation</h3>
-      <p class="muted" style="max-width:360px;">Choose a conversation on the left to inspect rich HTML emails &amp; images, or click <strong>+ Compose</strong> to send a new message.</p>
+      <h3 style="margin-bottom:6px;">Select a Conversation</h3>
+      <p class="muted" style="max-width:360px;">Choose a conversation on the left to read messages and attachments, or click <strong>+ Compose</strong> to start a new email.</p>
     </div>
 
     <div id="gmail-reader-active" class="<?= empty($messages) ? 'is-hidden' : '' ?>">
+      <div class="gmail-mobile-nav-bar">
+        <button type="button" class="btn btn-secondary btn-sm gmail-mobile-back" id="btn-gmail-mobile-back">← Conversations</button>
+      </div>
+
       <div class="gmail-reader-header">
         <div style="min-width:0;flex:1;">
           <h2 id="gmail-reader-subject" class="gmail-reader-subject"><?= !empty($messages) ? SecurityHelper::e((string) $messages[0]['subject']) : '' ?></h2>
           <div class="gmail-reader-meta">
             <span id="gmail-reader-msg-count"><?= count($messages) ?> message(s)</span>
             <span>·</span>
-            <span class="mono" id="gmail-reader-thread-chip">Thread <?= SecurityHelper::e(substr($selectedThread, 0, 14)) ?></span>
+            <span class="mono" id="gmail-reader-thread-chip">Conversation</span>
           </div>
         </div>
         <div class="gmail-reader-actions">
@@ -221,10 +255,17 @@ $renderRichToolbar = static function (string $editorId): void {
             $isMine = ($sLow === strtolower((string) $user['email']) || ($linkedEmail !== '' && $sLow === strtolower($linkedEmail)));
             $isExpanded = ($idx === $totalMsgs - 1);
             $msgAtts = $attachmentsMap[$msg['id']] ?? [];
-            $regularAtts = array_values(array_filter($msgAtts, static fn(array $a): bool => empty($a['is_inline'])));
+            $displayAtts = array_values(array_filter($msgAtts, static function (array $a): bool {
+                if (empty($a['is_inline'])) {
+                    return true;
+                }
+                $mime = strtolower((string) ($a['mime_type'] ?? ''));
+                $sz = (int) ($a['size_bytes'] ?? 0);
+                return !str_starts_with($mime, 'image/') || $sz >= 1024;
+            }));
             $sName = (string) ($msg['sender_name'] ?: $msg['sender_email']);
             $sInit = strtoupper(substr($sName, 0, 2));
-            $safeHtml = !empty($msg['body_html']) ? SecurityHelper::sanitizeEmailHtml((string) $msg['body_html'], 150000) : '';
+            $safeHtml = !empty($msg['body_html']) ? SecurityHelper::sanitizeEmailHtml((string) $msg['body_html'], 300000) : '';
             $previewLine = !empty($msg['snippet'])
                 ? (string) $msg['snippet']
                 : mb_substr(trim(strip_tags((string) ($msg['body'] ?? ''))), 0, 90, 'UTF-8');
@@ -249,7 +290,7 @@ $renderRichToolbar = static function (string $editorId): void {
                 </div>
               </div>
               <div class="gmail-msg-time-wrap">
-                <span class="muted mono" style="font-size:11.5px;"><?= SecurityHelper::e(substr((string) $msg['created_at'], 0, 16)) ?></span>
+                <span class="muted mono" style="font-size:11.5px;"><?= SecurityHelper::e($formatMailTime((string) $msg['created_at'], true)) ?></span>
                 <span class="gmail-msg-chevron" aria-hidden="true">▾</span>
               </div>
             </header>
@@ -261,9 +302,9 @@ $renderRichToolbar = static function (string $editorId): void {
                 <div class="gmail-msg-plain"><?= SecurityHelper::e((string) $msg['body']) ?></div>
               <?php endif; ?>
 
-              <?php if (!empty($regularAtts)): ?>
+              <?php if (!empty($displayAtts)): ?>
                 <div class="gmail-msg-attachments">
-                  <?php foreach ($regularAtts as $att): ?>
+                  <?php foreach ($displayAtts as $att): ?>
                     <?php
                       $isImg = str_starts_with(strtolower((string) ($att['mime_type'] ?? '')), 'image/');
                       $attUrl = '/api/v1/email/attachments/' . urlencode((string) $att['id']);
@@ -275,15 +316,16 @@ $renderRichToolbar = static function (string $editorId): void {
                           <img src="<?= SecurityHelper::e($attUrl . '?inline=1') ?>" alt="<?= SecurityHelper::e((string) $att['filename']) ?>" loading="lazy">
                         </button>
                         <div class="gmail-att-image-meta">
-                          <span class="gmail-att-name"><?= SecurityHelper::e((string) $att['filename']) ?></span>
-                          <a href="<?= SecurityHelper::e($attUrl) ?>" download="<?= SecurityHelper::e((string) $att['filename']) ?>" class="gmail-att-dl-link" title="Download"><?= workly_icon_svg('Download', 13) ?></a>
+                          <span class="gmail-att-name" title="<?= SecurityHelper::e((string) $att['filename']) ?>"><?= SecurityHelper::e((string) $att['filename']) ?></span>
+                          <a href="<?= SecurityHelper::e($attUrl) ?>" download="<?= SecurityHelper::e((string) $att['filename']) ?>" class="gmail-att-dl-link" title="Download attachment"><?= workly_icon_svg('Download', 14) ?></a>
                         </div>
                       </div>
                     <?php else: ?>
                       <a class="gmail-att-file-chip" href="<?= SecurityHelper::e($attUrl) ?>" download="<?= SecurityHelper::e((string) $att['filename']) ?>">
                         <?= workly_icon_svg('Paperclip', 13) ?>
-                        <span class="gmail-att-name"><?= SecurityHelper::e((string) $att['filename']) ?></span>
+                        <span class="gmail-att-name" title="<?= SecurityHelper::e((string) $att['filename']) ?>"><?= SecurityHelper::e((string) $att['filename']) ?></span>
                         <span class="muted mono" style="font-size:10.5px;">(<?= $kb ?> KB)</span>
+                        <?= workly_icon_svg('Download', 13) ?>
                       </a>
                     <?php endif; ?>
                   <?php endforeach; ?>
@@ -294,7 +336,7 @@ $renderRichToolbar = static function (string $editorId): void {
         <?php endforeach; ?>
       </div>
 
-      <!-- Inline Rich HTML Reply Composer -->
+      <!-- Inline Reply Composer -->
       <form id="gmail-reply-form" data-gmail-form="/api/v1/email/reply" enctype="multipart/form-data" class="gmail-reply-box">
         <input type="hidden" name="thread_id" value="<?= SecurityHelper::e($selectedThread) ?>">
         <input type="hidden" name="recipient_email" value="<?= SecurityHelper::e($replyRecipient) ?>">
@@ -312,19 +354,19 @@ $renderRichToolbar = static function (string $editorId): void {
         </div>
 
         <div class="form-group" style="margin-bottom:10px;">
-          <label class="form-label">Rich Reply Message</label>
+          <label class="form-label">Reply</label>
           <div class="gmail-editor-shell">
             <?php $renderRichToolbar('reply'); ?>
             <div class="gmail-rich-editor"
                  id="rich-editor-reply"
                  contenteditable="true"
                  data-rich-surface="reply"
-                 data-placeholder="Write your reply with bold, lists, quotes, links, or &lt;&gt; code formatting..."></div>
+                 data-placeholder="Write your reply..."></div>
             <textarea class="textarea gmail-html-source is-hidden"
                       id="rich-source-reply"
                       data-rich-source="reply"
                       rows="5"
-                      placeholder="<p>Write HTML email markup...</p>"></textarea>
+                      placeholder="Write HTML source..."></textarea>
             <textarea name="body_html" id="rich-hidden-html-reply" class="is-hidden"></textarea>
             <textarea name="body" id="rich-hidden-plain-reply" class="is-hidden"></textarea>
           </div>
@@ -342,70 +384,82 @@ $renderRichToolbar = static function (string $editorId): void {
   </div>
 </div>
 
-<!-- Right-Side Drawer: Rich Compose Email -->
-<div id="drawer-compose-email" class="drawer-backdrop is-hidden">
-  <aside class="drawer-panel drawer-panel-wide" role="dialog" aria-label="New Email Message">
-    <div class="drawer-head">
-      <h3>New Email Message</h3>
-      <button type="button" class="btn btn-secondary btn-sm" data-close-drawer>Close</button>
+<!-- Floating Bottom-Right Compose Popup (Gmail Style) -->
+<aside id="gmail-compose-popup" class="gmail-compose-dock is-hidden" role="dialog" aria-label="New Message">
+  <div class="gmail-compose-dock-head" id="gmail-compose-dock-head">
+    <span class="gmail-compose-dock-title" id="gmail-compose-dock-title">New Message</span>
+    <div class="gmail-compose-dock-controls">
+      <button type="button" id="btn-compose-minimize" class="gmail-dock-icon-btn" title="Minimize" aria-label="Minimize">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><line x1="5" y1="18" x2="19" y2="18"/></svg>
+      </button>
+      <button type="button" id="btn-compose-expand" class="gmail-dock-icon-btn" title="Expand" aria-label="Expand">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+      </button>
+      <button type="button" id="btn-compose-close" class="gmail-dock-icon-btn" title="Close" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
     </div>
-    <div class="drawer-body">
-      <form id="gmail-compose-form" data-gmail-form="/api/v1/email/compose" enctype="multipart/form-data">
-        <div class="grid-2">
-          <div class="form-group">
-            <label class="form-label">To (Recipient Email)</label>
-            <input class="input" type="email" name="recipient_email" list="workly-contacts" required placeholder="recipient@company.com">
-            <datalist id="workly-contacts">
-              <?php foreach ($data['contacts'] as $ct): ?>
-                <option value="<?= SecurityHelper::e($ct['email']) ?>"><?= SecurityHelper::e($ct['name']) ?> (<?= SecurityHelper::e($ct['role']) ?>)</option>
-              <?php endforeach; ?>
-            </datalist>
-          </div>
+  </div>
 
-          <div class="form-group">
-            <label class="form-label">CC (comma-separated, optional)</label>
-            <input class="input" type="text" name="cc_email" placeholder="cc1@company.com, cc2@company.com">
-          </div>
+  <div class="gmail-compose-dock-body">
+    <form id="gmail-compose-form" data-gmail-form="/api/v1/email/compose" enctype="multipart/form-data">
+      <div class="gmail-compose-fields">
+        <div class="gmail-compose-field-row">
+          <label class="gmail-compose-field-label" for="compose-recipient-input">To</label>
+          <input id="compose-recipient-input" class="gmail-compose-line-input" type="email" name="recipient_email" list="workly-contacts" required placeholder="recipient@company.com">
+          <button type="button" id="btn-compose-toggle-cc" class="gmail-compose-cc-toggle">Cc</button>
+          <datalist id="workly-contacts">
+            <?php foreach ($data['contacts'] as $ct): ?>
+              <option value="<?= SecurityHelper::e($ct['email']) ?>"><?= SecurityHelper::e($ct['name']) ?> (<?= SecurityHelper::e($ct['role']) ?>)</option>
+            <?php endforeach; ?>
+          </datalist>
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Subject</label>
-          <input class="input" name="subject" required placeholder="Topic or deliverable inquiry">
+        <div id="compose-cc-row" class="gmail-compose-field-row is-hidden">
+          <label class="gmail-compose-field-label" for="compose-cc-input">Cc</label>
+          <input id="compose-cc-input" class="gmail-compose-line-input" type="text" name="cc_email" placeholder="cc1@company.com, cc2@company.com">
         </div>
 
-        <div class="form-group">
-          <label class="form-label">Rich Email Body</label>
-          <div class="gmail-editor-shell">
-            <?php $renderRichToolbar('compose'); ?>
-            <div class="gmail-rich-editor gmail-rich-editor-lg"
-                 id="rich-editor-compose"
-                 contenteditable="true"
-                 data-rich-surface="compose"
-                 data-placeholder="Compose a formatted message using bold, colors, lists, links, or &lt;&gt; HTML..."></div>
-            <textarea class="textarea gmail-html-source is-hidden"
-                      id="rich-source-compose"
-                      data-rich-source="compose"
-                      rows="8"
-                      placeholder="<p>Write HTML email markup...</p>"></textarea>
-            <textarea name="body_html" id="rich-hidden-html-compose" class="is-hidden"></textarea>
-            <textarea name="body" id="rich-hidden-plain-compose" class="is-hidden"></textarea>
-          </div>
+        <div class="gmail-compose-field-row">
+          <label class="gmail-compose-field-label" for="compose-subject-input">Subject</label>
+          <input id="compose-subject-input" class="gmail-compose-line-input" name="subject" required placeholder="Subject">
         </div>
+      </div>
 
-        <div class="form-group">
-          <label class="form-label">Attach Files (max 5 files, 8MB each)</label>
-          <input class="input" type="file" name="attachments[]" multiple data-email-files-input="compose-files-preview" style="padding:6px 10px;">
-          <div id="compose-files-preview" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;"></div>
-        </div>
+      <div class="gmail-editor-shell gmail-compose-dock-editor">
+        <?php $renderRichToolbar('compose'); ?>
+        <div class="gmail-rich-editor gmail-rich-editor-dock"
+             id="rich-editor-compose"
+             contenteditable="true"
+             data-rich-surface="compose"
+             data-placeholder="Write your message..."></div>
+        <textarea class="textarea gmail-html-source is-hidden"
+                  id="rich-source-compose"
+                  data-rich-source="compose"
+                  rows="7"
+                  placeholder="Write HTML source..."></textarea>
+        <textarea name="body_html" id="rich-hidden-html-compose" class="is-hidden"></textarea>
+        <textarea name="body" id="rich-hidden-plain-compose" class="is-hidden"></textarea>
+      </div>
 
-        <div style="display:flex;justify-content:flex-end;gap:10px;">
-          <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
-          <button type="submit" class="btn btn-primary">Send Message</button>
+      <div id="compose-files-preview" class="gmail-compose-files-preview"></div>
+
+      <div class="gmail-compose-dock-foot">
+        <div class="gmail-compose-dock-foot-left">
+          <button type="submit" class="btn btn-primary btn-sm gmail-send-pill-btn">Send</button>
+          <label class="btn btn-secondary btn-sm gmail-attach-trigger" title="Attach files (max 5 files, 8MB each)">
+            <?= workly_icon_svg('Paperclip', 14) ?>
+            <span>Attach</span>
+            <input type="file" name="attachments[]" multiple data-email-files-input="compose-files-preview" class="is-hidden">
+          </label>
         </div>
-      </form>
-    </div>
-  </aside>
-</div>
+        <button type="button" id="btn-compose-discard" class="gmail-dock-discard-btn" title="Discard draft" aria-label="Discard draft">
+          <?= workly_icon_svg('Trash', 15) ?>
+        </button>
+      </div>
+    </form>
+  </div>
+</aside>
 
 <!-- Confirmation Modal before External Email Dispatch -->
 <div id="modal-confirm-gmail-send" class="modal-backdrop is-hidden">

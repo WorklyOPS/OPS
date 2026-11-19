@@ -71,40 +71,40 @@
   }
 
   function updateGmailUiState(connected, email, lastSyncedAt) {
-    const badge = document.getElementById('gmail-oauth-status-badge');
-    const livePill = document.getElementById('gmail-live-sync-pill');
+    const capsule = document.getElementById('gmail-account-capsule');
+    const emailText = document.getElementById('gmail-connected-email-text');
+    const emailChip = document.getElementById('gmail-oauth-status-badge');
     const liveText = document.getElementById('gmail-live-sync-text');
     const syncLabel = document.getElementById('gmail-last-sync-label');
-    const syncButton = document.getElementById('btn-gmail-sync-now');
-    const disconnectButton = document.getElementById('btn-gmail-disconnect');
     const connectButton = document.getElementById('btn-google-signin-gmail');
 
     state.connected = Boolean(connected);
     state.linkedEmail = connected ? (email || '') : '';
 
-    if (badge) {
-      badge.className = connected ? 'badge badge-success' : 'badge badge-neutral';
-      badge.textContent = connected ? ('Gmail: ' + (state.linkedEmail || 'Connected')) : 'Workspace Mail Ready';
+    if (capsule) capsule.classList.toggle('is-hidden', !connected);
+    if (connectButton) connectButton.classList.toggle('is-hidden', connected);
+    if (emailText) {
+      emailText.textContent = connected ? (state.linkedEmail || 'Connected') : '';
     }
-    if (livePill) livePill.classList.toggle('is-hidden', !connected);
+    if (emailChip && state.linkedEmail) {
+      emailChip.setAttribute('title', state.linkedEmail);
+    }
+
     if (liveText && connected) {
       if (lastSyncedAt) {
         const dt = new Date(lastSyncedAt);
-        const hhmm = Number.isNaN(dt.getTime()) ? 'Active' : dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        const hhmm = Number.isNaN(dt.getTime()) ? 'Active' : dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
         liveText.textContent = 'Live · ' + hhmm;
       } else {
-        liveText.textContent = 'Live Sync Active';
+        liveText.textContent = 'Live';
       }
     }
     if (syncLabel && lastSyncedAt) {
       const dt = new Date(lastSyncedAt);
       if (!Number.isNaN(dt.getTime())) {
-        syncLabel.textContent = 'Synced ' + dt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        syncLabel.textContent = 'Updated ' + dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
       }
     }
-    if (syncButton) syncButton.classList.toggle('is-hidden', !connected);
-    if (disconnectButton) disconnectButton.classList.toggle('is-hidden', !connected);
-    if (connectButton) connectButton.classList.toggle('is-hidden', connected);
   }
 
   async function requestJson(url, options) {
@@ -163,19 +163,62 @@
     return frag;
   }
 
+  function parseMailTimestamp(raw) {
+    if (!raw) return 0;
+    const ms = new Date(raw).getTime();
+    return Number.isNaN(ms) ? 0 : ms;
+  }
+
   function formatShortDate(raw) {
     if (!raw) return '';
-    const str = String(raw);
-    if (str.length >= 16) return str.slice(5, 16);
-    return str;
+    const dt = new Date(raw);
+    if (Number.isNaN(dt.getTime())) return String(raw).slice(5, 16);
+    const now = new Date();
+    if (dt.toDateString() === now.toDateString()) {
+      return dt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    }
+    return dt.toLocaleDateString([], { month: 'short', day: 'numeric' });
   }
 
   function formatFullDate(raw) {
     if (!raw) return '';
-    return String(raw).slice(0, 16);
+    const dt = new Date(raw);
+    if (Number.isNaN(dt.getTime())) return String(raw).slice(0, 16);
+    return dt.toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
   }
 
-  function renderThreadList(threads, totalThreads) {
+  function createSvgIcon(kind, size) {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', String(size || 13));
+    svg.setAttribute('height', String(size || 13));
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    if (kind === 'paperclip') {
+      const p = document.createElementNS(svgNS, 'path');
+      p.setAttribute('d', 'm21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48');
+      svg.appendChild(p);
+    } else if (kind === 'download') {
+      const p1 = document.createElementNS(svgNS, 'path');
+      p1.setAttribute('d', 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4');
+      const poly = document.createElementNS(svgNS, 'polyline');
+      poly.setAttribute('points', '7 10 12 15 17 10');
+      const line = document.createElementNS(svgNS, 'line');
+      line.setAttribute('x1', '12'); line.setAttribute('y1', '15'); line.setAttribute('x2', '12'); line.setAttribute('y2', '3');
+      svg.append(p1, poly, line);
+    }
+    return svg;
+  }
+
+  function renderThreadList(rawThreads, totalThreads) {
+    const threads = Array.isArray(rawThreads)
+      ? rawThreads.slice().sort((a, b) => parseMailTimestamp(b.created_at) - parseMailTimestamp(a.created_at))
+      : [];
     const listEl = document.getElementById('gmail-thread-list');
     const countEl = document.getElementById('gmail-thread-count-label');
     const allCountEl = document.getElementById('gmail-all-tab-count');
@@ -258,7 +301,7 @@
         const attTag = document.createElement('span');
         attTag.className = 'gmail-thread-att-icon';
         attTag.title = th.att_count + ' attachment(s)';
-        attTag.textContent = '📎';
+        attTag.appendChild(createSvgIcon('paperclip', 12));
         subjLine.appendChild(attTag);
       }
 
@@ -290,7 +333,9 @@
     const chipEl = document.getElementById('gmail-reader-thread-chip');
     const markUnreadBtn = document.getElementById('btn-gmail-mark-unread');
 
-    state.currentMessages = Array.isArray(messages) ? messages : [];
+    state.currentMessages = Array.isArray(messages)
+      ? messages.slice().sort((a, b) => parseMailTimestamp(a.created_at) - parseMailTimestamp(b.created_at))
+      : [];
     state.currentAttachments = attachmentsMap || {};
 
     if (!emptyEl || !activeEl || !stackEl) return;
@@ -309,7 +354,7 @@
     const lastMsg = state.currentMessages[state.currentMessages.length - 1];
     if (subjEl) subjEl.textContent = firstMsg.subject || '(No Subject)';
     if (countEl) countEl.textContent = state.currentMessages.length + ' message(s)';
-    if (chipEl) chipEl.textContent = 'Thread ' + String(threadId || '').slice(0, 14);
+    if (chipEl) chipEl.textContent = 'Conversation';
     if (markUnreadBtn) markUnreadBtn.setAttribute('data-thread-id', threadId || '');
 
     // Update reply form targets without clearing user's typed draft when thread is unchanged
@@ -415,11 +460,15 @@
       }
 
       const msgAtts = (attachmentsMap && attachmentsMap[msg.id]) ? attachmentsMap[msg.id] : [];
-      const regularAtts = msgAtts.filter((a) => !a.is_inline);
-      if (regularAtts.length) {
+      const displayAtts = msgAtts.filter((a) => {
+        if (!a.is_inline) return true;
+        const mime = String(a.mime_type || '').toLowerCase();
+        return !mime.startsWith('image/') || Number(a.size_bytes || 0) >= 1024;
+      });
+      if (displayAtts.length) {
         const attTray = document.createElement('div');
         attTray.className = 'gmail-msg-attachments';
-        regularAtts.forEach((att) => {
+        displayAtts.forEach((att) => {
           const isImg = String(att.mime_type || '').toLowerCase().startsWith('image/');
           const attUrl = '/api/v1/email/attachments/' + encodeURIComponent(att.id);
           const kb = Math.max(1, Math.round(Number(att.size_bytes || 0) / 1024));
@@ -443,13 +492,14 @@
             meta.className = 'gmail-att-image-meta';
             const nm = document.createElement('span');
             nm.className = 'gmail-att-name';
+            nm.title = att.filename || 'image';
             nm.textContent = att.filename || 'image';
             const dl = document.createElement('a');
             dl.href = attUrl;
             dl.setAttribute('download', att.filename || 'image');
             dl.className = 'gmail-att-dl-link';
-            dl.title = 'Download';
-            dl.textContent = '↓';
+            dl.title = 'Download attachment';
+            dl.appendChild(createSvgIcon('download', 14));
             meta.append(nm, dl);
 
             imgCard.append(thumbBtn, meta);
@@ -461,12 +511,13 @@
             chip.setAttribute('download', att.filename || 'attachment');
             const nm = document.createElement('span');
             nm.className = 'gmail-att-name';
-            nm.textContent = '📎 ' + (att.filename || 'file');
+            nm.title = att.filename || 'file';
+            nm.textContent = att.filename || 'file';
             const sz = document.createElement('span');
             sz.className = 'muted mono';
             sz.style.fontSize = '10.5px';
             sz.textContent = '(' + kb + ' KB)';
-            chip.append(nm, sz);
+            chip.append(createSvgIcon('paperclip', 13), nm, sz, createSvgIcon('download', 13));
             attTray.appendChild(chip);
           }
         });
@@ -554,6 +605,8 @@
     if (!threadId) return;
     state.selectedThread = threadId;
     state.knownMessagesSnapshot = '';
+    const splitShell = document.getElementById('gmail-split-shell');
+    if (splitShell) splitShell.classList.add('has-mobile-thread');
     document.querySelectorAll('.gmail-thread-row').forEach((el) => {
       const isActive = el.getAttribute('data-thread-id') === threadId;
       el.classList.toggle('active', isActive);
@@ -869,7 +922,7 @@
       if (!response.ok) throw new Error(data.error || 'Email delivery failed');
 
       showGmailToast(
-        data.gmail_synced ? 'Sent via Gmail and archived to Workly Hub.' : 'Message saved to Workly Email Hub.',
+        data.gmail_synced ? 'Email sent via Gmail.' : 'Message sent.',
         'success'
       );
 
@@ -886,8 +939,15 @@
         const recInp = form.querySelector('[name="recipient_email"]');
         if (subInp) subInp.value = '';
         if (recInp) recInp.value = '';
-        const drawer = document.getElementById('drawer-compose-email');
-        if (drawer) drawer.classList.add('is-hidden');
+        const ccRow = document.getElementById('compose-cc-row');
+        if (ccRow) ccRow.classList.add('is-hidden');
+        const dockTitle = document.getElementById('gmail-compose-dock-title');
+        if (dockTitle) dockTitle.textContent = 'New Message';
+        const dock = document.getElementById('gmail-compose-popup');
+        if (dock) {
+          dock.classList.add('is-hidden');
+          dock.classList.remove('is-minimized', 'is-expanded');
+        }
       }
 
       if (data.thread_id) {
@@ -917,6 +977,42 @@
     });
   }
 
+  function openComposeDock(opts) {
+    const dock = document.getElementById('gmail-compose-popup');
+    if (!dock) return;
+    dock.classList.remove('is-hidden', 'is-minimized');
+    if (opts && opts.expand) {
+      dock.classList.add('is-expanded');
+    }
+    const recInp = document.getElementById('compose-recipient-input');
+    const editorEl = document.getElementById('rich-editor-compose');
+    if (recInp && !recInp.value.trim()) {
+      recInp.focus();
+    } else if (editorEl) {
+      editorEl.focus();
+    }
+  }
+
+  function closeComposeDock() {
+    const dock = document.getElementById('gmail-compose-popup');
+    if (!dock) return;
+    dock.classList.add('is-hidden');
+    dock.classList.remove('is-minimized', 'is-expanded');
+  }
+
+  function discardComposeDraft() {
+    const form = document.getElementById('gmail-compose-form');
+    if (form) form.reset();
+    resetRichEditor('compose');
+    const preview = document.getElementById('compose-files-preview');
+    if (preview) preview.replaceChildren();
+    const ccRow = document.getElementById('compose-cc-row');
+    if (ccRow) ccRow.classList.add('is-hidden');
+    const dockTitle = document.getElementById('gmail-compose-dock-title');
+    if (dockTitle) dockTitle.textContent = 'New Message';
+    closeComposeDock();
+  }
+
   window.addEventListener('DOMContentLoaded', () => {
     const connectButton = document.getElementById('btn-google-signin-gmail');
     const syncButton = document.getElementById('btn-gmail-sync-now');
@@ -925,10 +1021,83 @@
     const confirmProceedButton = document.getElementById('btn-confirm-gmail-send-go');
     const searchInput = document.getElementById('gmail-search-input');
     const lightboxModal = document.getElementById('modal-email-image-preview');
+    const splitShell = document.getElementById('gmail-split-shell');
+    const mobileBackBtn = document.getElementById('btn-gmail-mobile-back');
+
+    if (splitShell && new URLSearchParams(window.location.search).has('thread')) {
+      splitShell.classList.add('has-mobile-thread');
+    }
+    if (mobileBackBtn && splitShell) {
+      mobileBackBtn.addEventListener('click', () => {
+        splitShell.classList.remove('has-mobile-thread');
+      });
+    }
 
     if (connectButton) connectButton.addEventListener('click', connectGoogleGmail);
     if (syncButton) syncButton.addEventListener('click', () => syncWithGmailApi({ silent: false }));
     if (disconnectButton) disconnectButton.addEventListener('click', disconnectGmail);
+
+    // Floating bottom-right Compose box controls
+    const openComposeBtn = document.getElementById('btn-open-compose');
+    const composeDock = document.getElementById('gmail-compose-popup');
+    const composeDockHead = document.getElementById('gmail-compose-dock-head');
+    const minComposeBtn = document.getElementById('btn-compose-minimize');
+    const expComposeBtn = document.getElementById('btn-compose-expand');
+    const closeComposeBtn = document.getElementById('btn-compose-close');
+    const discardComposeBtn = document.getElementById('btn-compose-discard');
+    const toggleCcBtn = document.getElementById('btn-compose-toggle-cc');
+    const composeCcRow = document.getElementById('compose-cc-row');
+    const composeSubjectInput = document.getElementById('compose-subject-input');
+    const composeDockTitle = document.getElementById('gmail-compose-dock-title');
+
+    if (composeDock && composeDock.parentElement !== document.body) {
+      document.body.appendChild(composeDock);
+    }
+    if (openComposeBtn) {
+      openComposeBtn.addEventListener('click', () => openComposeDock());
+    }
+    if (minComposeBtn && composeDock) {
+      minComposeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        composeDock.classList.remove('is-expanded');
+        composeDock.classList.toggle('is-minimized');
+      });
+    }
+    if (expComposeBtn && composeDock) {
+      expComposeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        composeDock.classList.remove('is-minimized');
+        composeDock.classList.toggle('is-expanded');
+      });
+    }
+    if (composeDockHead && composeDock) {
+      composeDockHead.addEventListener('click', () => {
+        if (composeDock.classList.contains('is-minimized')) {
+          composeDock.classList.remove('is-minimized');
+        }
+      });
+    }
+    if (closeComposeBtn) {
+      closeComposeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeComposeDock();
+      });
+    }
+    if (discardComposeBtn) {
+      discardComposeBtn.addEventListener('click', discardComposeDraft);
+    }
+    if (toggleCcBtn && composeCcRow) {
+      toggleCcBtn.addEventListener('click', () => {
+        composeCcRow.classList.remove('is-hidden');
+        const ccInp = document.getElementById('compose-cc-input');
+        if (ccInp) ccInp.focus();
+      });
+    }
+    if (composeSubjectInput && composeDockTitle) {
+      composeSubjectInput.addEventListener('input', () => {
+        composeDockTitle.textContent = composeSubjectInput.value.trim() || 'New Message';
+      });
+    }
 
     initRichEditors();
 
@@ -973,7 +1142,11 @@
           const dl = document.getElementById('gmail-lightbox-download');
           if (img) img.src = thumbBtn.getAttribute('data-preview-img-src') || '';
           if (title) title.textContent = thumbBtn.getAttribute('data-preview-img-name') || 'Email Image';
-          if (dl) dl.href = thumbBtn.getAttribute('data-download-href') || '#';
+          if (dl) {
+            dl.href = thumbBtn.getAttribute('data-download-href') || '#';
+            dl.setAttribute('download', thumbBtn.getAttribute('data-preview-img-name') || 'image');
+            dl.removeAttribute('target');
+          }
           lightboxModal.classList.remove('is-closing', 'is-hidden');
           return;
         }
@@ -984,9 +1157,21 @@
           const title = document.getElementById('gmail-lightbox-title');
           const dl = document.getElementById('gmail-lightbox-download');
           const src = inlineImg.getAttribute('src') || '';
+          const alt = inlineImg.getAttribute('alt') || 'Email Image';
           if (img) img.src = src;
-          if (title) title.textContent = inlineImg.getAttribute('alt') || 'Email Image';
-          if (dl) dl.href = src.replace('?inline=1', '');
+          if (title) title.textContent = alt;
+          if (dl) {
+            if (src.startsWith('/api/v1/email/attachments/')) {
+              dl.href = src.replace('?inline=1', '');
+              dl.setAttribute('download', alt);
+              dl.removeAttribute('target');
+            } else {
+              dl.href = src;
+              dl.removeAttribute('download');
+              dl.setAttribute('target', '_blank');
+              dl.setAttribute('rel', 'noopener noreferrer');
+            }
+          }
           lightboxModal.classList.remove('is-closing', 'is-hidden');
           return;
         }
@@ -1035,7 +1220,9 @@
         const subjInp = composeForm.querySelector('[name="subject"]');
         if (subjInp) {
           const baseSubj = lastMsg.subject || '(No Subject)';
-          subjInp.value = /^fwd:/i.test(baseSubj) ? baseSubj : ('Fwd: ' + baseSubj);
+          const fwdSubj = /^fwd:/i.test(baseSubj) ? baseSubj : ('Fwd: ' + baseSubj);
+          subjInp.value = fwdSubj;
+          if (composeDockTitle) composeDockTitle.textContent = fwdSubj;
         }
         const quoteHeader = '<p><br></p><blockquote><strong>---------- Forwarded message ----------</strong><br>'
           + 'From: ' + (lastMsg.sender_name || '') + ' &lt;' + (lastMsg.sender_email || '') + '&gt;<br>'
@@ -1045,9 +1232,7 @@
           : quoteHeader + '<pre>' + String(lastMsg.body || '').replace(/</g, '&lt;') + '</pre>';
         composeParts.surface.replaceChildren(buildSafeEmailHtmlFragment(innerHtml));
         syncEditorToHiddenFields('compose');
-
-        const openBtn = document.getElementById('btn-open-compose');
-        if (openBtn) openBtn.click();
+        openComposeDock();
       });
     }
 
@@ -1064,6 +1249,7 @@
           });
           showGmailToast('Conversation marked as unread.', 'success');
           state.knownThreadSnapshot = '';
+          if (splitShell) splitShell.classList.remove('has-mobile-thread');
           await refreshLiveState({ sync: false, silent: true, force: true, markRead: false });
         } catch (err) {
           showGmailToast(err.message || 'Could not update conversation.', 'error');
@@ -1078,7 +1264,7 @@
         const editorName = form.id === 'gmail-reply-form' ? 'reply' : 'compose';
         const synced = syncEditorToHiddenFields(editorName);
         if (!synced.plain && !synced.html) {
-          showGmailToast('Please enter a message body before sending.', 'error');
+          showGmailToast('Please enter a message before sending.', 'error');
           return;
         }
 
@@ -1111,8 +1297,8 @@
           mode.className = 'muted';
           mode.style.marginTop = '6px';
           mode.textContent = state.linkedEmail
-            ? 'Delivery Mode: Gmail API (' + state.linkedEmail + ') + Rich HTML Archive'
-            : 'Delivery Mode: Workly internal rich archive. Connect Gmail to send externally.';
+            ? ('From: ' + state.linkedEmail)
+            : 'Sending via Workly Mail (connect Gmail to send externally).';
           summary.appendChild(mode);
         }
         confirmModal.classList.remove('is-closing', 'is-hidden');

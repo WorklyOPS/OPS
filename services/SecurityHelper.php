@@ -570,93 +570,183 @@ final class SecurityHelper
         return self::sanitizeUrl($trimmed);
     }
 
-    public static function sanitizeEmailHtml(?string $html, int $maxLength = 150000): string
+    public static function sanitizeEmailHtml(?string $html, int $maxLength = 300000): string
     {
         if ($html === null || trim($html) === '') {
             return '';
         }
 
-        // Remove active content, head/meta containers, stylesheets, scripts, and embedded objects
-        $raw = preg_replace('#<(script|style|head|title|iframe|object|embed|applet|form|input|button|textarea|select|svg|math)[^>]*>.*?</\1>#is', '', $html) ?? '';
-        $raw = preg_replace('#<(script|style|head|title|iframe|object|embed|applet|form|input|button|meta|link|base|svg)[^>]*?/?>#is', '', $raw) ?? '';
-        $raw = preg_replace('/<!--.*?-->/s', '', $raw) ?? '';
+        // Fallback safely if ext-dom is ever unavailable
+        if (!class_exists('DOMDocument')) {
+            $stripped = strip_tags($html, '<p><br><div><span><b><strong><i><em><u><s><h1><h2><h3><h4><ul><ol><li><a><blockquote><code><pre><hr><table><thead><tbody><tr><th><td><img>');
+            return mb_substr(trim($stripped), 0, $maxLength, 'UTF-8');
+        }
 
-        $allowed = strip_tags(
-            $raw,
-            '<p><br><div><span><b><strong><i><em><u><s><strike><del><h1><h2><h3><h4><h5><h6><ul><ol><li><a><blockquote><code><pre><hr><table><caption><thead><tbody><tfoot><tr><th><td><img><font><center><small><sub><sup><figure><figcaption><header><footer>'
-        );
+        $input = trim($html);
+        // Limit raw parser input sensibly without breaking legitimate marketing/rich emails
+        if (strlen($input) > 1500000) {
+            $input = substr($input, 0, 1500000);
+        }
 
-        // Strip all event handlers and dangerous identifiers
-        $allowed = preg_replace('/\son[a-z]+\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $allowed) ?? '';
-        $allowed = preg_replace('/\s(id|class|srcset|data-[a-z0-9_-]+)\s*=\s*(?:"[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $allowed) ?? '';
+        // Convert UTF-8 HTML safely for DOMDocument::loadHTML
+        $encoded = function_exists('mb_encode_numericentity')
+            ? mb_encode_numericentity($input, [0x80, 0x10FFFF, 0, 0x1FFFFF], 'UTF-8')
+            : $input;
 
-        // Rebuild tags while whitelisting attributes safely per tag
-        $allowed = preg_replace_callback('/<([a-z][a-z0-9]*)(\s+[^>]*)?>/i', static function (array $match): string {
-            $tag = strtolower($match[1]);
-            $rawAttrs = $match[2] ?? '';
-            $isSelfClosing = str_ends_with(trim($match[0]), '/>') || $tag === 'br' || $tag === 'hr' || $tag === 'img';
+        $dom = new DOMDocument('1.0', 'UTF-8');
+        $prevUseErrors = libxml_use_internal_errors(true);
+        $dom->loadHTML('<?xml encoding="UTF-8"><div id="__workly_root">' . $encoded . '</div>', LIBXML_HTML_NOIMPLIED | LIBXML_HTML_NODEFDTD | LIBXML_NONET);
+        libxml_clear_errors();
+        libxml_use_internal_errors($prevUseErrors);
 
-            if ($rawAttrs === '') {
-                return $tag === 'a' ? '<a target="_blank" rel="noopener noreferrer">' : '<' . $tag . ($isSelfClosing && $tag !== 'br' && $tag !== 'hr' ? ' />' : '>');
+        $root = $dom->getElementById('__workly_root') ?? $dom->documentElement;
+        if (!$root) {
+            return '';
+        }
+
+        $dropTags = [
+            'script' => true, 'style' => true, 'head' => true, 'title' => true,
+            'iframe' => true, 'object' => true, 'embed' => true, 'applet' => true,
+            'form' => true, 'input' => true, 'button' => true, 'textarea' => true,
+            'select' => true, 'option' => true, 'meta' => true, 'link' => true,
+            'base' => true, 'svg' => true, 'math' => true, 'noscript' => true,
+        ];
+
+        $allowTags = [
+            'p' => true, 'br' => true, 'div' => true, 'span' => true, 'b' => true,
+            'strong' => true, 'i' => true, 'em' => true, 'u' => true, 's' => true,
+            'strike' => true, 'del' => true, 'h1' => true, 'h2' => true, 'h3' => true,
+            'h4' => true, 'h5' => true, 'h6' => true, 'ul' => true, 'ol' => true,
+            'li' => true, 'a' => true, 'blockquote' => true, 'code' => true,
+            'pre' => true, 'hr' => true, 'table' => true, 'caption' => true,
+            'thead' => true, 'tbody' => true, 'tfoot' => true, 'tr' => true,
+            'th' => true, 'td' => true, 'img' => true, 'font' => true,
+            'center' => true, 'small' => true, 'sub' => true, 'sup' => true,
+            'figure' => true, 'figcaption' => true, 'header' => true, 'footer' => true,
+            'section' => true, 'article' => true,
+        ];
+
+        $presentational = [
+            'align' => true, 'valign' => true, 'width' => true, 'height' => true,
+            'bgcolor' => true, 'border' => true, 'cellpadding' => true,
+            'cellspacing' => true, 'colspan' => true, 'rowspan' => true,
+            'color' => true, 'face' => true, 'size' => true,
+        ];
+
+        $sanitizeNode = null;
+        $sanitizeNode = static function (DOMNode $node) use (&$sanitizeNode, $dom, $dropTags, $allowTags, $presentational): void {
+            if ($node->nodeType === XML_COMMENT_NODE) {
+                $node->parentNode?->removeChild($node);
+                return;
+            }
+            if ($node->nodeType !== XML_ELEMENT_NODE) {
+                return;
             }
 
-            $attrs = [];
-            if (preg_match_all('/([a-z][a-z0-9_-]*)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'>]+))/i', $rawAttrs, $am, PREG_SET_ORDER)) {
-                foreach ($am as $item) {
-                    $k = strtolower($item[1]);
-                    $v = html_entity_decode($item[2] !== '' ? $item[2] : ($item[3] !== '' ? $item[3] : ($item[4] ?? '')), ENT_QUOTES | ENT_HTML5, 'UTF-8');
-                    $attrs[$k] = $v;
+            /** @var DOMElement $node */
+            $tag = strtolower($node->tagName);
+
+            if (isset($dropTags[$tag])) {
+                $node->parentNode?->removeChild($node);
+                return;
+            }
+
+            // Snapshot children before traversal because recursion may unwrap/remove child nodes
+            $children = [];
+            foreach ($node->childNodes as $child) {
+                $children[] = $child;
+            }
+            foreach ($children as $child) {
+                $sanitizeNode($child);
+            }
+
+            if ($node->getAttribute('id') !== '__workly_root' && !isset($allowTags[$tag])) {
+                // Unwrap unknown wrapper tags (html, body, custom email wrappers) while keeping inner content
+                $parent = $node->parentNode;
+                if ($parent) {
+                    while ($node->firstChild) {
+                        $parent->insertBefore($node->firstChild, $node);
+                    }
+                    $parent->removeChild($node);
+                }
+                return;
+            }
+
+            if ($node->getAttribute('id') === '__workly_root') {
+                return;
+            }
+
+            // Clean attributes safely
+            $toKeep = [];
+            if ($node->hasAttributes()) {
+                foreach ($node->attributes as $attr) {
+                    $k = strtolower($attr->nodeName);
+                    $v = trim($attr->nodeValue);
+                    if ($k === 'style') {
+                        $cs = self::sanitizeEmailInlineStyle($v);
+                        if ($cs !== '') {
+                            $toKeep['style'] = $cs;
+                        }
+                    } elseif ($tag === 'a' && $k === 'href') {
+                        $href = self::sanitizeUrl($v);
+                        if ($href !== '') {
+                            $toKeep['href'] = $href;
+                        }
+                    } elseif ($tag === 'img' && $k === 'src') {
+                        $src = self::sanitizeEmailImageSrc($v);
+                        if ($src !== '') {
+                            $toKeep['src'] = $src;
+                        }
+                    } elseif ($tag === 'img' && $k === 'alt') {
+                        $toKeep['alt'] = self::sanitizePlainText($v, 180);
+                    } elseif ($tag === 'img' && ($k === 'width' || $k === 'height')) {
+                        if (preg_match('/^\d{1,4}(?:px|%)?$/', $v)) {
+                            $toKeep[$k] = $v;
+                        }
+                    } elseif (isset($presentational[$k]) && $v !== '' && preg_match('/^[a-zA-Z0-9\s#%(),.\-_+]+$/', $v)) {
+                        $toKeep[$k] = mb_substr($v, 0, 80, 'UTF-8');
+                    }
+                }
+                while ($node->attributes->length > 0) {
+                    $node->removeAttributeNode($node->attributes->item(0));
                 }
             }
 
-            $outAttrs = [];
-
-            if (isset($attrs['style'])) {
-                $cleanStyle = self::sanitizeEmailInlineStyle($attrs['style']);
-                if ($cleanStyle !== '') {
-                    $outAttrs[] = 'style="' . self::e($cleanStyle) . '"';
+            if ($tag === 'img') {
+                if (empty($toKeep['src'])) {
+                    $node->parentNode?->removeChild($node);
+                    return;
                 }
+                if (!isset($toKeep['alt'])) {
+                    $toKeep['alt'] = 'Email image';
+                }
+                $toKeep['loading'] = 'lazy';
             }
 
             if ($tag === 'a') {
-                $href = self::sanitizeUrl($attrs['href'] ?? '');
-                if ($href !== '') {
-                    $outAttrs[] = 'href="' . self::e($href) . '"';
-                }
-                $outAttrs[] = 'target="_blank"';
-                $outAttrs[] = 'rel="noopener noreferrer"';
-            } elseif ($tag === 'img') {
-                $src = self::sanitizeEmailImageSrc($attrs['src'] ?? '');
-                if ($src === '') {
-                    return '';
-                }
-                $outAttrs[] = 'src="' . self::e($src) . '"';
-                $alt = self::sanitizePlainText($attrs['alt'] ?? 'Email image', 180);
-                $outAttrs[] = 'alt="' . self::e($alt) . '"';
-                $outAttrs[] = 'loading="lazy"';
-                foreach (['width', 'height'] as $dimKey) {
-                    if (isset($attrs[$dimKey]) && preg_match('/^\d{1,4}(?:px|%)?$/', trim($attrs[$dimKey]))) {
-                        $outAttrs[] = $dimKey . '="' . self::e(trim($attrs[$dimKey])) . '"';
-                    }
-                }
-            } else {
-                $presentational = ['align', 'valign', 'width', 'height', 'bgcolor', 'border', 'cellpadding', 'cellspacing', 'colspan', 'rowspan', 'color', 'face', 'size'];
-                foreach ($presentational as $pKey) {
-                    if (!isset($attrs[$pKey])) {
-                        continue;
-                    }
-                    $val = trim($attrs[$pKey]);
-                    if ($val !== '' && preg_match('/^[a-zA-Z0-9\s#%(),.\-_+]+$/', $val)) {
-                        $outAttrs[] = $pKey . '="' . self::e(mb_substr($val, 0, 80, 'UTF-8')) . '"';
-                    }
-                }
+                $toKeep['target'] = '_blank';
+                $toKeep['rel'] = 'noopener noreferrer';
             }
 
-            $attrStr = empty($outAttrs) ? '' : ' ' . implode(' ', $outAttrs);
-            return '<' . $tag . $attrStr . '>';
-        }, $allowed) ?? '';
+            foreach ($toKeep as $attrName => $attrVal) {
+                $node->setAttribute($attrName, $attrVal);
+            }
+        };
 
-        return mb_substr(trim($allowed), 0, $maxLength, 'UTF-8');
+        $children = [];
+        foreach ($root->childNodes as $c) {
+            $children[] = $c;
+        }
+        foreach ($children as $c) {
+            $sanitizeNode($c);
+        }
+
+        $out = '';
+        foreach ($root->childNodes as $c) {
+            $out .= $dom->saveHTML($c);
+        }
+
+        return mb_substr(trim($out), 0, $maxLength, 'UTF-8');
     }
 
     private static function sanitizeEmailInlineStyle(string $rawStyle): string
