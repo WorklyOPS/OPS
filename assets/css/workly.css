@@ -137,9 +137,12 @@
 :root[data-theme="dark"] .collab-note-item .collab-entry-author, :root[data-theme="dark"] .collab-note-item .collab-entry-text {
   color: black;
 }
-/* Note copy/replay */
+/* Note copy/replay & expand toggle */
 :root[data-theme="dark"] .collab-note-item .collab-card-action {
   color: black;
+}
+:root[data-theme="dark"] .collab-note-item .collab-expand-btn {
+  color: #6B21A8;
 }
 
 :root[data-theme="dark"] .sidebar-alert-box {
@@ -1239,11 +1242,116 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   gap: 12px;
 }
 
-.kanban-filters {
+.kanban-toolbar-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  flex: 1 1 360px;
+  min-width: 0;
+}
+
+.kanban-filter-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.kanban-filter-trigger {
+  gap: 7px;
+  min-height: 38px;
+}
+
+.kanban-filter-trigger.has-active {
+  border-color: var(--brand);
+  background: var(--brand-tint);
+  color: var(--brand-secondary);
+}
+
+.kanban-filter-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #FFFFFF;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.kanban-filter-caret {
+  transition: transform 0.16s ease;
+}
+
+.kanban-filter-trigger[aria-expanded="true"] .kanban-filter-caret {
+  transform: rotate(180deg);
+}
+
+.kanban-filter-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 310px;
+  max-width: min(320px, calc(100vw - 32px));
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  padding: 14px;
+  z-index: 65;
+}
+
+.kanban-filter-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
+.kanban-filter-reset {
+  background: transparent;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  color: var(--brand-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.kanban-filter-reset:hover {
+  background: var(--brand-tint);
+}
+
+.kanban-filters {
+  display: grid;
+  gap: 10px;
+}
+
+.kanban-filter-field {
+  display: grid;
+  gap: 4px;
+}
+
+.kanban-filter-field .form-label {
+  margin-bottom: 0;
+  font-size: 11.5px;
+}
+
+.kanban-filter-field .select {
+  width: 100%;
+}
+
+.kanban-view-tabs {
+  flex-shrink: 0;
 }
 
 .kanban-board {
@@ -1567,6 +1675,35 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   background: #F8FAFC;
   border: 1px solid #E2E8F0;
   margin-bottom: 10px;
+}
+
+/* Separator */
+
+.collab-day-separator {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 20px 0;
+    color: var(--ink);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.collab-day-separator::before,
+.collab-day-separator::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--border-color);
+}
+
+.collab-day-separator::before {
+    margin-right: 12px;
+}
+
+.collab-day-separator::after {
+    margin-left: 12px;
 }
 
 /* --------------------------------------------------------------------------
@@ -2400,6 +2537,72 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   margin-bottom: 8px;
 }
 
+/* Aesthetic Photo Upload Picker */
+.photo-upload-picker {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+}
+
+.photo-upload-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.photo-upload-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  max-width: 240px;
+  padding: 6px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.photo-upload-trigger:hover {
+  border-color: var(--brand);
+  background: var(--brand-tint);
+  color: var(--brand-secondary);
+}
+
+.photo-upload-input:focus-visible + .photo-upload-trigger {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+.photo-upload-picker.has-file .photo-upload-trigger {
+  border-style: solid;
+  border-color: var(--brand);
+  background: var(--brand-tint);
+  color: var(--brand-secondary);
+}
+
+.photo-upload-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--brand-secondary);
+}
+
+.photo-upload-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Multi-choice VA & Specialties Chips */
 .choice-grid {
   display: grid;
@@ -2991,7 +3194,6 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
-  overflow: hidden;
 }
 
 .gmail-msg-card.is-mine {
@@ -3578,7 +3780,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
 
 .gmail-rich-editor-dock {
   flex: 1;
-  min-height: 170px;
+  min-height: 240px;
   max-height: 320px;
 }
 
@@ -4175,7 +4377,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
     display: flex;
     align-items: center;
     justify-content: center;
-    margin: 20px 0;
+    margin: 10px 0;
     color: var(--ink);
     font-size: 11px;
     font-weight: 600;
@@ -4391,6 +4593,32 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   color: var(--ink);
   word-break: break-word;
   white-space: pre-wrap;
+}
+
+.collab-entry-text.is-clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.collab-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  margin-top: 5px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--brand-secondary);
+  cursor: pointer;
+}
+
+.collab-expand-btn:hover {
+  text-decoration: underline;
 }
 
 .collab-composer {
@@ -5745,17 +5973,12 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
-  flex: 1 1 260px;
+  flex: 1 1 240px;
   min-width: 0;
 }
 
-.kanban-prio-select {
-  flex: 0 1 170px;
-  min-width: 130px;
-}
-
 .kanban-search-input {
-  flex: 1 1 190px;
+  flex: 1 1 210px;
   min-width: 0;
 }
 
@@ -6436,27 +6659,97 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   color: var(--brand-secondary);
 }
 
+.perks-catalog-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.perks-search-wrap {
+  position: relative;
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.perks-search-wrap svg {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.perks-search-input {
+  padding-left: 36px;
+}
+
 .perks-category-sections {
   display: grid;
-  gap: 24px;
+  gap: 14px;
 }
 
 .perks-category-section {
   display: grid;
   gap: 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow-xs);
 }
 
-.perks-category-header {
-  padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
+.perks-category-section.is-collapsed {
+  gap: 0;
+}
+
+.perks-accordion-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--ink);
+  text-align: left;
+}
+
+.perks-acc-chevron {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  flex-shrink: 0;
+  transition: transform 0.18s ease, color 0.14s ease, border-color 0.14s ease;
+}
+
+.perks-category-section.is-collapsed .perks-acc-chevron {
+  transform: rotate(-90deg);
+}
+
+.perks-accordion-trigger:hover .perks-acc-chevron {
+  color: var(--brand-secondary);
+  border-color: var(--brand);
 }
 
 .perks-category-title-wrap {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .perks-category-title-wrap h3 {
@@ -6465,9 +6758,19 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   margin: 0;
 }
 
-.perks-category-title-wrap span {
+.perks-acc-count {
   font-size: 12px;
   font-weight: 600;
+  flex-shrink: 0;
+}
+
+.perks-category-section.is-collapsed .perks-accordion-body {
+  display: none;
+}
+
+.perks-category-section:not(.is-collapsed) .perks-accordion-body {
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
 }
 
 .perk-card-top-block {
@@ -6649,7 +6952,12 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   .crm-filter-select { flex: 1 1 100%; max-width: none; }
   .crm-va-accounts-col { min-width: 0; width: 100%; }
   .crm-comm-filter-input, .crm-comm-filter-select { width: 100%; min-width: 0; flex: 1 1 100%; }
-  .kanban-prio-select, .kanban-search-input { flex: 1 1 100%; min-width: 0; }
+  .kanban-toolbar { align-items: stretch; }
+  .kanban-toolbar-controls { width: 100%; }
+  .kanban-view-tabs { width: 100%; }
+  .kanban-search-input { flex: 1 1 100%; min-width: 0; }
+  .kanban-filter-panel { right: 0; left: auto; width: min(310px, calc(100vw - 44px)); }
+  .photo-upload-picker, .photo-upload-trigger { max-width: 100%; }
   .va-inspect-select { min-width: 0; width: 100%; }
   .subtask-add-row .btn, .subtask-draft-row .btn { width: 100%; }
   .tl-recharts-canvas { height: 225px; }

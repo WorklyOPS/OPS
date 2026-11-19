@@ -282,7 +282,7 @@ $tls = $data['team_leaders'] ?? [];
       </div>
       <div class="drawer-body">
         <div class="photo-preview-box">
-          <div class="photo-preview-thumb">
+          <div id="profile-va-avatar-preview" class="photo-preview-thumb">
             <?php if (!empty($p['avatar_url'])): ?>
               <img src="<?= SecurityHelper::e($p['avatar_url']) ?>" alt="Current Avatar">
             <?php else: ?>
@@ -295,7 +295,19 @@ $tls = $data['team_leaders'] ?? [];
             <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
               <form data-api-form="/api/v1/uploads/avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;width:100%;">
                 <input type="hidden" name="user_id" value="<?= SecurityHelper::e($p['id']) ?>">
-                <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="flex:1 1 180px;min-width:0;max-width:100%;padding:6px 10px;">
+                <div class="photo-upload-picker" data-photo-upload>
+                  <input id="profile-va-avatar-file" class="photo-upload-input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required data-photo-preview-target="#profile-va-avatar-preview">
+                  <label for="profile-va-avatar-file" class="photo-upload-trigger" title="Select photo">
+                    <span class="photo-upload-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                      </svg>
+                    </span>
+                    <span class="photo-upload-text" data-photo-label data-default-label="Select photo">Select photo</span>
+                  </label>
+                </div>
                 <button type="submit" class="btn btn-secondary btn-sm">Upload Photo</button>
               </form>
               <?php if (!empty($p['avatar_url'])): ?>

@@ -226,59 +226,97 @@ $renderTaskCard = static function (array $task) use ($notesMap, $commentsMap, $c
 
 <div class="card" style="margin-bottom:18px;padding:14px;">
   <form method="GET" action="/tasks" class="kanban-toolbar" style="margin-bottom:0;">
-    <div class="kanban-filters">
-      <div>
-        <select name="month" class="select" data-auto-submit>
-          <?php foreach ($data['months'] as $m): ?>
-            <option value="<?= SecurityHelper::e($m['value']) ?>" <?= $data['selected_month'] === $m['value'] ? 'selected' : '' ?>>
-              <?= SecurityHelper::e($m['label']) ?>
-            </option>
-          <?php endforeach; ?>
-        </select>
+    <div class="kanban-toolbar-controls">
+      <div class="kanban-search-group">
+        <input id="kanban-search" type="search" class="input kanban-search-input" placeholder="Search tasks by title, client, or VA...">
       </div>
 
-      <div>
-        <select name="week" class="select" data-auto-submit>
-          <option value="all" <?= $data['selected_week'] === 'all' ? 'selected' : '' ?>>All Weeks in Month</option>
-          <?php foreach ($data['weeks'] as $w): ?>
-            <option value="<?= SecurityHelper::e($w['key']) ?>" <?= $data['selected_week'] === $w['key'] ? 'selected' : '' ?>>
-              <?= SecurityHelper::e($w['label']) ?>
-            </option>
-          <?php endforeach; ?>
-        </select>
+      <div class="kanban-filter-wrap" id="kanban-filter-wrap">
+        <?php
+          $activeServerFilters = 0;
+          if ($data['selected_week'] !== 'all') $activeServerFilters++;
+          if ($role !== 'va' && !empty($data['vas']) && $data['selected_va_filter'] !== 'all') $activeServerFilters++;
+        ?>
+        <button type="button"
+                id="btn-kanban-filter-toggle"
+                class="btn btn-secondary kanban-filter-trigger <?= $activeServerFilters > 0 ? 'has-active' : '' ?>"
+                aria-expanded="false"
+                aria-controls="kanban-filter-panel">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>
+          </svg>
+          <span>Filters</span>
+          <span id="kanban-filter-badge" class="kanban-filter-badge <?= $activeServerFilters === 0 ? 'is-hidden' : '' ?>" data-server-count="<?= $activeServerFilters ?>"><?= $activeServerFilters ?></span>
+          <svg class="kanban-filter-caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
+            <path d="m6 9 6 6 6-6"/>
+          </svg>
+        </button>
+
+        <div id="kanban-filter-panel" class="kanban-filter-panel is-hidden" role="region" aria-label="Task filters">
+          <div class="kanban-filter-panel-head">
+            <strong>Filter Tasks</strong>
+            <button type="button" id="btn-kanban-reset-filters" class="kanban-filter-reset">Reset</button>
+          </div>
+
+          <div class="kanban-filters">
+            <div class="kanban-filter-field">
+              <label class="form-label" for="kanban-filter-month">Month</label>
+              <select id="kanban-filter-month" name="month" class="select" data-auto-submit>
+                <?php foreach ($data['months'] as $m): ?>
+                  <option value="<?= SecurityHelper::e($m['value']) ?>" <?= $data['selected_month'] === $m['value'] ? 'selected' : '' ?>>
+                    <?= SecurityHelper::e($m['label']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+
+            <div class="kanban-filter-field">
+              <label class="form-label" for="kanban-filter-week">Week</label>
+              <select id="kanban-filter-week" name="week" class="select" data-auto-submit>
+                <option value="all" <?= $data['selected_week'] === 'all' ? 'selected' : '' ?>>All Weeks in Month</option>
+                <?php foreach ($data['weeks'] as $w): ?>
+                  <option value="<?= SecurityHelper::e($w['key']) ?>" <?= $data['selected_week'] === $w['key'] ? 'selected' : '' ?>>
+                    <?= SecurityHelper::e($w['label']) ?>
+                  </option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+
+            <?php if ($role !== 'va' && !empty($data['vas'])): ?>
+              <div class="kanban-filter-field">
+                <label class="form-label" for="kanban-filter-va">Assigned Staff</label>
+                <select id="kanban-filter-va" name="va" class="select" data-auto-submit>
+                  <option value="all" <?= $data['selected_va_filter'] === 'all' ? 'selected' : '' ?>>All Assigned Staff</option>
+                  <?php foreach ($data['vas'] as $v): ?>
+                    <option value="<?= SecurityHelper::e($v['id']) ?>" <?= $data['selected_va_filter'] === $v['id'] ? 'selected' : '' ?>>
+                      <?= SecurityHelper::e($v['name']) ?>
+                    </option>
+                  <?php endforeach; ?>
+                </select>
+              </div>
+            <?php endif; ?>
+
+            <div class="kanban-filter-field">
+              <label class="form-label" for="kanban-priority-filter">Priority</label>
+              <select id="kanban-priority-filter" class="select kanban-prio-select" aria-label="Filter by priority">
+                <option value="all">All Priorities</option>
+                <option value="urgent">Urgent</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
-
-      <?php if ($role !== 'va' && !empty($data['vas'])): ?>
-        <div>
-          <select name="va" class="select" data-auto-submit>
-            <option value="all" <?= $data['selected_va_filter'] === 'all' ? 'selected' : '' ?>>All Assigned Staff</option>
-            <?php foreach ($data['vas'] as $v): ?>
-              <option value="<?= SecurityHelper::e($v['id']) ?>" <?= $data['selected_va_filter'] === $v['id'] ? 'selected' : '' ?>>
-                <?= SecurityHelper::e($v['name']) ?>
-              </option>
-            <?php endforeach; ?>
-          </select>
-        </div>
-      <?php endif; ?>
-
-      <?php if ($showSwimlanes): ?>
-        <div class="tab-strip" style="margin-bottom:0;">
-          <button type="button" class="tab-btn active" data-tab-group="kanban-layout" data-tab-btn="swimlanes">Client Swimlanes</button>
-          <button type="button" class="tab-btn" data-tab-group="kanban-layout" data-tab-btn="board">4-Column Board</button>
-        </div>
-      <?php endif; ?>
     </div>
 
-    <div class="kanban-search-group">
-      <select id="kanban-priority-filter" class="select kanban-prio-select" aria-label="Filter by priority">
-        <option value="all">All Priorities</option>
-        <option value="urgent">Urgent</option>
-        <option value="high">High</option>
-        <option value="medium">Medium</option>
-        <option value="low">Low</option>
-      </select>
-      <input id="kanban-search" type="search" class="input kanban-search-input" placeholder="Search tasks by title, client, or VA...">
-    </div>
+    <?php if ($showSwimlanes): ?>
+      <div class="tab-strip kanban-view-tabs" style="margin-bottom:0;">
+        <button type="button" class="tab-btn active" data-tab-group="kanban-layout" data-tab-btn="swimlanes">Client Swimlanes</button>
+        <button type="button" class="tab-btn" data-tab-group="kanban-layout" data-tab-btn="board">4-Column Board</button>
+      </div>
+    <?php endif; ?>
   </form>
 </div>
 

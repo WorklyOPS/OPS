@@ -359,7 +359,19 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
               <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                 <form id="form-upload-client-avatar" data-api-form="/api/v1/uploads/client-avatar" data-api-method="POST" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
                   <input type="hidden" name="client_id" value="">
-                  <input class="input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required style="flex:1 1 180px;min-width:0;max-width:100%;padding:6px 10px;">
+                  <div class="photo-upload-picker" data-photo-upload>
+                    <input id="dossier-client-avatar-file" class="photo-upload-input" type="file" name="avatar" accept="image/jpeg,image/png,image/webp" required data-photo-preview-target="#dossier-avatar-preview">
+                    <label for="dossier-client-avatar-file" class="photo-upload-trigger" title="Select image">
+                      <span class="photo-upload-icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                          <polyline points="17 8 12 3 7 8"/>
+                          <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                      </span>
+                      <span class="photo-upload-text" data-photo-label data-default-label="Select photo">Select photo</span>
+                    </label>
+                  </div>
                   <button type="submit" class="btn btn-secondary btn-sm">Upload</button>
                 </form>
                 <button type="button" id="btn-delete-client-avatar" class="btn btn-danger btn-sm">Delete Photo</button>
@@ -534,13 +546,25 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
         <?php else: ?>
           <form id="form-create-client" data-api-form="/api/v1/clients" data-api-method="POST">
             <div class="photo-preview-box">
-              <div class="photo-preview-thumb">
+              <div id="create-client-avatar-preview" class="photo-preview-thumb">
                 <span class="avatar avatar-lg">CL</span>
               </div>
               <div class="photo-preview-meta">
                 <h4>Optional Client Logo / Image</h4>
                 <p>Select an image (JPG, PNG, WEBP) to upload automatically when saved.</p>
-                <input id="create-client-avatar-file" class="input" type="file" accept="image/jpeg,image/png,image/webp" style="max-width:100%;padding:6px 10px;">
+                <div class="photo-upload-picker" data-photo-upload>
+                  <input id="create-client-avatar-file" class="photo-upload-input" type="file" accept="image/jpeg,image/png,image/webp" data-photo-preview-target="#create-client-avatar-preview">
+                  <label for="create-client-avatar-file" class="photo-upload-trigger" title="Select image">
+                    <span class="photo-upload-icon" aria-hidden="true">
+                      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                        <polyline points="17 8 12 3 7 8"/>
+                        <line x1="12" y1="3" x2="12" y2="15"/>
+                      </svg>
+                    </span>
+                    <span class="photo-upload-text" data-photo-label data-default-label="Select image">Select image</span>
+                  </label>
+                </div>
               </div>
             </div>
 

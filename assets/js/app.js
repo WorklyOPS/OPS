@@ -101,6 +101,7 @@
     initPtoApprovalCalendar();
     initCsvExports();
     initForms();
+    initPhotoUploadPickers();
     initInteractiveButtons();
     initOnboardingTour();
   });
@@ -981,9 +982,14 @@
 
   function formatShortTs(ts) {
     if (!ts) return '';
-    return String(ts).replace('T', ' ').slice(0, 16);
+    return String(ts).replace('T', ' ').slice(0, 10);
   }
 
+  function formatTime(ts) {
+      if (!ts) return '';
+      return String(ts).replace('T', ' ').slice(11, 16);
+  }
+  
   function saveTaskDataset(allData) {
     const store = document.getElementById('task-details-json');
     if (store && allData) {
@@ -1308,6 +1314,16 @@
       attrName + '="' + escapeHtml(attrVal || '') + '">' + escapeHtml(label) + '</button>';
   }
 
+  function buildCollabEntryTextHtml(rawText, taskId, allData) {
+    const str = String(rawText || '');
+    const isLong = str.length > 220 || str.split('\n').length > 4;
+    const textCls = isLong ? 'collab-entry-text is-collapsible is-clamped' : 'collab-entry-text';
+    const toggleBtn = isLong
+      ? '<button type="button" class="collab-expand-btn" data-toggle-expand-msg aria-expanded="false">Show full message</button>'
+      : '';
+    return '<p class="' + textCls + '">' + formatTextWithMentionsHtml(str, taskId, allData) + '</p>' + toggleBtn;
+  }
+
   function renderTaskCollabLists(taskId, allData) {
     const drawer = document.getElementById('drawer-task-collab');
     if (!drawer || !allData) return;
@@ -1345,12 +1361,25 @@
       });
       merged.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
 
+      let previousDay = '';
+
       if (merged.length === 0) {
         combinedList.innerHTML = '<div class="collab-empty">No notes or comments on this deliverable yet.</div>';
       } else {
         merged.forEach((item) => {
+          const currentDay = String(item.created_at || '').slice(0, 10);
           const el = document.createElement('article');
           const rolePretty = String(item.author_role || 'va').replace('_', ' ');
+
+          if (currentDay && currentDay !== previousDay) {
+            const separator = document.createElement('div');
+            separator.className = 'collab-day-separator';
+            separator.textContent = formatShortTs(item.created_at);
+
+            combinedList.appendChild(separator);
+            previousDay = currentDay;
+          }
+
           if (item.kind === 'note') {
             el.className = 'collab-note-item';
             el.innerHTML =
@@ -1364,10 +1393,9 @@
                   '</div>' +
                   '<div class="collab-entry-actions">' +
                     buildCollabActionBtn('Reply', 'reply', 'data-author-name', item.author_name) +
-                    buildCollabActionBtn('Copy', 'copy', 'data-copy-text', item.text) +
                   '</div>' +
                 '</div>' +
-                '<p class="collab-entry-text">' + formatTextWithMentionsHtml(item.text, taskId, allData) + '</p>' +
+                buildCollabEntryTextHtml(item.text, taskId, allData) +
               '</div>';
           } else {
             const isMine = currentUid !== '' && String(item.author_id || '') === currentUid;
@@ -1381,14 +1409,13 @@
                     '<span class="muted collab-role-sep">·</span>' +
                     '<span class="muted" style="font-size:11.5px;text-transform:capitalize;">' + escapeHtml(rolePretty) + '</span>' +
                     '<span class="muted collab-role-sep">·</span>' +
-                    '<span class="muted mono collab-entry-ts">' + escapeHtml(formatShortTs(item.created_at)) + '</span>' +
+                    '<span class="muted mono collab-entry-ts">' + escapeHtml(formatTime(item.created_at)) + '</span>' +
                   '</div>' +
                   '<div class="collab-entry-actions">' +
                     buildCollabActionBtn('Reply', 'reply', 'data-author-name', item.author_name) +
-                    buildCollabActionBtn('Copy', 'copy', 'data-copy-text', item.text) +
                   '</div>' +
                 '</div>' +
-                '<p class="collab-entry-text">' + formatTextWithMentionsHtml(item.text, taskId, allData) + '</p>' +
+                buildCollabEntryTextHtml(item.text, taskId, allData) +
               '</div>';
           }
           combinedList.appendChild(el);
@@ -1418,7 +1445,7 @@
                   buildCollabActionBtn('Copy', 'copy', 'data-copy-text', n.content) +
                 '</div>' +
               '</div>' +
-              '<p class="collab-entry-text">' + formatTextWithMentionsHtml(n.content, taskId, allData) + '</p>' +
+              buildCollabEntryTextHtml(n.content, taskId, allData) +
             '</div>';
           notesList.appendChild(div);
         });
@@ -1445,14 +1472,14 @@
                   '<span class="muted collab-role-sep">·</span>' +
                   '<span class="muted" style="font-size:11.5px;text-transform:capitalize;">' + escapeHtml(rolePretty) + '</span>' +
                   '<span class="muted collab-role-sep">·</span>' +
-                  '<span class="muted mono collab-entry-ts">' + escapeHtml(formatShortTs(c.created_at)) + '</span>' +
+                  '<span class="muted mono collab-entry-ts">' + escapeHtml(formatTime(c.created_at)) + '</span>' +
                 '</div>' +
                 '<div class="collab-entry-actions">' +
                   buildCollabActionBtn('Reply', 'reply', 'data-author-name', c.author_name) +
                   buildCollabActionBtn('Copy', 'copy', 'data-copy-text', c.message) +
                 '</div>' +
               '</div>' +
-              '<p class="collab-entry-text">' + formatTextWithMentionsHtml(c.message, taskId, allData) + '</p>' +
+              buildCollabEntryTextHtml(c.message, taskId, allData) +
             '</div>';
           commentsList.appendChild(div);
         });
@@ -1645,9 +1672,39 @@
       });
     });
 
-    // Real-time search & priority filter across Swimlanes and 4-Column Board
+    // Real-time search & unified filter popover across Swimlanes and 4-Column Board
     const searchInput = document.getElementById('kanban-search');
     const priorityFilter = document.getElementById('kanban-priority-filter');
+    const filterWrap = document.getElementById('kanban-filter-wrap');
+    const filterToggleBtn = document.getElementById('btn-kanban-filter-toggle');
+    const filterPanel = document.getElementById('kanban-filter-panel');
+    const filterBadge = document.getElementById('kanban-filter-badge');
+    const filterResetBtn = document.getElementById('btn-kanban-reset-filters');
+
+    const syncKanbanFilterBadge = () => {
+      if (!filterToggleBtn || !filterBadge) return;
+      const serverCount = parseInt(filterBadge.getAttribute('data-server-count') || '0', 10) || 0;
+      const prioActive = (priorityFilter && priorityFilter.value !== 'all') ? 1 : 0;
+      const totalActive = serverCount + prioActive;
+      filterBadge.textContent = String(totalActive);
+      filterBadge.classList.toggle('is-hidden', totalActive === 0);
+      filterToggleBtn.classList.toggle('has-active', totalActive > 0);
+    };
+
+    const setKanbanFilterPanelOpen = (isOpen) => {
+      if (!filterPanel || !filterToggleBtn) return;
+      filterPanel.classList.toggle('is-hidden', !isOpen);
+      filterToggleBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    };
+
+    if (filterToggleBtn && filterPanel) {
+      filterToggleBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isClosed = filterPanel.classList.contains('is-hidden');
+        setKanbanFilterPanelOpen(isClosed);
+      });
+    }
+
     const applyKanbanFilters = () => {
       const term = searchInput ? searchInput.value.trim().toLowerCase() : '';
       const prio = priorityFilter ? priorityFilter.value : 'all';
@@ -1661,9 +1718,32 @@
         });
       });
       updateBoardCounters(term || (prio !== 'all' ? prio : ''));
+      syncKanbanFilterBadge();
     };
     if (searchInput) searchInput.addEventListener('input', applyKanbanFilters);
     if (priorityFilter) priorityFilter.addEventListener('change', applyKanbanFilters);
+    syncKanbanFilterBadge();
+
+    if (filterResetBtn) {
+      filterResetBtn.addEventListener('click', () => {
+        const weekSel = document.getElementById('kanban-filter-week');
+        const vaSel = document.getElementById('kanban-filter-va');
+        const needsServerReset = (weekSel && weekSel.value !== 'all') || (vaSel && vaSel.value !== 'all');
+        if (priorityFilter) priorityFilter.value = 'all';
+        if (searchInput) searchInput.value = '';
+        if (needsServerReset) {
+          if (weekSel) weekSel.value = 'all';
+          if (vaSel) vaSel.value = 'all';
+          const toolbarForm = filterResetBtn.closest('form');
+          if (toolbarForm) {
+            toolbarForm.submit();
+            return;
+          }
+        }
+        applyKanbanFilters();
+        setKanbanFilterPanelOpen(false);
+      });
+    }
 
     // Drag & drop + right-click menu + split windows click delegation
     surfaces.forEach((surface) => {
@@ -1871,6 +1951,10 @@
 
     document.addEventListener('click', (e) => {
       if (cm && !cm.contains(e.target)) hideContextMenu();
+      if (filterWrap && !filterWrap.contains(e.target)) setKanbanFilterPanelOpen(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') setKanbanFilterPanelOpen(false);
     });
 
     // Deep link from Notification Bell (e.g. /tasks?open_task=task-1&tab=combined)
@@ -1888,10 +1972,22 @@
       }, 240);
     }
 
-    // Combined Timeline No-Reload Reply & Copy Actions
+    // Combined Timeline No-Reload Reply, Copy & Show Full/Less Actions
     const collabDrawer = document.getElementById('drawer-task-collab');
     if (collabDrawer) {
       collabDrawer.addEventListener('click', (e) => {
+        const expandBtn = e.target.closest('[data-toggle-expand-msg]');
+        if (expandBtn) {
+          const body = expandBtn.closest('.collab-entry-body');
+          const txt = body ? body.querySelector('.collab-entry-text') : null;
+          if (txt) {
+            const nowClamped = txt.classList.toggle('is-clamped');
+            expandBtn.textContent = nowClamped ? 'Show full message' : 'Show less';
+            expandBtn.setAttribute('aria-expanded', nowClamped ? 'false' : 'true');
+          }
+          return;
+        }
+
         const actionBtn = e.target.closest('[data-collab-action]');
         if (!actionBtn) return;
         const act = actionBtn.getAttribute('data-collab-action');
@@ -3026,6 +3122,7 @@
 
         const previewEl = drawer.querySelector('#dossier-avatar-preview');
         if (previewEl) previewEl.innerHTML = renderAvatarMarkup(cl.avatar_url, cl.agency_name);
+        resetPhotoUploadPickers(drawer);
 
         if (delClientAvatarBtn) {
           delClientAvatarBtn.setAttribute('data-client-id', cid);
@@ -3564,6 +3661,7 @@
 
         const avatarPreview = drawer.querySelector('#edit-user-avatar-preview');
         if (avatarPreview) avatarPreview.innerHTML = renderAvatarMarkup(u.avatar_url, u.name);
+        resetPhotoUploadPickers(drawer);
 
         const avatarUidInput = drawer.querySelector('#edit-user-avatar-id');
         if (avatarUidInput) avatarUidInput.value = uid;
@@ -3926,6 +4024,7 @@
 
       const previewEl = drawer.querySelector('#dir-va-avatar-preview');
       if (previewEl) previewEl.innerHTML = renderAvatarMarkup(va.avatar_url, va.va_name);
+      resetPhotoUploadPickers(drawer);
 
       const uidInput = drawer.querySelector('#dir-va-avatar-id');
       if (uidInput) uidInput.value = vaId;
@@ -5013,8 +5112,120 @@
 
     window.worklyRenderPerksBoard = renderPerksBoard;
 
-    // Unified click delegation inside #workly-perks-view for inline card revoke, table revoke, and perk deletion
+    let activePerkCat = 'all';
+    let activeBadgeTier = 'all';
+    const perksCatalogSearchEl = document.getElementById('perks-catalog-search');
+    const badgesCatalogSearchEl = document.getElementById('badges-catalog-search');
+    const perksToggleAllBtn = document.getElementById('btn-perks-toggle-all');
+    const badgesToggleAllBtn = document.getElementById('btn-badges-toggle-all');
+    const perksSearchEmptyEl = document.getElementById('perks-search-empty');
+    const badgesSearchEmptyEl = document.getElementById('badges-search-empty');
+
+    function syncAccordionToggleBtn(containerId, btnEl) {
+      const container = document.getElementById(containerId);
+      if (!container || !btnEl) return;
+      const visibleSecs = Array.from(container.querySelectorAll('.perks-category-section:not(.is-hidden)'));
+      const allOpen = visibleSecs.length > 0 && visibleSecs.every((s) => !s.classList.contains('is-collapsed'));
+      btnEl.textContent = allOpen ? 'Collapse All' : 'Expand All';
+      btnEl.setAttribute('data-acc-mode', allOpen ? 'expanded' : 'collapsed');
+    }
+
+    function applyPerksCatalogFilter() {
+      const q = perksCatalogSearchEl ? perksCatalogSearchEl.value.trim().toLowerCase() : '';
+      let totalVisibleCards = 0;
+
+      perksView.querySelectorAll('[data-perk-cat-group]').forEach((sec) => {
+        const slug = sec.getAttribute('data-perk-cat-group') || '';
+        const catMatches = activePerkCat === 'all' || slug === activePerkCat;
+        const cards = Array.from(sec.querySelectorAll('[data-perk-card]'));
+        let secMatchCount = 0;
+
+        cards.forEach((card) => {
+          const hay = (card.getAttribute('data-perk-search') || '').toLowerCase();
+          const showCard = catMatches && (q === '' || hay.includes(q));
+          card.classList.toggle('is-hidden', !showCard);
+          if (showCard) {
+            secMatchCount++;
+            totalVisibleCards++;
+          }
+        });
+
+        const secVisible = catMatches && secMatchCount > 0;
+        sec.classList.toggle('is-hidden', !secVisible);
+
+        const secCnt = sec.querySelector('[data-perk-section-count]');
+        if (secCnt) {
+          secCnt.textContent = secMatchCount + ' ' + (secMatchCount === 1 ? 'program' : 'programs');
+        }
+
+        if (secVisible && (q !== '' || activePerkCat !== 'all')) {
+          sec.classList.remove('is-collapsed');
+          const trig = sec.querySelector('[data-accordion-toggle]');
+          if (trig) trig.setAttribute('aria-expanded', 'true');
+        }
+      });
+
+      if (perksSearchEmptyEl) {
+        perksSearchEmptyEl.classList.toggle('is-hidden', totalVisibleCards > 0);
+      }
+      syncAccordionToggleBtn('perks-accordion-list', perksToggleAllBtn);
+    }
+
+    function applyBadgesCatalogFilter() {
+      const q = badgesCatalogSearchEl ? badgesCatalogSearchEl.value.trim().toLowerCase() : '';
+      let totalVisibleCards = 0;
+
+      perksView.querySelectorAll('[data-badge-tier-group]').forEach((sec) => {
+        const slug = sec.getAttribute('data-badge-tier-group') || '';
+        const tierMatches = activeBadgeTier === 'all' || slug === activeBadgeTier;
+        const cards = Array.from(sec.querySelectorAll('[data-badge-card]'));
+        let secMatchCount = 0;
+
+        cards.forEach((card) => {
+          const hay = (card.getAttribute('data-badge-search') || '').toLowerCase();
+          const showCard = tierMatches && (q === '' || hay.includes(q));
+          card.classList.toggle('is-hidden', !showCard);
+          if (showCard) {
+            secMatchCount++;
+            totalVisibleCards++;
+          }
+        });
+
+        const secVisible = tierMatches && secMatchCount > 0;
+        sec.classList.toggle('is-hidden', !secVisible);
+
+        const secCnt = sec.querySelector('[data-badge-section-count]');
+        if (secCnt) {
+          secCnt.textContent = secMatchCount + ' ' + (secMatchCount === 1 ? 'badge' : 'badges');
+        }
+
+        if (secVisible && (q !== '' || activeBadgeTier !== 'all')) {
+          sec.classList.remove('is-collapsed');
+          const trig = sec.querySelector('[data-accordion-toggle]');
+          if (trig) trig.setAttribute('aria-expanded', 'true');
+        }
+      });
+
+      if (badgesSearchEmptyEl) {
+        badgesSearchEmptyEl.classList.toggle('is-hidden', totalVisibleCards > 0);
+      }
+      syncAccordionToggleBtn('badges-accordion-list', badgesToggleAllBtn);
+    }
+
+    // Unified click delegation inside #workly-perks-view for accordions, revoke, and perk deletion
     perksView.addEventListener('click', async (e) => {
+      const accBtn = e.target.closest('[data-accordion-toggle]');
+      if (accBtn) {
+        const sec = accBtn.closest('.perks-category-section');
+        if (sec) {
+          const collapsed = sec.classList.toggle('is-collapsed');
+          accBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+          syncAccordionToggleBtn('perks-accordion-list', perksToggleAllBtn);
+          syncAccordionToggleBtn('badges-accordion-list', badgesToggleAllBtn);
+        }
+        return;
+      }
+
       const revokeBtn = e.target.closest('[data-perk-revoke]');
       if (revokeBtn) {
         const url = revokeBtn.getAttribute('data-perk-revoke');
@@ -5046,16 +5257,14 @@
             if (card) card.remove();
             if (section && catSlug) {
               const rem = section.querySelectorAll('[data-perk-card]').length;
-              const secCnt = perksView.querySelector('[data-perk-section-count="' + CSS.escape(catSlug) + '"]');
               const tabCnt = perksView.querySelector('[data-perk-cat-count="' + CSS.escape(catSlug) + '"]');
-              if (secCnt) secCnt.textContent = rem + ' ' + (rem === 1 ? 'program' : 'programs');
               if (tabCnt) tabCnt.textContent = String(rem);
               if (rem === 0) {
-                section.classList.add('is-hidden');
                 const catBtn = perksView.querySelector('[data-perk-cat-filter="' + CSS.escape(catSlug) + '"]');
                 if (catBtn) catBtn.classList.add('is-hidden');
               }
             }
+            applyPerksCatalogFilter();
           }
           if (res && res.board) renderPerksBoard(res.board, { forceSyncOpenMenus: true });
           showToast('Perk program deleted', 'success');
@@ -5069,29 +5278,58 @@
     // Category filter tabs (Tab 1: Perks & Benefits)
     perksView.querySelectorAll('[data-perk-cat-filter]').forEach((tab) => {
       tab.addEventListener('click', () => {
-        const targetCat = tab.getAttribute('data-perk-cat-filter') || 'all';
+        activePerkCat = tab.getAttribute('data-perk-cat-filter') || 'all';
         perksView.querySelectorAll('[data-perk-cat-filter]').forEach((t) => t.classList.toggle('is-active', t === tab));
-        perksView.querySelectorAll('[data-perk-cat-group]').forEach((sec) => {
-          const slug = sec.getAttribute('data-perk-cat-group') || '';
-          const hasCards = sec.querySelectorAll('[data-perk-card]').length > 0;
-          const visible = hasCards && (targetCat === 'all' || slug === targetCat);
-          sec.classList.toggle('is-hidden', !visible);
-        });
+        applyPerksCatalogFilter();
       });
     });
 
     // Tier filter tabs (Tab 2: Achievement Badges)
     perksView.querySelectorAll('[data-badge-tier-filter]').forEach((tab) => {
       tab.addEventListener('click', () => {
-        const targetTier = tab.getAttribute('data-badge-tier-filter') || 'all';
+        activeBadgeTier = tab.getAttribute('data-badge-tier-filter') || 'all';
         perksView.querySelectorAll('[data-badge-tier-filter]').forEach((t) => t.classList.toggle('is-active', t === tab));
-        perksView.querySelectorAll('[data-badge-tier-group]').forEach((sec) => {
-          const slug = sec.getAttribute('data-badge-tier-group') || '';
-          const visible = targetTier === 'all' || slug === targetTier;
-          sec.classList.toggle('is-hidden', !visible);
-        });
+        applyBadgesCatalogFilter();
       });
     });
+
+    if (perksCatalogSearchEl) {
+      perksCatalogSearchEl.addEventListener('input', applyPerksCatalogFilter);
+    }
+    if (badgesCatalogSearchEl) {
+      badgesCatalogSearchEl.addEventListener('input', applyBadgesCatalogFilter);
+    }
+
+    if (perksToggleAllBtn) {
+      perksToggleAllBtn.addEventListener('click', () => {
+        const container = document.getElementById('perks-accordion-list');
+        if (!container) return;
+        const expand = perksToggleAllBtn.getAttribute('data-acc-mode') !== 'expanded';
+        container.querySelectorAll('.perks-category-section:not(.is-hidden)').forEach((sec) => {
+          sec.classList.toggle('is-collapsed', !expand);
+          const trig = sec.querySelector('[data-accordion-toggle]');
+          if (trig) trig.setAttribute('aria-expanded', expand ? 'true' : 'false');
+        });
+        syncAccordionToggleBtn('perks-accordion-list', perksToggleAllBtn);
+      });
+    }
+
+    if (badgesToggleAllBtn) {
+      badgesToggleAllBtn.addEventListener('click', () => {
+        const container = document.getElementById('badges-accordion-list');
+        if (!container) return;
+        const expand = badgesToggleAllBtn.getAttribute('data-acc-mode') !== 'expanded';
+        container.querySelectorAll('.perks-category-section:not(.is-hidden)').forEach((sec) => {
+          sec.classList.toggle('is-collapsed', !expand);
+          const trig = sec.querySelector('[data-accordion-toggle]');
+          if (trig) trig.setAttribute('aria-expanded', expand ? 'true' : 'false');
+        });
+        syncAccordionToggleBtn('badges-accordion-list', badgesToggleAllBtn);
+      });
+    }
+
+    syncAccordionToggleBtn('perks-accordion-list', perksToggleAllBtn);
+    syncAccordionToggleBtn('badges-accordion-list', badgesToggleAllBtn);
 
     function applyDomHistoryFilter() {
       if (lastBoardPayload) {
@@ -5719,6 +5957,57 @@
         }
       });
     }
+  }
+
+  // ------------------------------------------------------------------------
+  // Aesthetic Photo Upload Pickers (Filename Readout + Live Thumbnail Preview)
+  // ------------------------------------------------------------------------
+  function resetPhotoUploadPickers(root) {
+    const scope = root || document;
+    scope.querySelectorAll('[data-photo-upload]').forEach((picker) => {
+      const inp = picker.querySelector('input[type="file"]');
+      const lbl = picker.querySelector('[data-photo-label]');
+      if (inp) inp.value = '';
+      if (lbl) {
+        lbl.textContent = lbl.getAttribute('data-default-label') || 'Select photo';
+      }
+      picker.classList.remove('has-file');
+    });
+  }
+
+  function initPhotoUploadPickers() {
+    document.addEventListener('change', (e) => {
+      const inp = e.target;
+      if (!inp || !inp.matches || !inp.matches('.photo-upload-input[type="file"]')) return;
+      const picker = inp.closest('[data-photo-upload]');
+      if (!picker) return;
+      const lbl = picker.querySelector('[data-photo-label]');
+      const defaultLbl = lbl ? (lbl.getAttribute('data-default-label') || 'Select photo') : 'Select photo';
+      const file = inp.files && inp.files[0] ? inp.files[0] : null;
+
+      if (!file) {
+        if (lbl) lbl.textContent = defaultLbl;
+        picker.classList.remove('has-file');
+        return;
+      }
+
+      if (lbl) lbl.textContent = file.name;
+      picker.classList.add('has-file');
+
+      const targetSel = inp.getAttribute('data-photo-preview-target');
+      if (targetSel && file.type && file.type.startsWith('image/')) {
+        const previewEl = document.querySelector(targetSel);
+        if (previewEl) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            if (typeof reader.result === 'string') {
+              previewEl.innerHTML = '<img src="' + reader.result + '" alt="Selected Photo Preview">';
+            }
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+    });
   }
 
   // ------------------------------------------------------------------------
