@@ -2520,6 +2520,50 @@
     const grid = document.querySelector('.calendar-grid');
     if (!grid) return;
 
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('calendar_connected') === '1') {
+      showToast('Google Calendar connected — new meetings & tasks will auto-sync', 'success');
+      urlParams.delete('calendar_connected');
+      const cleanQs = urlParams.toString();
+      window.history.replaceState({}, '', window.location.pathname + (cleanQs ? '?' + cleanQs : ''));
+    } else if (urlParams.get('calendar_error')) {
+      const calErr = urlParams.get('calendar_error');
+      const errMsg = calErr === 'cancelled'
+        ? 'Google Calendar authorization was cancelled.'
+        : (calErr === 'config'
+          ? 'Google OAuth credentials are not configured on the server.'
+          : 'Could not complete Google Calendar connection. Check OAuth scopes & redirect URI.');
+      showToast(errMsg, 'error');
+      urlParams.delete('calendar_error');
+      const cleanQs = urlParams.toString();
+      window.history.replaceState({}, '', window.location.pathname + (cleanQs ? '?' + cleanQs : ''));
+    }
+
+    const gcalSyncBtn = document.getElementById('btn-gcal-sync-now');
+    if (gcalSyncBtn) {
+      gcalSyncBtn.addEventListener('click', async () => {
+        const month = gcalSyncBtn.getAttribute('data-month') || '';
+        const labelEl = gcalSyncBtn.querySelector('span');
+        const origText = labelEl ? labelEl.textContent : 'Sync Now';
+        gcalSyncBtn.disabled = true;
+        if (labelEl) labelEl.textContent = 'Syncing...';
+        try {
+          const res = await apiFetch('/api/v1/meetings/sync-google', {
+            method: 'POST',
+            body: JSON.stringify({ month })
+          });
+          const mCount = Number(res.meetings_synced || 0);
+          const tCount = Number(res.tasks_synced || 0);
+          showToast('Synced ' + mCount + ' meeting(s) & ' + tCount + ' task deadline(s) to Google Calendar', 'success');
+          window.setTimeout(() => window.location.reload(), 420);
+        } catch (err) {
+          showToast(err.message || 'Google Calendar sync failed', 'error');
+          gcalSyncBtn.disabled = false;
+          if (labelEl) labelEl.textContent = origText;
+        }
+      });
+    }
+
     let dragEventId = null;
 
     grid.querySelectorAll('.cal-event-chip[draggable="true"][data-meeting-id]').forEach((chip) => {
@@ -2565,7 +2609,13 @@
             method: 'PATCH',
             body: JSON.stringify({ target_date: targetDate })
           });
-          showToast('Rescheduled to ' + (res.start_time || targetDate), 'success');
+          const gCount = res && res.google_sync ? Number(res.google_sync.synced_count || 0) : 0;
+          showToast(
+            gCount > 0
+              ? 'Rescheduled & updated ' + gCount + ' Google Calendar(s)'
+              : 'Rescheduled to ' + (res.start_time || targetDate),
+            'success'
+          );
           window.setTimeout(() => window.location.reload(), 320);
         } catch (err) {
           showToast(err.message, 'error');
@@ -5717,9 +5767,10 @@
         if (submitBtn) submitBtn.disabled = true;
 
         try {
+          let formApiRes = null;
           if (isMultipart) {
             const fd = new FormData(form);
-            await apiFetch(endpoint, { method, body: fd });
+            formApiRes = await apiFetch(endpoint, { method, body: fd });
           } else {
             const fd = new FormData(form);
             const payload = {};
@@ -5791,6 +5842,7 @@
               method,
               body: JSON.stringify(payload)
             });
+            formApiRes = res;
 
             // Upload optional client logo selected on Create Client form
             if (form.id === 'form-create-client' && res && res.id) {
@@ -5856,6 +5908,13 @@
             window.addEventListener('afterprint', () => {
               window.setTimeout(() => window.location.reload(), 250);
             }, { once: true });
+            return;
+          }
+
+          const gSyncCount = formApiRes && formApiRes.google_sync ? Number(formApiRes.google_sync.synced_count || 0) : 0;
+          if (gSyncCount > 0) {
+            showToast('Saved & synced to ' + gSyncCount + ' Google Calendar(s)', 'success');
+            window.setTimeout(() => window.location.reload(), 420);
             return;
           }
 

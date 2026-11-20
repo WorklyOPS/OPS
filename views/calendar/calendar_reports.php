@@ -6,6 +6,10 @@ $daysInMonth = (int) $firstDay->format('t');
 $startDow = (int) $firstDay->format('N'); // 1 (Mon) to 7 (Sun)
 $todayYmd = date('Y-m-d');
 
+$gcalStatus = $data['google_calendar_status'] ?? ['connected' => false, 'needs_reconnect' => false, 'email' => null];
+$syncedMeetingMap = array_flip($data['synced_meeting_ids'] ?? []);
+$syncedTaskMap = array_flip($data['synced_task_ids'] ?? []);
+
 $eventsByDate = [];
 foreach ($data['meetings'] as $m) {
     $dKey = substr((string) $m['start_time'], 0, 10);
@@ -14,24 +18,28 @@ foreach ($data['meetings'] as $m) {
     $canModify = in_array($role, ['admin', 'team_leader'], true)
         || (string) $m['va_id'] === (string) $user['id']
         || (string) ($m['created_by_tl_id'] ?? '') === (string) $user['id'];
+    $isSynced = isset($syncedMeetingMap[(string) $m['id']]);
 
     $eventsByDate[$dKey][] = [
         'id'        => (string) $m['id'],
         'type'      => $mType,
         'title'     => (string) $m['title'],
         'label'     => substr((string) $m['start_time'], 11, 5) . ' ' . $m['title'],
-        'tooltip'   => substr((string) $m['start_time'], 11, 5) . '–' . substr((string) $m['end_time'], 11, 5) . ' ' . $m['title'] . $clientSuffix,
+        'tooltip'   => substr((string) $m['start_time'], 11, 5) . '–' . substr((string) $m['end_time'], 11, 5) . ' ' . $m['title'] . $clientSuffix . ($isSynced ? ' (Synced to Google Calendar)' : ''),
         'draggable' => $canModify,
+        'synced'    => $isSynced,
     ];
 }
 foreach ($data['calendar_tasks'] as $ct) {
     $dKey = (string) $ct['deadline'];
+    $isSynced = isset($syncedTaskMap[(string) $ct['id']]);
     $eventsByDate[$dKey][] = [
         'id'        => '',
         'type'      => 'task',
         'label'     => 'Due: ' . $ct['title'],
-        'tooltip'   => 'Deliverable Deadline: ' . $ct['title'],
+        'tooltip'   => 'Deliverable Deadline: ' . $ct['title'] . ($isSynced ? ' (Synced to Google Calendar)' : ''),
         'draggable' => false,
+        'synced'    => $isSynced,
     ];
 }
 foreach (($data['calendar_pto'] ?? []) as $pto) {
@@ -140,6 +148,56 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
   </div>
 </div>
 
+<div class="gcal-sync-bar no-print">
+  <div class="gcal-sync-info">
+    <strong>Google Calendar Sync</strong>
+    <span class="muted">Automatically adds assigned meetings &amp; task deadlines to each participant's Google Calendar.</span>
+  </div>
+  <div class="gcal-sync-actions">
+    <?php if (!empty($gcalStatus['connected'])): ?>
+      <div class="gmail-account-capsule">
+        <span class="gmail-live-segment" title="Google Calendar synchronization active">
+          <span class="gmail-live-dot"></span>
+          <span>Live</span>
+        </span>
+        <span class="gmail-capsule-divider" aria-hidden="true"></span>
+        <span class="gmail-account-email-chip" title="<?= SecurityHelper::e((string) ($gcalStatus['email'] ?? '')) ?>">
+          <span><?= SecurityHelper::e((string) ($gcalStatus['email'] ?? 'Connected')) ?></span>
+        </span>
+        <div class="gmail-capsule-actions">
+          <button type="button" id="btn-gcal-sync-now" class="gmail-capsule-btn" data-month="<?= SecurityHelper::e($calMonth) ?>" title="Sync this month's meetings and tasks to Google Calendar">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/>
+            </svg>
+            <span>Sync Now</span>
+          </button>
+        </div>
+      </div>
+    <?php elseif (!empty($gcalStatus['needs_reconnect'])): ?>
+      <span class="badge badge-warn">Permission Needed (<?= SecurityHelper::e((string) ($gcalStatus['email'] ?? 'Google')) ?>)</span>
+      <a href="/api/v1/email/google/connect?next=/calendar-reports" class="gsi-material-button">
+        <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+        </svg>
+        <span>Authorize Google Calendar</span>
+      </a>
+    <?php else: ?>
+      <a href="/api/v1/email/google/connect?next=/calendar-reports" class="gsi-material-button">
+        <svg version="1.1" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+          <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+          <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+          <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+          <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+        </svg>
+        <span>Connect Google Calendar</span>
+      </a>
+    <?php endif; ?>
+  </div>
+</div>
+
 <div class="tab-strip no-print">
   <button type="button" class="tab-btn <?= $defaultTab === 'calendar' ? 'active' : '' ?>" data-tab-group="cal-rep" data-tab-btn="calendar">Calendar &amp; Meeting Scheduler</button>
   <button type="button" class="tab-btn <?= $defaultTab === 'reports' ? 'active' : '' ?>" data-tab-group="cal-rep" data-tab-btn="reports">Executive SLA Analytics</button>
@@ -200,12 +258,15 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
                   default               => '',
               };
             ?>
-            <div class="cal-event-chip <?= $chipClass ?>"
+            <div class="cal-event-chip <?= $chipClass ?><?= !empty($ev['synced']) ? ' is-gcal-synced' : '' ?>"
                  <?= !empty($ev['draggable']) ? 'draggable="true"' : '' ?>
                  <?= !empty($ev['id']) ? 'data-meeting-id="' . SecurityHelper::e($ev['id']) . '"' : '' ?>
                  data-meeting-type="<?= SecurityHelper::e($evType) ?>"
                  title="<?= SecurityHelper::e($ev['tooltip'] ?? $ev['label']) ?>">
               <span class="cal-chip-label"><?= SecurityHelper::e($ev['label']) ?></span>
+              <?php if (!empty($ev['synced'])): ?>
+                <span class="cal-chip-gcal-dot" title="Synced to Google Calendar" aria-label="Synced to Google Calendar">G</span>
+              <?php endif; ?>
               <?php if (!empty($ev['draggable']) && !empty($ev['id'])): ?>
                 <button type="button"
                         class="cal-chip-del"

@@ -15,6 +15,7 @@ require_once __DIR__ . '/api/NotificationApiController.php';
 require_once __DIR__ . '/api/UserApiController.php';
 require_once __DIR__ . '/api/PerksApiController.php';
 require_once __DIR__ . '/api/TaskApiController.php';
+require_once __DIR__ . '/../services/GoogleCalendarService.php';
 
 final class PageController
 {
@@ -1430,17 +1431,21 @@ final class PageController
         $tlRoleFilter = $role === 'admin' ? "role IN ('team_leader', 'admin')" : "role = 'team_leader'";
         $teamLeaders = $this->db->query("SELECT id, name, email FROM users WHERE {$tlRoleFilter} AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
+        $googleCalStatus = GoogleCalendarService::getUserCalendarStatus($this->db, (string) $uid);
+        $syncedMeetingIds = GoogleCalendarService::getLinkedEntityIdsForUser($this->db, (string) $uid, 'meeting');
+        $syncedTaskIds = GoogleCalendarService::getLinkedEntityIdsForUser($this->db, (string) $uid, 'task');
+
         return [
-            'cal_month'        => $calMonth,
-            'start_date'       => $startDate,
-            'end_date'         => $endDate,
-            'report_va'        => $reportVa,
-            'monitor_user'     => $monitorUser,
-            'meetings'         => $meetings,
-            'calendar_tasks'   => $calendarTasks,
-            'calendar_pto'     => $calendarPto,
-            'report_tasks'     => $reportTasks,
-            'report_analytics' => [
+            'cal_month'              => $calMonth,
+            'start_date'             => $startDate,
+            'end_date'               => $endDate,
+            'report_va'              => $reportVa,
+            'monitor_user'           => $monitorUser,
+            'meetings'               => $meetings,
+            'calendar_tasks'         => $calendarTasks,
+            'calendar_pto'           => $calendarPto,
+            'report_tasks'           => $reportTasks,
+            'report_analytics'       => [
                 'total'               => count($reportTasks),
                 'completed'           => $repDone,
                 'on_time'             => $repOnTime,
@@ -1458,10 +1463,13 @@ final class PageController
                 'by_client'           => array_values($repByClient),
                 'by_va'               => array_values($repByVa),
             ],
-            'vas'              => $vas,
-            'clients'          => $clients,
-            'staff_directory'  => $staffDirectory,
-            'team_leaders'     => $teamLeaders,
+            'vas'                    => $vas,
+            'clients'                => $clients,
+            'staff_directory'        => $staffDirectory,
+            'team_leaders'           => $teamLeaders,
+            'google_calendar_status' => $googleCalStatus,
+            'synced_meeting_ids'     => $syncedMeetingIds,
+            'synced_task_ids'        => $syncedTaskIds,
         ];
     }
 

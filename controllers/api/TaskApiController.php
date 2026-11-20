@@ -11,6 +11,7 @@ require_once __DIR__ . '/../../services/SecurityHelper.php';
 require_once __DIR__ . '/../../middleware/AuthMiddleware.php';
 require_once __DIR__ . '/../../middleware/CsrfMiddleware.php';
 require_once __DIR__ . '/../../middleware/TaskRoleMiddleware.php';
+require_once __DIR__ . '/../../services/GoogleCalendarService.php';
 require_once __DIR__ . '/NotificationApiController.php';
 
 final class TaskApiController
@@ -1031,10 +1032,17 @@ final class TaskApiController
             );
         }
 
+        $googleSync = GoogleCalendarService::syncTask($this->db, $id);
+
         $this->invalidate();
         AuditLogger::log('TASK_CREATED', 'success', "Created task {$id} ({$title})", $user['id'], $user['role'], $this->db);
         http_response_code(201);
-        echo json_encode(['success' => true, 'id' => $id, 'subtasks' => $createdSubtasks]);
+        echo json_encode([
+            'success'     => true,
+            'id'          => $id,
+            'subtasks'    => $createdSubtasks,
+            'google_sync' => $googleSync,
+        ]);
     }
 
     private function updateStatus(string $taskId, array $user, ?array $preloaded = null): void
@@ -1061,9 +1069,11 @@ final class TaskApiController
             ':id'           => $taskId,
         ]);
 
+        $googleSync = GoogleCalendarService::syncTask($this->db, $taskId);
+
         $this->invalidate();
         AuditLogger::log('TASK_STATUS_CHANGED', 'success', "Moved task {$taskId} to {$status}", $user['id'], $user['role'], $this->db);
-        echo json_encode(['success' => true, 'id' => $taskId, 'status' => $status]);
+        echo json_encode(['success' => true, 'id' => $taskId, 'status' => $status, 'google_sync' => $googleSync]);
     }
 
     private function updateTask(string $taskId, array $user, ?array $preloaded = null): void
@@ -1113,13 +1123,16 @@ final class TaskApiController
         $stmt = $this->db->prepare('UPDATE tasks SET ' . implode(', ', $fields) . ', updated_at = NOW() WHERE id = :id');
         $stmt->execute($params);
 
+        $googleSync = GoogleCalendarService::syncTask($this->db, $taskId);
+
         $this->invalidate();
-        echo json_encode(['success' => true, 'id' => $taskId]);
+        echo json_encode(['success' => true, 'id' => $taskId, 'google_sync' => $googleSync]);
     }
 
     private function deleteTask(string $taskId, array $user): void
     {
         $this->assertTaskAccess($taskId, $user);
+        GoogleCalendarService::deleteEntityEvents($this->db, 'task', $taskId);
         $stmt = $this->db->prepare('DELETE FROM tasks WHERE id = :id');
         $stmt->execute([':id' => $taskId]);
 

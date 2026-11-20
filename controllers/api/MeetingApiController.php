@@ -12,6 +12,7 @@ require_once __DIR__ . '/../../services/AuditLogger.php';
 require_once __DIR__ . '/../../services/SecurityHelper.php';
 require_once __DIR__ . '/../../middleware/AuthMiddleware.php';
 require_once __DIR__ . '/../../middleware/CsrfMiddleware.php';
+require_once __DIR__ . '/../../services/GoogleCalendarService.php';
 
 final class MeetingApiController
 {
@@ -42,6 +43,11 @@ final class MeetingApiController
             return;
         }
 
+        if ($method === 'POST' && $p3 === 'sync-google') {
+            $this->syncGoogleCalendar($user);
+            return;
+        }
+
         if ($method === 'POST' && $p3 === '') {
             $this->createMeeting($user);
             return;
@@ -67,6 +73,7 @@ final class MeetingApiController
             $this->db->exec("ALTER TABLE calendar_meetings ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT NULL");
             $this->db->exec("ALTER TABLE calendar_meetings DROP CONSTRAINT IF EXISTS calendar_meetings_meeting_type_check");
             $this->db->exec("ALTER TABLE calendar_meetings ADD CONSTRAINT calendar_meetings_meeting_type_check CHECK (meeting_type IN ('client_meeting', 'team_sync', 'checkpoint', 'review', 'focus_block', 'availability_window'))");
+            GoogleCalendarService::ensureSchema($this->db);
         } catch (Throwable) {
             // Schema already aligned or read-only DDL
         }
@@ -303,7 +310,7 @@ final class MeetingApiController
         $meetingId = (in_array($type, ['focus_block', 'availability_window'], true) ? 'blk-' : 'meet-') . bin2hex(random_bytes(5));
         $stmt = $this->db->prepare("
             INSERT INTO calendar_meetings (id, title, va_id, client_id, include_client, start_time, end_time, meeting_type, meeting_link, notes, created_by_tl_id, google_synced)
-            VALUES (:id, :title, :va, :cid, :inc, :start_t, :end_t, :type, :link, :notes, :creator, TRUE)
+            VALUES (:id, :title, :va, :cid, :inc, :start_t, :end_t, :type, :link, :notes, :creator, FALSE)
         ");
         $stmt->execute([
             ':id'      => $meetingId,
@@ -338,6 +345,8 @@ final class MeetingApiController
             ]);
         }
 
+        $googleSync = GoogleCalendarService::syncMeeting($this->db, $meetingId);
+
         CacheService::invalidatePrefix($this->db, 'meetings:');
         CacheService::invalidatePrefix($this->db, 'emails:');
         AuditLogger::log('CALENDAR_EVENT_CREATED', 'success', "Created {$type} {$meetingId} ({$title}) for {$va['email']}", $user['id'], $user['role'], $this->db);
@@ -350,6 +359,7 @@ final class MeetingApiController
             'start_time'   => $dtStart->format('Y-m-d H:i'),
             'end_time'     => $dtEnd->format('Y-m-d H:i'),
             'meeting_link' => $link,
+            'google_sync'  => $googleSync,
         ]);
     }
 
@@ -415,10 +425,17 @@ final class MeetingApiController
             ':id' => $id,
         ]);
 
+        $googleSync = GoogleCalendarService::syncMeeting($this->db, $id);
+
         CacheService::invalidatePrefix($this->db, 'meetings:');
         AuditLogger::log('CALENDAR_EVENT_MOVED', 'success', "Rescheduled {$id} to {$newStart->format('Y-m-d H:i')}", $user['id'], $user['role'], $this->db);
 
-        echo json_encode(['success' => true, 'id' => $id, 'start_time' => $newStart->format('Y-m-d H:i')]);
+        echo json_encode([
+            'success'     => true,
+            'id'          => $id,
+            'start_time'  => $newStart->format('Y-m-d H:i'),
+            'google_sync' => $googleSync,
+        ]);
     }
 
     private function deleteMeeting(string $id, array $user): void
@@ -439,10 +456,29 @@ final class MeetingApiController
             return;
         }
 
+        GoogleCalendarService::deleteEntityEvents($this->db, 'meeting', $id);
         $this->db->prepare('DELETE FROM calendar_meetings WHERE id = :id')->execute([':id' => $id]);
         CacheService::invalidatePrefix($this->db, 'meetings:');
         AuditLogger::log('CALENDAR_EVENT_DELETED', 'warning', "Deleted calendar block {$id}", $user['id'], $user['role'], $this->db);
 
         echo json_encode(['success' => true, 'id' => $id]);
+    }
+
+    private function syncGoogleCalendar(array $user): void
+    {
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $month = SecurityHelper::sanitizePlainText($input['month'] ?? '', 7);
+        try {
+            $res = GoogleCalendarService::syncUpcomingForUser($this->db, (string) $user['id'], $month !== '' ? $month : null);
+            CacheService::invalidatePrefix($this->db, 'meetings:');
+            echo json_encode([
+                'success'         => true,
+                'meetings_synced' => $res['meetings_synced'],
+                'tasks_synced'    => $res['tasks_synced'],
+            ]);
+        } catch (Throwable $e) {
+            http_response_code(400);
+            echo json_encode(['error' => $e->getMessage()]);
+        }
     }
 }

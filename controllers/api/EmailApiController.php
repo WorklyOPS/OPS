@@ -12,6 +12,7 @@ require_once __DIR__ . '/../../services/SecurityHelper.php';
 require_once __DIR__ . '/../../middleware/AuthMiddleware.php';
 require_once __DIR__ . '/../../middleware/CsrfMiddleware.php';
 require_once __DIR__ . '/../../services/GmailOAuthService.php';
+require_once __DIR__ . '/../../services/GoogleCalendarService.php';
 
 final class EmailApiController
 {
@@ -90,7 +91,9 @@ final class EmailApiController
             $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT DEFAULT NULL');
             $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ DEFAULT NULL');
             $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS token_type VARCHAR(32) DEFAULT NULL');
-            $this->db->exec("CREATE TABLE IF NOT EXISTS gmail_oauth_states (state_hash CHAR(64) PRIMARY KEY, user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+            $this->db->exec("CREATE TABLE IF NOT EXISTS gmail_oauth_states (state_hash CHAR(64) PRIMARY KEY, user_id VARCHAR(64) NOT NULL REFERENCES users(id) ON DELETE CASCADE, return_to VARCHAR(64) NOT NULL DEFAULT '/email', expires_at TIMESTAMPTZ NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+            $this->db->exec("ALTER TABLE gmail_oauth_states ADD COLUMN IF NOT EXISTS return_to VARCHAR(64) NOT NULL DEFAULT '/email'");
+            GoogleCalendarService::ensureSchema($this->db);
             $this->db->exec("
                 CREATE TABLE IF NOT EXISTS email_attachments (
                     id VARCHAR(64) PRIMARY KEY,
@@ -188,15 +191,17 @@ final class EmailApiController
 
     private function mailboxStatus(array $user): void
     {
-        $stmt = $this->db->prepare("SELECT email, oauth_status, last_synced_at FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1");
+        $stmt = $this->db->prepare("SELECT email, oauth_status, oauth_scope, refresh_token_encrypted, last_synced_at FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1");
         $stmt->execute([':uid' => $user['id']]);
         $mailbox = $stmt->fetch(PDO::FETCH_ASSOC) ?: null;
         $connected = $mailbox && $mailbox['oauth_status'] === 'active' && !empty($mailbox['refresh_token_encrypted']);
+        $calendarConnected = $connected && GoogleCalendarService::hasCalendarScope((string) ($mailbox['oauth_scope'] ?? ''));
         echo json_encode([
-            'connected' => (bool) $connected,
-            'email' => $connected ? $mailbox['email'] : null,
-            'status' => $mailbox['oauth_status'] ?? 'disconnected',
-            'last_synced_at' => $mailbox['last_synced_at'] ?? null,
+            'connected'          => (bool) $connected,
+            'calendar_connected' => (bool) $calendarConnected,
+            'email'              => $connected ? $mailbox['email'] : null,
+            'status'             => $mailbox['oauth_status'] ?? 'disconnected',
+            'last_synced_at'     => $mailbox['last_synced_at'] ?? null,
         ]);
     }
 
@@ -215,20 +220,24 @@ final class EmailApiController
 
     private function startGoogleOAuth(array $user): void
     {
+        $nextRaw = (string) ($_GET['next'] ?? '/email');
+        $returnTo = $nextRaw === '/calendar-reports' ? '/calendar-reports' : '/email';
+        $errorParam = $returnTo === '/calendar-reports' ? 'calendar_error' : 'gmail_error';
+
         try {
             SecurityHelper::configureSecureSession();
             $state = bin2hex(random_bytes(32));
             $cleanup = $this->db->prepare('DELETE FROM gmail_oauth_states WHERE expires_at < NOW()');
             $cleanup->execute();
-            $stateStmt = $this->db->prepare("INSERT INTO gmail_oauth_states (state_hash, user_id, expires_at) VALUES (:hash, :uid, NOW() + INTERVAL '10 minutes')");
-            $stateStmt->execute([':hash' => hash('sha256', $state), ':uid' => $user['id']]);
+            $stateStmt = $this->db->prepare("INSERT INTO gmail_oauth_states (state_hash, user_id, return_to, expires_at) VALUES (:hash, :uid, :rto, NOW() + INTERVAL '10 minutes')");
+            $stateStmt->execute([':hash' => hash('sha256', $state), ':uid' => $user['id'], ':rto' => $returnTo]);
             $authorizationUrl = GmailOAuthService::createAuthorizationUrl($state);
             header('Cache-Control: no-store');
             header('Location: ' . $authorizationUrl, true, 302);
             exit;
         } catch (Throwable $e) {
-            error_log('Workly Gmail OAuth start failed: ' . $e->getMessage());
-            header('Location: /email?gmail_error=config', true, 303);
+            error_log('Workly Google OAuth start failed: ' . $e->getMessage());
+            header('Location: ' . $returnTo . '?' . $errorParam . '=config', true, 303);
             exit;
         }
     }
@@ -240,14 +249,19 @@ final class EmailApiController
             header('Location: /email?gmail_error=state', true, 303);
             exit;
         }
-        $stateStmt = $this->db->prepare("DELETE FROM gmail_oauth_states WHERE state_hash = :hash AND user_id = :uid AND expires_at > NOW() RETURNING user_id");
+        $stateStmt = $this->db->prepare("DELETE FROM gmail_oauth_states WHERE state_hash = :hash AND user_id = :uid AND expires_at > NOW() RETURNING user_id, return_to");
         $stateStmt->execute([':hash' => hash('sha256', $receivedState), ':uid' => $user['id']]);
-        if (!$stateStmt->fetchColumn()) {
+        $stateRow = $stateStmt->fetch(PDO::FETCH_ASSOC);
+        if (!$stateRow) {
             header('Location: /email?gmail_error=state', true, 303);
             exit;
         }
+        $returnTo = ($stateRow['return_to'] ?? '/email') === '/calendar-reports' ? '/calendar-reports' : '/email';
+        $errorParam = $returnTo === '/calendar-reports' ? 'calendar_error' : 'gmail_error';
+        $successParam = $returnTo === '/calendar-reports' ? 'calendar_connected' : 'gmail_connected';
+
         if (!empty($_GET['error']) || empty($_GET['code'])) {
-            header('Location: /email?gmail_error=cancelled', true, 303);
+            header('Location: ' . $returnTo . '?' . $errorParam . '=cancelled', true, 303);
             exit;
         }
 
@@ -261,7 +275,7 @@ final class EmailApiController
             $profile = GmailOAuthService::fetchProfile($accessToken);
             $gmailEmail = strtolower(trim((string) ($profile['emailAddress'] ?? '')));
             if (!filter_var($gmailEmail, FILTER_VALIDATE_EMAIL)) {
-                throw new RuntimeException('Unable to identify the authorized Gmail account.');
+                throw new RuntimeException('Unable to identify the authorized Google account.');
             }
 
             $existing = $this->db->prepare('SELECT refresh_token_encrypted FROM staff_connected_mailboxes WHERE user_id = :uid LIMIT 1');
@@ -276,7 +290,8 @@ final class EmailApiController
             }
 
             $expiresIn = max(60, (int) ($token['expires_in'] ?? 3600));
-            $scopes = implode(' ', GmailOAuthService::scopes());
+            $grantedScope = trim((string) ($token['scope'] ?? ''));
+            $scopes = $grantedScope !== '' ? $grantedScope : implode(' ', GmailOAuthService::scopes());
             $stmt = $this->db->prepare("
                 INSERT INTO staff_connected_mailboxes
                     (user_id, provider, email, oauth_status, sync_interval_minutes, oauth_scope, access_token_encrypted, refresh_token_encrypted, token_expires_at, token_type, updated_at)
@@ -292,12 +307,12 @@ final class EmailApiController
                 ':refresh_token' => GmailOAuthService::encrypt($refreshToken),
                 ':expires_in' => $expiresIn, ':token_type' => (string) ($token['token_type'] ?? 'Bearer'),
             ]);
-            AuditLogger::log('GMAIL_OAUTH_CONNECTED', 'success', 'Google Gmail OAuth connected: ' . $gmailEmail, $user['id'], $user['role'], $this->db);
-            header('Location: /email?gmail_connected=1', true, 303);
+            AuditLogger::log('GMAIL_OAUTH_CONNECTED', 'success', 'Google OAuth connected (Mail + Calendar): ' . $gmailEmail, $user['id'], $user['role'], $this->db);
+            header('Location: ' . $returnTo . '?' . $successParam . '=1', true, 303);
             exit;
         } catch (Throwable $e) {
-            error_log('Workly Gmail OAuth callback failed: ' . $e->getMessage());
-            header('Location: /email?gmail_error=callback', true, 303);
+            error_log('Workly Google OAuth callback failed: ' . $e->getMessage());
+            header('Location: ' . $returnTo . '?' . $errorParam . '=callback', true, 303);
             exit;
         }
     }
