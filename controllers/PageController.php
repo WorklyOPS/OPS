@@ -1200,23 +1200,64 @@ final class PageController
 
     private function loadCalendarReportsData(array $user): array
     {
+        GoogleCalendarService::ensureSchema($this->db);
+
         $role = $user['role'];
         $uid = $user['id'];
 
-        $calMonth = SecurityHelper::sanitizePlainText($_GET['month'] ?? date('Y-m'), 7);
+        $monitorUser = SecurityHelper::sanitizePlainText($_GET['monitor_user'] ?? '', 64);
+        $targetCalUid = ($role === 'admin' && $monitorUser !== '') ? $monitorUser : $uid;
+
+        $userTz = GoogleCalendarService::resolveUserTimezone($this->db, (string) $targetCalUid);
+        $todayInTz = (new DateTimeImmutable('now', $userTz))->format('Y-m-d');
+
+        $calView = (string) ($_GET['cal_view'] ?? '');
+        if (!in_array($calView, ['week', 'day', 'month'], true)) {
+            $calView = (isset($_GET['month']) && !isset($_GET['cal_date'])) ? 'month' : 'week';
+        }
+
+        $calDate = SecurityHelper::sanitizePlainText($_GET['cal_date'] ?? '', 16);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $calDate)) {
+            if (!empty($_GET['month']) && preg_match('/^\d{4}-\d{2}$/', (string) $_GET['month'])) {
+                $calDate = (string) $_GET['month'] . '-01';
+            } else {
+                $calDate = $todayInTz;
+            }
+        }
+
+        $calMonth = SecurityHelper::sanitizePlainText($_GET['month'] ?? substr($calDate, 0, 7), 7);
         if (!preg_match('/^\d{4}-\d{2}$/', $calMonth)) {
-            $calMonth = date('Y-m');
+            $calMonth = substr($calDate, 0, 7);
+        }
+
+        $anchorDt = new DateTimeImmutable($calDate . ' 00:00:00', $userTz);
+        if ($calView === 'day') {
+            $rangeStart = $anchorDt->format('Y-m-d');
+            $rangeEnd = $rangeStart;
+        } elseif ($calView === 'week') {
+            $dow = (int) $anchorDt->format('N'); // 1=Mon .. 7=Sun
+            $weekStartDt = $anchorDt->modify('-' . ($dow - 1) . ' days');
+            $rangeStart = $weekStartDt->format('Y-m-d');
+            $rangeEnd = $weekStartDt->modify('+6 days')->format('Y-m-d');
+        } else {
+            $monthFirst = new DateTimeImmutable($calMonth . '-01 00:00:00', $userTz);
+            $rangeStart = $monthFirst->format('Y-m-d');
+            $rangeEnd = $monthFirst->modify('last day of this month')->format('Y-m-d');
         }
 
         $startDate = SecurityHelper::sanitizePlainText($_GET['start_date'] ?? date('Y-m-d', strtotime('monday this week')), 16);
         $endDate = SecurityHelper::sanitizePlainText($_GET['end_date'] ?? date('Y-m-d', strtotime('sunday this week')), 16);
-        $monitorUser = SecurityHelper::sanitizePlainText($_GET['monitor_user'] ?? '', 64);
 
-        $mStart = $calMonth . '-01';
-        $mEnd = (new DateTimeImmutable($mStart))->modify('last day of this month')->format('Y-m-d');
+        // Throttled automatic pull from Google Calendar so newly added Google events appear on load
+        $gcalStatus = GoogleCalendarService::getUserCalendarStatus($this->db, (string) $uid);
+        if (!empty($gcalStatus['connected'])) {
+            $pullMin = (new DateTimeImmutable($rangeStart . ' 00:00:00', $userTz))->modify('-7 days')->format(DateTimeInterface::RFC3339);
+            $pullMax = (new DateTimeImmutable($rangeEnd . ' 23:59:59', $userTz))->modify('+14 days')->format(DateTimeInterface::RFC3339);
+            GoogleCalendarService::pullFromGoogleForUser($this->db, (string) $uid, $pullMin, $pullMax, false);
+        }
 
-        // Strict calendar privacy: own meetings/shared meetings only; Admin can select a user to monitor
-        $targetCalUid = ($role === 'admin' && $monitorUser !== '') ? $monitorUser : $uid;
+        $qStart = (new DateTimeImmutable($rangeStart . ' 00:00:00', $userTz))->modify('-1 day')->format(DateTimeInterface::RFC3339);
+        $qEnd = (new DateTimeImmutable($rangeEnd . ' 23:59:59', $userTz))->modify('+1 day')->format(DateTimeInterface::RFC3339);
 
         $mStmt = $this->db->prepare("
             SELECT m.*, u.name AS va_name, c.agency_name AS client_name
@@ -1224,23 +1265,24 @@ final class PageController
             JOIN users u ON m.va_id = u.id
             LEFT JOIN clients c ON m.client_id = c.id
             WHERE (m.va_id = :u1 OR m.created_by_tl_id = :u2)
-              AND m.start_time::DATE BETWEEN :ms AND :me
+              AND m.start_time <= :qe
+              AND m.end_time >= :qs
             ORDER BY m.start_time ASC
         ");
-        $mStmt->execute([':u1' => $targetCalUid, ':u2' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
+        $mStmt->execute([':u1' => $targetCalUid, ':u2' => $targetCalUid, ':qs' => $qStart, ':qe' => $qEnd]);
         $meetings = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Task milestones in that month (own tasks for VA; pod + own for TL; selected user for Admin)
+        // Task milestones in visible range
         $tStmt = $this->db->prepare("
             SELECT id, title, deadline, status, priority
             FROM tasks
             WHERE assigned_va_id = :uid AND deadline BETWEEN :ms AND :me
             ORDER BY deadline ASC
         ");
-        $tStmt->execute([':uid' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
+        $tStmt->execute([':uid' => $targetCalUid, ':ms' => $rangeStart, ':me' => $rangeEnd]);
         $calendarTasks = $tStmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // Approved PTO blocks inside selected month
+        // Approved PTO blocks inside visible range
         $ptoStmt = $this->db->prepare("
             SELECT id, va_name, start_date, end_date
             FROM pto_requests
@@ -1248,7 +1290,7 @@ final class PageController
               AND start_date <= :me AND end_date >= :ms
             ORDER BY start_date ASC
         ");
-        $ptoStmt->execute([':uid' => $targetCalUid, ':ms' => $mStart, ':me' => $mEnd]);
+        $ptoStmt->execute([':uid' => $targetCalUid, ':ms' => $rangeStart, ':me' => $rangeEnd]);
         $calendarPto = $ptoStmt->fetchAll(PDO::FETCH_ASSOC);
 
         $reportVa = SecurityHelper::sanitizePlainText($_GET['rep_va'] ?? 'all', 64);
@@ -1431,12 +1473,19 @@ final class PageController
         $tlRoleFilter = $role === 'admin' ? "role IN ('team_leader', 'admin')" : "role = 'team_leader'";
         $teamLeaders = $this->db->query("SELECT id, name, email FROM users WHERE {$tlRoleFilter} AND is_active = TRUE ORDER BY name ASC")->fetchAll(PDO::FETCH_ASSOC);
 
-        $googleCalStatus = GoogleCalendarService::getUserCalendarStatus($this->db, (string) $uid);
-        $syncedMeetingIds = GoogleCalendarService::getLinkedEntityIdsForUser($this->db, (string) $uid, 'meeting');
-        $syncedTaskIds = GoogleCalendarService::getLinkedEntityIdsForUser($this->db, (string) $uid, 'task');
+        $gcalStatus = GoogleCalendarService::getUserCalendarStatus($this->db, (string) $uid);
+        $syncedMeetingMap = GoogleCalendarService::getLinkedEntityMapForUser($this->db, (string) $targetCalUid, 'meeting');
+        $syncedMeetingIds = array_keys($syncedMeetingMap);
+        $syncedTaskIds = GoogleCalendarService::getLinkedEntityIdsForUser($this->db, (string) $targetCalUid, 'task');
 
         return [
+            'cal_view'               => $calView,
+            'cal_date'               => $calDate,
             'cal_month'              => $calMonth,
+            'cal_range_start'        => $rangeStart,
+            'cal_range_end'          => $rangeEnd,
+            'user_timezone'          => $userTz->getName(),
+            'today_in_tz'            => $todayInTz,
             'start_date'             => $startDate,
             'end_date'               => $endDate,
             'report_va'              => $reportVa,
@@ -1467,8 +1516,9 @@ final class PageController
             'clients'                => $clients,
             'staff_directory'        => $staffDirectory,
             'team_leaders'           => $teamLeaders,
-            'google_calendar_status' => $googleCalStatus,
+            'google_calendar_status' => $gcalStatus,
             'synced_meeting_ids'     => $syncedMeetingIds,
+            'synced_meeting_map'     => $syncedMeetingMap,
             'synced_task_ids'        => $syncedTaskIds,
         ];
     }

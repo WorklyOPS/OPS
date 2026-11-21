@@ -23,6 +23,7 @@ final class MeetingApiController
         'review',
         'focus_block',
         'availability_window',
+        'google_event',
     ];
 
     public function __construct(private PDO $db) {}
@@ -40,6 +41,11 @@ final class MeetingApiController
 
         if ($method === 'GET' && $p3 === 'availability') {
             $this->getAvailability($user);
+            return;
+        }
+
+        if ($method === 'GET' && $p3 === 'live-google') {
+            $this->liveGoogleSync($user);
             return;
         }
 
@@ -71,8 +77,10 @@ final class MeetingApiController
     {
         try {
             $this->db->exec("ALTER TABLE calendar_meetings ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT NULL");
+            $this->db->exec("ALTER TABLE calendar_meetings ADD COLUMN IF NOT EXISTS external_source VARCHAR(24) NOT NULL DEFAULT 'workly'");
+            $this->db->exec("ALTER TABLE calendar_meetings ADD COLUMN IF NOT EXISTS is_all_day BOOLEAN NOT NULL DEFAULT FALSE");
             $this->db->exec("ALTER TABLE calendar_meetings DROP CONSTRAINT IF EXISTS calendar_meetings_meeting_type_check");
-            $this->db->exec("ALTER TABLE calendar_meetings ADD CONSTRAINT calendar_meetings_meeting_type_check CHECK (meeting_type IN ('client_meeting', 'team_sync', 'checkpoint', 'review', 'focus_block', 'availability_window'))");
+            $this->db->exec("ALTER TABLE calendar_meetings ADD CONSTRAINT calendar_meetings_meeting_type_check CHECK (meeting_type IN ('client_meeting', 'team_sync', 'checkpoint', 'review', 'focus_block', 'availability_window', 'google_event'))");
             GoogleCalendarService::ensureSchema($this->db);
         } catch (Throwable) {
             // Schema already aligned or read-only DDL
@@ -180,7 +188,7 @@ final class MeetingApiController
 
     private function hasOverlap(string $vaId, string $startIso, string $endIso, ?string $excludeId): bool
     {
-        $sql = 'SELECT COUNT(*)::INTEGER FROM calendar_meetings WHERE va_id = :va AND start_time < :e AND end_time > :s';
+        $sql = 'SELECT COUNT(*)::INTEGER FROM calendar_meetings WHERE va_id = :va AND COALESCE(is_all_day, FALSE) = FALSE AND start_time < :e AND end_time > :s';
         $params = [':va' => $vaId, ':s' => $startIso, ':e' => $endIso];
         if ($excludeId !== null) {
             $sql .= ' AND id <> :ex';
@@ -202,19 +210,20 @@ final class MeetingApiController
         return (int) $stmt->fetchColumn() > 0;
     }
 
-    private function findSmartSlotOnDate(string $vaId, string $date, int $durationMinutes = 60, ?string $clientId = null): array
+    private function findSmartSlotOnDate(string $vaId, string $date, int $durationMinutes = 60, ?string $clientId = null, ?DateTimeZone $tz = null): array
     {
+        $useTz = $tz ?? GoogleCalendarService::resolveUserTimezone($this->db, $vaId);
         $durMin = max(30, min(480, $durationMinutes));
         $clientHours = $this->parseClientWindowsForDate($clientId, $date);
         $hours = (!empty($clientHours)) ? $clientHours : [9, 10, 11, 13, 14, 15, 16, 8, 12];
         foreach ($hours as $startHour) {
             try {
-                $s = new DateTimeImmutable("{$date} " . sprintf('%02d:00:00', $startHour));
+                $s = new DateTimeImmutable("{$date} " . sprintf('%02d:00:00', $startHour), $useTz);
                 $e = $s->modify("+{$durMin} minutes");
                 if ($e->format('Y-m-d') !== $date) {
                     continue;
                 }
-                if (!$this->hasOverlap($vaId, $s->format('Y-m-d\TH:i:s'), $e->format('Y-m-d\TH:i:s'), null)) {
+                if (!$this->hasOverlap($vaId, $s->format(DateTimeInterface::RFC3339), $e->format(DateTimeInterface::RFC3339), null)) {
                     return [$s->format('Y-m-d\TH:i:s'), $e->format('Y-m-d\TH:i:s')];
                 }
             } catch (Throwable) {
@@ -222,7 +231,7 @@ final class MeetingApiController
             }
         }
         $fallbackHour = !empty($hours) ? $hours[0] : 9;
-        $s = new DateTimeImmutable("{$date} " . sprintf('%02d:00:00', $fallbackHour));
+        $s = new DateTimeImmutable("{$date} " . sprintf('%02d:00:00', $fallbackHour), $useTz);
         $e = $s->modify("+{$durMin} minutes");
         return [$s->format('Y-m-d\TH:i:s'), $e->format('Y-m-d\TH:i:s')];
     }
@@ -253,13 +262,16 @@ final class MeetingApiController
         $notes = SecurityHelper::sanitizePlainText($input['notes'] ?? '', 1000);
         $autoSlot = !empty($input['auto_slot']);
 
+        $explicitTz = SecurityHelper::sanitizePlainText($input['timezone'] ?? '', 64);
+        $userTz = GoogleCalendarService::resolveUserTimezone($this->db, (string) $user['id'], $explicitTz !== '' ? $explicitTz : null);
+
         $start = SecurityHelper::sanitizePlainText($input['start_time'] ?? '', 64);
         $end = SecurityHelper::sanitizePlainText($input['end_time'] ?? '', 64);
 
         if ($autoSlot && !empty($input['target_date'])) {
             $targetDate = SecurityHelper::sanitizePlainText($input['target_date'], 16);
             $dur = max(30, min(360, (int) ($input['duration_minutes'] ?? 60)));
-            [$start, $end] = $this->findSmartSlotOnDate($vaId, $targetDate, $dur, $clientId);
+            [$start, $end] = $this->findSmartSlotOnDate($vaId, $targetDate, $dur, $clientId, $userTz);
         }
 
         $link = in_array($type, ['focus_block', 'availability_window'], true)
@@ -273,8 +285,8 @@ final class MeetingApiController
         }
 
         try {
-            $dtStart = new DateTimeImmutable($start);
-            $dtEnd = new DateTimeImmutable($end);
+            $dtStart = new DateTimeImmutable($start, $userTz);
+            $dtEnd = new DateTimeImmutable($end, $userTz);
             if ($dtEnd <= $dtStart) {
                 http_response_code(422);
                 echo json_encode(['error' => 'End time must be after start time']);
@@ -292,7 +304,7 @@ final class MeetingApiController
             return;
         }
 
-        if (!$autoSlot && $this->hasOverlap($vaId, $dtStart->format('Y-m-d\TH:i:s'), $dtEnd->format('Y-m-d\TH:i:s'), null)) {
+        if (!$autoSlot && $this->hasOverlap($vaId, $dtStart->format(DateTimeInterface::RFC3339), $dtEnd->format(DateTimeInterface::RFC3339), null)) {
             http_response_code(409);
             echo json_encode(['error' => 'Schedule conflict detected with an existing calendar block or meeting. Adjust time or use smart auto-slot.']);
             return;
@@ -383,18 +395,31 @@ final class MeetingApiController
 
         $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
         $targetDate = SecurityHelper::sanitizePlainText($input['target_date'] ?? '', 16);
+        $hasTargetHour = array_key_exists('target_hour', $input) && $input['target_hour'] !== '' && $input['target_hour'] !== null;
+        $targetHour = $hasTargetHour ? max(0, min(23, (int) $input['target_hour'])) : null;
+        $explicitTz = SecurityHelper::sanitizePlainText($input['timezone'] ?? '', 64);
+        $userTz = GoogleCalendarService::resolveUserTimezone($this->db, (string) $user['id'], $explicitTz !== '' ? $explicitTz : null);
+        $clearAllDay = false;
 
         try {
-            $oldStart = new DateTimeImmutable((string) $ev['start_time']);
-            $oldEnd = new DateTimeImmutable((string) $ev['end_time']);
+            $oldStart = (new DateTimeImmutable((string) $ev['start_time']))->setTimezone($userTz);
+            $oldEnd = (new DateTimeImmutable((string) $ev['end_time']))->setTimezone($userTz);
             $diff = $oldStart->diff($oldEnd);
+            $isCurrentlyAllDay = filter_var($ev['is_all_day'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
             if ($targetDate !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $targetDate)) {
-                $newStart = new DateTimeImmutable($targetDate . ' ' . $oldStart->format('H:i:s'), $oldStart->getTimezone());
-                $newEnd = $newStart->add($diff);
+                if ($targetHour !== null) {
+                    $newStart = new DateTimeImmutable(sprintf('%s %02d:00:00', $targetDate, $targetHour), $userTz);
+                    $newEnd = $isCurrentlyAllDay ? $newStart->modify('+1 hour') : $newStart->add($diff);
+                    $clearAllDay = true;
+                } else {
+                    $newStart = new DateTimeImmutable($targetDate . ' ' . $oldStart->format('H:i:s'), $userTz);
+                    $newEnd = $newStart->add($diff);
+                }
             } elseif (!empty($input['start_time']) && !empty($input['end_time'])) {
-                $newStart = new DateTimeImmutable((string) $input['start_time']);
-                $newEnd = new DateTimeImmutable((string) $input['end_time']);
+                $newStart = new DateTimeImmutable((string) $input['start_time'], $userTz);
+                $newEnd = new DateTimeImmutable((string) $input['end_time'], $userTz);
+                $clearAllDay = true;
             } else {
                 http_response_code(422);
                 echo json_encode(['error' => 'target_date or start_time/end_time is required']);
@@ -412,17 +437,19 @@ final class MeetingApiController
             return;
         }
 
-        if ($this->hasOverlap((string) $ev['va_id'], $newStart->format('Y-m-d\TH:i:s'), $newEnd->format('Y-m-d\TH:i:s'), $id)) {
+        $willBeAllDay = !$clearAllDay && filter_var($ev['is_all_day'] ?? false, FILTER_VALIDATE_BOOLEAN);
+        if (!$willBeAllDay && $this->hasOverlap((string) $ev['va_id'], $newStart->format(DateTimeInterface::RFC3339), $newEnd->format(DateTimeInterface::RFC3339), $id)) {
             http_response_code(409);
             echo json_encode(['error' => 'Schedule overlap detected at target slot']);
             return;
         }
 
-        $upd = $this->db->prepare('UPDATE calendar_meetings SET start_time = :s, end_time = :e WHERE id = :id');
+        $upd = $this->db->prepare('UPDATE calendar_meetings SET start_time = :s, end_time = :e, is_all_day = :iad WHERE id = :id');
         $upd->execute([
-            ':s'  => $newStart->format('Y-m-d\TH:i:sP'),
-            ':e'  => $newEnd->format('Y-m-d\TH:i:sP'),
-            ':id' => $id,
+            ':s'   => $newStart->format('Y-m-d\TH:i:sP'),
+            ':e'   => $newEnd->format('Y-m-d\TH:i:sP'),
+            ':iad' => $willBeAllDay ? 'true' : 'false',
+            ':id'  => $id,
         ]);
 
         $googleSync = GoogleCalendarService::syncMeeting($this->db, $id);
@@ -433,7 +460,7 @@ final class MeetingApiController
         echo json_encode([
             'success'     => true,
             'id'          => $id,
-            'start_time'  => $newStart->format('Y-m-d H:i'),
+            'start_time'  => $newStart->format('Y-m-d g:i A'),
             'google_sync' => $googleSync,
         ]);
     }
@@ -475,10 +502,29 @@ final class MeetingApiController
                 'success'         => true,
                 'meetings_synced' => $res['meetings_synced'],
                 'tasks_synced'    => $res['tasks_synced'],
+                'google_imported' => $res['google_imported'],
+                'google_updated'  => $res['google_updated'],
+                'google_deleted'  => $res['google_deleted'],
             ]);
         } catch (Throwable $e) {
             http_response_code(400);
             echo json_encode(['error' => $e->getMessage()]);
         }
+    }
+
+    private function liveGoogleSync(array $user): void
+    {
+        $res = GoogleCalendarService::pullFromGoogleForUser($this->db, (string) $user['id'], null, null, false);
+        $changes = (int) ($res['imported'] ?? 0) + (int) ($res['updated'] ?? 0) + (int) ($res['deleted'] ?? 0);
+        if ($changes > 0) {
+            CacheService::invalidatePrefix($this->db, 'meetings:');
+        }
+        echo json_encode([
+            'connected' => (bool) ($res['connected'] ?? false),
+            'changed'   => $changes > 0,
+            'imported'  => (int) ($res['imported'] ?? 0),
+            'updated'   => (int) ($res['updated'] ?? 0),
+            'deleted'   => (int) ($res['deleted'] ?? 0),
+        ]);
     }
 }

@@ -76,7 +76,22 @@
     return { start, done, showSkeleton, revealContent };
   })();
 
+  function getBrowserTimezone() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    } catch (_err) {
+      return '';
+    }
+  }
+
+  function syncBrowserTimezoneCookie() {
+    const tz = getBrowserTimezone();
+    if (!tz) return;
+    document.cookie = 'workly_tz=' + encodeURIComponent(tz) + '; path=/; max-age=2592000; SameSite=Lax';
+  }
+
   window.addEventListener('DOMContentLoaded', () => {
+    syncBrowserTimezoneCookie();
     portalOverlaysToBody();
     initSkeletonStaging();
     initAuthControls();
@@ -2517,12 +2532,9 @@
   // Unified Calendar Scheduler & Client-Synced Open Slot Scanner
   // ------------------------------------------------------------------------
   function initCalendarScheduler() {
-    const grid = document.querySelector('.calendar-grid');
-    if (!grid) return;
-
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('calendar_connected') === '1') {
-      showToast('Google Calendar connected — new meetings & tasks will auto-sync', 'success');
+      showToast('Google Calendar connected — two-way sync enabled', 'success');
       urlParams.delete('calendar_connected');
       const cleanQs = urlParams.toString();
       window.history.replaceState({}, '', window.location.pathname + (cleanQs ? '?' + cleanQs : ''));
@@ -2539,6 +2551,19 @@
       window.history.replaceState({}, '', window.location.pathname + (cleanQs ? '?' + cleanQs : ''));
     }
 
+    const calRoot = document.querySelector('.cal-schedule-root');
+    if (!calRoot) return;
+
+    const browserTz = getBrowserTimezone();
+
+    // Auto-scroll hourly timeline to 7 AM (7 * 56px = 392px)
+    const timelineScroll = document.getElementById('workly-cal-timeline-scroll');
+    if (timelineScroll) {
+      window.requestAnimationFrame(() => {
+        timelineScroll.scrollTop = 392;
+      });
+    }
+
     const gcalSyncBtn = document.getElementById('btn-gcal-sync-now');
     if (gcalSyncBtn) {
       gcalSyncBtn.addEventListener('click', async () => {
@@ -2552,9 +2577,17 @@
             method: 'POST',
             body: JSON.stringify({ month })
           });
+          const imported = Number(res.google_imported || 0);
+          const updated = Number(res.google_updated || 0);
+          const deleted = Number(res.google_deleted || 0);
           const mCount = Number(res.meetings_synced || 0);
           const tCount = Number(res.tasks_synced || 0);
-          showToast('Synced ' + mCount + ' meeting(s) & ' + tCount + ' task deadline(s) to Google Calendar', 'success');
+          const pulledTotal = imported + updated + deleted;
+          const pushedTotal = mCount + tCount;
+          showToast(
+            'Two-way sync complete: ' + pulledTotal + ' updated from Google · ' + pushedTotal + ' pushed to Google',
+            'success'
+          );
           window.setTimeout(() => window.location.reload(), 420);
         } catch (err) {
           showToast(err.message || 'Google Calendar sync failed', 'error');
@@ -2566,23 +2599,211 @@
 
     let dragEventId = null;
 
-    grid.querySelectorAll('.cal-event-chip[draggable="true"][data-meeting-id]').forEach((chip) => {
-      chip.addEventListener('dragstart', (e) => {
+    function clearDragOverStates() {
+      calRoot.querySelectorAll('.cal-drag-over').forEach((el) => el.classList.remove('cal-drag-over'));
+    }
+
+    async function handleDropReschedule(movingId, targetDate, targetHour) {
+      if (!movingId || !targetDate) return;
+      const bodyPayload = {
+        target_date: targetDate,
+        timezone: browserTz
+      };
+      if (targetHour !== null && targetHour !== undefined && targetHour !== '') {
+        bodyPayload.target_hour = Number(targetHour);
+      }
+      try {
+        const res = await apiFetch('/api/v1/meetings/' + encodeURIComponent(movingId) + '/reschedule', {
+          method: 'PATCH',
+          body: JSON.stringify(bodyPayload)
+        });
+        const gCount = res && res.google_sync ? Number(res.google_sync.synced_count || 0) : 0;
+        showToast(
+          gCount > 0
+            ? 'Rescheduled to ' + (res.start_time || targetDate) + ' & updated ' + gCount + ' Google Calendar(s)'
+            : 'Rescheduled to ' + (res.start_time || targetDate),
+          'success'
+        );
+        window.setTimeout(() => window.location.reload(), 320);
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    function openScheduleDrawerAt(targetDate, startHour) {
+      const schedDrawer = document.getElementById('drawer-schedule-meeting');
+      if (!schedDrawer || !targetDate) return;
+      const sInp = document.getElementById('sched-start-time');
+      const eInp = document.getElementById('sched-end-time');
+      const h = Number.isFinite(startHour) ? Math.max(0, Math.min(23, startHour)) : 9;
+      const padH = (val) => String(val).padStart(2, '0');
+      if (sInp) sInp.value = targetDate + 'T' + padH(h) + ':00';
+      if (eInp) {
+        eInp.value = h >= 23
+          ? targetDate + 'T23:59'
+          : targetDate + 'T' + padH(h + 1) + ':00';
+      }
+      openDrawer('drawer-schedule-meeting');
+      loadOpenSlots(targetDate);
+    }
+
+    function formatTypeBadgeLabel(rawType) {
+      const map = {
+        team_sync: 'Team Meeting',
+        client_meeting: 'Client Sync',
+        focus_block: 'Focus Block',
+        availability_window: 'Availability Window',
+        google_event: 'Google Calendar',
+        checkpoint: 'Checkpoint',
+        review: 'Review'
+      };
+      return map[rawType] || 'Event';
+    }
+
+    function openEventDetailModal(el) {
+      const modalEl = document.getElementById('modal-cal-event-detail');
+      if (!modalEl) return;
+      const mid = el.getAttribute('data-meeting-id') || '';
+      if (!mid) return;
+
+      const titleEl = document.getElementById('cal-detail-title');
+      const badgeEl = document.getElementById('cal-detail-type-badge');
+      const dtEl = document.getElementById('cal-detail-datetime');
+      const metaEl = document.getElementById('cal-detail-meta');
+      const notesEl = document.getElementById('cal-detail-notes');
+      const meetLinkEl = document.getElementById('cal-detail-meet-link');
+      const gcalLinkEl = document.getElementById('cal-detail-gcal-link');
+      const delBtn = document.getElementById('cal-detail-delete-btn');
+
+      const evTitle = el.getAttribute('data-ev-title') || 'Calendar Event';
+      const evType = el.getAttribute('data-ev-type') || 'team_sync';
+      const evDate = el.getAttribute('data-ev-date') || '';
+      const evTime = el.getAttribute('data-ev-time') || '';
+      const evClient = el.getAttribute('data-ev-client') || '';
+      const evVa = el.getAttribute('data-ev-va') || '';
+      const evLink = el.getAttribute('data-ev-link') || '';
+      const evGlink = el.getAttribute('data-ev-glink') || '';
+      const evNotes = el.getAttribute('data-ev-notes') || '';
+      const evSource = el.getAttribute('data-ev-source') || 'workly';
+      const canDelete = el.getAttribute('data-ev-can-delete') === '1';
+
+      if (titleEl) titleEl.textContent = evTitle;
+      if (badgeEl) badgeEl.textContent = formatTypeBadgeLabel(evType);
+      if (dtEl) dtEl.textContent = [evDate, evTime].filter(Boolean).join(' · ');
+
+      if (metaEl) {
+        const parts = [evSource === 'google' ? 'Imported from Google Calendar' : 'Scheduled in Workly'];
+        if (evVa) parts.push('Participant: ' + evVa);
+        if (evClient) parts.push('Client: ' + evClient);
+        metaEl.textContent = parts.join(' · ');
+      }
+
+      if (notesEl) {
+        if (evNotes.trim() !== '') {
+          notesEl.textContent = evNotes;
+          notesEl.classList.remove('is-hidden');
+        } else {
+          notesEl.textContent = '';
+          notesEl.classList.add('is-hidden');
+        }
+      }
+
+      const isSafeHttpUrl = (u) => /^https?:\/\//i.test(String(u || '').trim());
+      if (meetLinkEl) {
+        if (isSafeHttpUrl(evLink)) {
+          meetLinkEl.href = evLink;
+          meetLinkEl.classList.remove('is-hidden');
+        } else {
+          meetLinkEl.href = '#';
+          meetLinkEl.classList.add('is-hidden');
+        }
+      }
+      if (gcalLinkEl) {
+        if (isSafeHttpUrl(evGlink)) {
+          gcalLinkEl.href = evGlink;
+          gcalLinkEl.classList.remove('is-hidden');
+        } else {
+          gcalLinkEl.href = '#';
+          gcalLinkEl.classList.add('is-hidden');
+        }
+      }
+      if (delBtn) {
+        delBtn.setAttribute('data-delete-id', mid);
+        delBtn.classList.toggle('is-hidden', !canDelete);
+      }
+
+      openModal('modal-cal-event-detail');
+    }
+
+    const modalDeleteBtn = document.getElementById('cal-detail-delete-btn');
+    if (modalDeleteBtn) {
+      modalDeleteBtn.addEventListener('click', async () => {
+        const mid = modalDeleteBtn.getAttribute('data-delete-id') || '';
+        if (!mid) return;
+        try {
+          modalDeleteBtn.disabled = true;
+          await apiFetch('/api/v1/meetings/' + encodeURIComponent(mid), { method: 'DELETE' });
+          closeAllModals(false);
+          showToast('Deleted calendar event', 'success');
+          window.setTimeout(() => window.location.reload(), 260);
+        } catch (err) {
+          showToast(err.message || 'Could not delete event', 'error');
+          modalDeleteBtn.disabled = false;
+        }
+      });
+    }
+
+    // Bind draggable chips and hourly timed blocks
+    calRoot.querySelectorAll('[draggable="true"][data-meeting-id]').forEach((item) => {
+      item.addEventListener('dragstart', (e) => {
         e.stopPropagation();
-        dragEventId = chip.getAttribute('data-meeting-id') || '';
+        dragEventId = item.getAttribute('data-meeting-id') || '';
+        item.classList.add('is-dragging');
         if (e.dataTransfer) {
           e.dataTransfer.effectAllowed = 'move';
           e.dataTransfer.setData('text/plain', dragEventId);
         }
       });
 
-      chip.addEventListener('dragend', () => {
+      item.addEventListener('dragend', () => {
         dragEventId = null;
-        grid.querySelectorAll('.cal-cell').forEach((c) => c.classList.remove('cal-drag-over'));
+        item.classList.remove('is-dragging');
+        clearDragOverStates();
       });
     });
 
-    grid.querySelectorAll('.cal-cell[data-cal-date]').forEach((cell) => {
+    // Drop & click targets for Hour Slots (Week / Day views)
+    calRoot.querySelectorAll('.cal-hour-slot[data-cal-date][data-cal-hour]').forEach((slot) => {
+      const targetDate = slot.getAttribute('data-cal-date');
+      const targetHour = Number(slot.getAttribute('data-cal-hour'));
+
+      slot.addEventListener('dragover', (e) => {
+        if (!dragEventId) return;
+        e.preventDefault();
+        slot.classList.add('cal-drag-over');
+      });
+
+      slot.addEventListener('dragleave', (e) => {
+        if (!slot.contains(e.relatedTarget)) {
+          slot.classList.remove('cal-drag-over');
+        }
+      });
+
+      slot.addEventListener('drop', (e) => {
+        e.preventDefault();
+        clearDragOverStates();
+        const movingId = dragEventId;
+        dragEventId = null;
+        handleDropReschedule(movingId, targetDate, targetHour);
+      });
+
+      slot.addEventListener('click', () => {
+        openScheduleDrawerAt(targetDate, targetHour);
+      });
+    });
+
+    // Drop & click targets for All-Day cells & Month cells
+    calRoot.querySelectorAll('.cal-allday-cell[data-cal-date], .cal-cell[data-cal-date]').forEach((cell) => {
       const targetDate = cell.getAttribute('data-cal-date');
 
       cell.addEventListener('dragover', (e) => {
@@ -2597,60 +2818,77 @@
         }
       });
 
-      cell.addEventListener('drop', async (e) => {
+      cell.addEventListener('drop', (e) => {
         e.preventDefault();
-        cell.classList.remove('cal-drag-over');
-        if (!dragEventId || !targetDate) return;
+        clearDragOverStates();
         const movingId = dragEventId;
         dragEventId = null;
-
-        try {
-          const res = await apiFetch('/api/v1/meetings/' + encodeURIComponent(movingId) + '/reschedule', {
-            method: 'PATCH',
-            body: JSON.stringify({ target_date: targetDate })
-          });
-          const gCount = res && res.google_sync ? Number(res.google_sync.synced_count || 0) : 0;
-          showToast(
-            gCount > 0
-              ? 'Rescheduled & updated ' + gCount + ' Google Calendar(s)'
-              : 'Rescheduled to ' + (res.start_time || targetDate),
-            'success'
-          );
-          window.setTimeout(() => window.location.reload(), 320);
-        } catch (err) {
-          showToast(err.message, 'error');
-        }
+        handleDropReschedule(movingId, targetDate, null);
       });
 
       cell.addEventListener('click', (e) => {
         if (e.target.closest('.cal-event-chip') || e.target.closest('.cal-chip-del')) return;
-        const schedDrawer = document.getElementById('drawer-schedule-meeting');
-        if (!schedDrawer || !targetDate) return;
-        const sInp = document.getElementById('sched-start-time');
-        const eInp = document.getElementById('sched-end-time');
-        if (sInp) sInp.value = targetDate + 'T09:00';
-        if (eInp) eInp.value = targetDate + 'T10:00';
-        openDrawer('drawer-schedule-meeting');
-        loadOpenSlots(targetDate);
+        openScheduleDrawerAt(targetDate, 9);
       });
     });
 
-    grid.addEventListener('click', async (e) => {
+    // Delegated click for Delete buttons and Event Detail modal preview
+    calRoot.addEventListener('click', async (e) => {
       const delBtn = e.target.closest('.cal-chip-del[data-delete-meeting]');
-      if (!delBtn) return;
-      e.stopPropagation();
-      const mid = delBtn.getAttribute('data-delete-meeting');
-      if (!mid) return;
-      try {
-        delBtn.disabled = true;
-        await apiFetch('/api/v1/meetings/' + encodeURIComponent(mid), { method: 'DELETE' });
-        showToast('Removed scheduled block', 'success');
-        window.setTimeout(() => window.location.reload(), 260);
-      } catch (err) {
-        showToast(err.message, 'error');
-        delBtn.disabled = false;
+      if (delBtn) {
+        e.stopPropagation();
+        const mid = delBtn.getAttribute('data-delete-meeting');
+        if (!mid) return;
+        try {
+          delBtn.disabled = true;
+          await apiFetch('/api/v1/meetings/' + encodeURIComponent(mid), { method: 'DELETE' });
+          showToast('Removed scheduled block', 'success');
+          window.setTimeout(() => window.location.reload(), 260);
+        } catch (err) {
+          showToast(err.message, 'error');
+          delBtn.disabled = false;
+        }
+        return;
+      }
+
+      const evNode = e.target.closest('.cal-timed-event[data-meeting-id], .cal-event-chip[data-meeting-id]');
+      if (evNode) {
+        e.stopPropagation();
+        openEventDetailModal(evNode);
       }
     });
+
+    // Live background bidirectional Google Calendar polling every 25s
+    if (calRoot.getAttribute('data-gcal-connected') === '1') {
+      let gcalPollBusy = false;
+      window.setInterval(async () => {
+        if (gcalPollBusy || document.hidden || !calRoot.isConnected || calRoot.classList.contains('is-hidden')) {
+          return;
+        }
+        if (document.querySelector('.drawer-backdrop:not(.is-hidden), .modal-backdrop:not(.is-hidden)')) {
+          return;
+        }
+        gcalPollBusy = true;
+        try {
+          const resp = await fetch('/api/v1/meetings/live-google', {
+            method: 'GET',
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' }
+          });
+          if (resp.ok) {
+            const payload = await resp.json();
+            if (payload && payload.changed) {
+              showToast('Calendar updated from Google Calendar', 'info');
+              window.setTimeout(() => window.location.reload(), 650);
+            }
+          }
+        } catch (_err) {
+          // Ignore transient network poll failures
+        } finally {
+          gcalPollBusy = false;
+        }
+      }, 25000);
+    }
 
     const checkBtn = document.getElementById('btn-check-slots');
     const clientSel = document.getElementById('sched-client-id');
@@ -5836,6 +6074,11 @@
               showToast('Select at least one Virtual Assistant recipient first', 'error');
               if (submitBtn) submitBtn.disabled = false;
               return;
+            }
+
+            if (endpoint === '/api/v1/meetings' && !payload.timezone) {
+              const tz = getBrowserTimezone();
+              if (tz) payload.timezone = tz;
             }
 
             const res = await apiFetch(targetUrl, {

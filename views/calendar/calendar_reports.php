@@ -1,39 +1,184 @@
 <?php
-$calMonth = $data['cal_month'];
-$firstDay = new DateTimeImmutable($calMonth . '-01');
+$calView = (string) ($data['cal_view'] ?? 'week');
+$calDate = (string) ($data['cal_date'] ?? date('Y-m-d'));
+$calMonth = (string) ($data['cal_month'] ?? substr($calDate, 0, 7));
+$rangeStart = (string) ($data['cal_range_start'] ?? ($calMonth . '-01'));
+$rangeEnd = (string) ($data['cal_range_end'] ?? date('Y-m-t', strtotime($rangeStart)));
+$userTzName = (string) ($data['user_timezone'] ?? (date_default_timezone_get() ?: 'UTC'));
+try {
+    $tzObj = new DateTimeZone($userTzName);
+} catch (Throwable) {
+    $tzObj = new DateTimeZone('UTC');
+}
+$todayYmd = (string) ($data['today_in_tz'] ?? (new DateTimeImmutable('now', $tzObj))->format('Y-m-d'));
+$tzAbbr = (new DateTimeImmutable('now', $tzObj))->format('T');
+
+$firstDay = new DateTimeImmutable($calMonth . '-01', $tzObj);
 $monthEndDay = $firstDay->modify('last day of this month');
 $daysInMonth = (int) $firstDay->format('t');
 $startDow = (int) $firstDay->format('N'); // 1 (Mon) to 7 (Sun)
-$todayYmd = date('Y-m-d');
 
 $gcalStatus = $data['google_calendar_status'] ?? ['connected' => false, 'needs_reconnect' => false, 'email' => null];
+$syncedMeetingLinkMap = is_array($data['synced_meeting_map'] ?? null) ? $data['synced_meeting_map'] : [];
 $syncedMeetingMap = array_flip($data['synced_meeting_ids'] ?? []);
 $syncedTaskMap = array_flip($data['synced_task_ids'] ?? []);
 
+$formatHourLabel = static function (int $h): string {
+    if ($h === 0) {
+        return '12 AM';
+    }
+    if ($h < 12) {
+        return $h . ' AM';
+    }
+    if ($h === 12) {
+        return '12 PM';
+    }
+    return ($h - 12) . ' PM';
+};
+
+$formatTimeAmPm = static function (DateTimeImmutable $dt): string {
+    return $dt->format('i') === '00' ? $dt->format('g A') : $dt->format('g:i A');
+};
+
+// Build list of visible days for Week (7) or Day (1)
+$visibleDays = [];
+$curDayIt = new DateTimeImmutable($rangeStart, $tzObj);
+$endDayLimit = new DateTimeImmutable($rangeEnd, $tzObj);
+while ($curDayIt <= $endDayLimit) {
+    $visibleDays[] = $curDayIt->format('Y-m-d');
+    $curDayIt = $curDayIt->modify('+1 day');
+}
+
 $eventsByDate = [];
+$allDayByDate = [];
+$timedByDate = [];
+
 foreach ($data['meetings'] as $m) {
-    $dKey = substr((string) $m['start_time'], 0, 10);
+    try {
+        $dtStart = (new DateTimeImmutable((string) $m['start_time']))->setTimezone($tzObj);
+        $dtEnd = (new DateTimeImmutable((string) $m['end_time']))->setTimezone($tzObj);
+    } catch (Throwable) {
+        continue;
+    }
+
     $mType = (string) ($m['meeting_type'] ?? 'team_sync');
     $clientSuffix = !empty($m['client_name']) ? ' · ' . $m['client_name'] : '';
     $canModify = in_array($role, ['admin', 'team_leader'], true)
         || (string) $m['va_id'] === (string) $user['id']
         || (string) ($m['created_by_tl_id'] ?? '') === (string) $user['id'];
-    $isSynced = isset($syncedMeetingMap[(string) $m['id']]);
+    $mid = (string) $m['id'];
+    $isSynced = isset($syncedMeetingMap[$mid]) || filter_var($m['google_synced'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    $isAllDay = filter_var($m['is_all_day'] ?? false, FILTER_VALIDATE_BOOLEAN);
+    $extSource = (string) ($m['external_source'] ?? 'workly');
+    $gHtmlLink = (string) ($syncedMeetingLinkMap[$mid] ?? '');
 
-    $eventsByDate[$dKey][] = [
-        'id'        => (string) $m['id'],
-        'type'      => $mType,
-        'title'     => (string) $m['title'],
-        'label'     => substr((string) $m['start_time'], 11, 5) . ' ' . $m['title'],
-        'tooltip'   => substr((string) $m['start_time'], 11, 5) . '–' . substr((string) $m['end_time'], 11, 5) . ' ' . $m['title'] . $clientSuffix . ($isSynced ? ' (Synced to Google Calendar)' : ''),
-        'draggable' => $canModify,
-        'synced'    => $isSynced,
+    $startAmPm = $formatTimeAmPm($dtStart);
+    $endAmPm = $formatTimeAmPm($dtEnd);
+    $timeRangeLabel = $isAllDay ? 'All Day' : ($startAmPm . ' – ' . $endAmPm);
+
+    $baseMeta = [
+        'id'         => $mid,
+        'type'       => $mType,
+        'title'      => (string) $m['title'],
+        'va_name'    => (string) ($m['va_name'] ?? ''),
+        'client'     => (string) ($m['client_name'] ?? ''),
+        'link'       => (string) ($m['meeting_link'] ?? ''),
+        'glink'      => $gHtmlLink,
+        'notes'      => (string) ($m['notes'] ?? ''),
+        'source'     => $extSource,
+        'date_label' => $dtStart->format('D, M j, Y'),
+        'time_range' => $timeRangeLabel,
+        'draggable'  => $canModify,
+        'synced'     => $isSynced,
+        'is_all_day' => $isAllDay,
     ];
+
+    $sDayStr = $dtStart->format('Y-m-d');
+    $eDayStr = $dtEnd->format('Y-m-d');
+
+    if ($isAllDay) {
+        $dCur = max($rangeStart, $sDayStr);
+        $dLim = min($rangeEnd, $eDayStr);
+        $curObj = new DateTimeImmutable($dCur, $tzObj);
+        $limObj = new DateTimeImmutable($dLim, $tzObj);
+        while ($curObj <= $limObj) {
+            $dKey = $curObj->format('Y-m-d');
+            $item = $baseMeta + [
+                'label'   => (string) $m['title'],
+                'tooltip' => 'All Day · ' . $m['title'] . $clientSuffix . ($isSynced ? ' (Google Calendar)' : ''),
+            ];
+            $eventsByDate[$dKey][] = $item;
+            $allDayByDate[$dKey][] = $item;
+            $curObj = $curObj->modify('+1 day');
+        }
+    } else {
+        // Place timed block across the day(s) it covers within range
+        $dCur = max($rangeStart, $sDayStr);
+        $dLim = min($rangeEnd, $eDayStr);
+        $curObj = new DateTimeImmutable($dCur, $tzObj);
+        $limObj = new DateTimeImmutable($dLim, $tzObj);
+        while ($curObj <= $limObj) {
+            $dKey = $curObj->format('Y-m-d');
+            $dayStartMin = ($dKey === $sDayStr)
+                ? (((int) $dtStart->format('G') * 60) + (int) $dtStart->format('i'))
+                : 0;
+            $dayEndMin = ($dKey === $eDayStr)
+                ? (((int) $dtEnd->format('G') * 60) + (int) $dtEnd->format('i'))
+                : 1440;
+            if ($dayEndMin <= $dayStartMin) {
+                $dayEndMin = min(1440, $dayStartMin + 30);
+            }
+            $durMin = max(28, $dayEndMin - $dayStartMin);
+
+            $item = $baseMeta + [
+                'label'     => $startAmPm . ' ' . $m['title'],
+                'tooltip'   => $timeRangeLabel . ' · ' . $m['title'] . $clientSuffix . ($isSynced ? ' (Synced to Google Calendar)' : ''),
+                'start_min' => $dayStartMin,
+                'end_min'   => min(1440, $dayStartMin + $durMin),
+                'dur_min'   => $durMin,
+                'col_idx'   => 0,
+                'col_total' => 1,
+            ];
+            $eventsByDate[$dKey][] = $item;
+            $timedByDate[$dKey][] = $item;
+            $curObj = $curObj->modify('+1 day');
+        }
+    }
 }
+
+// Assign non-overlapping column lanes for concurrent timed events per day
+foreach ($timedByDate as $dKey => &$dayList) {
+    usort($dayList, static fn (array $a, array $b): int => $a['start_min'] <=> $b['start_min']);
+    $count = count($dayList);
+    for ($i = 0; $i < $count; $i++) {
+        $usedCols = [];
+        for ($j = 0; $j < $i; $j++) {
+            if ($dayList[$j]['end_min'] > $dayList[$i]['start_min']) {
+                $usedCols[$dayList[$j]['col_idx']] = true;
+            }
+        }
+        $col = 0;
+        while (isset($usedCols[$col])) {
+            $col++;
+        }
+        $dayList[$i]['col_idx'] = $col;
+    }
+    for ($i = 0; $i < $count; $i++) {
+        $maxCol = $dayList[$i]['col_idx'];
+        for ($j = 0; $j < $count; $j++) {
+            if ($dayList[$j]['start_min'] < $dayList[$i]['end_min'] && $dayList[$j]['end_min'] > $dayList[$i]['start_min']) {
+                $maxCol = max($maxCol, $dayList[$j]['col_idx']);
+            }
+        }
+        $dayList[$i]['col_total'] = $maxCol + 1;
+    }
+}
+unset($dayList);
+
 foreach ($data['calendar_tasks'] as $ct) {
     $dKey = (string) $ct['deadline'];
     $isSynced = isset($syncedTaskMap[(string) $ct['id']]);
-    $eventsByDate[$dKey][] = [
+    $tItem = [
         'id'        => '',
         'type'      => 'task',
         'label'     => 'Due: ' . $ct['title'],
@@ -41,26 +186,70 @@ foreach ($data['calendar_tasks'] as $ct) {
         'draggable' => false,
         'synced'    => $isSynced,
     ];
+    $eventsByDate[$dKey][] = $tItem;
+    $allDayByDate[$dKey][] = $tItem;
 }
+
 foreach (($data['calendar_pto'] ?? []) as $pto) {
     try {
-        $pStart = new DateTimeImmutable((string) $pto['start_date']);
-        $pEnd = new DateTimeImmutable((string) $pto['end_date']);
-        $cur = $pStart < $firstDay ? $firstDay : $pStart;
-        $limit = $pEnd > $monthEndDay ? $monthEndDay : $pEnd;
+        $pStart = new DateTimeImmutable((string) $pto['start_date'], $tzObj);
+        $pEnd = new DateTimeImmutable((string) $pto['end_date'], $tzObj);
+        $visStartObj = new DateTimeImmutable($rangeStart, $tzObj);
+        $visEndObj = new DateTimeImmutable($rangeEnd, $tzObj);
+        $cur = $pStart < $visStartObj ? $visStartObj : $pStart;
+        $limit = $pEnd > $visEndObj ? $visEndObj : $pEnd;
         while ($cur <= $limit) {
-            $eventsByDate[$cur->format('Y-m-d')][] = [
+            $dKey = $cur->format('Y-m-d');
+            $ptoItem = [
                 'id'        => '',
                 'type'      => 'pto',
                 'label'     => 'PTO: ' . $pto['va_name'],
                 'tooltip'   => 'Approved PTO Leave: ' . $pto['va_name'],
                 'draggable' => false,
             ];
+            $eventsByDate[$dKey][] = $ptoItem;
+            $allDayByDate[$dKey][] = $ptoItem;
             $cur = $cur->modify('+1 day');
         }
     } catch (Throwable) {
         // Skip invalid date range
     }
+}
+
+$selectedRepVa = $data['report_va'] ?? 'all';
+
+$buildCalUrl = static function (array $overrides) use ($calView, $calDate, $calMonth, $data, $selectedRepVa): string {
+    $q = array_merge([
+        'tab'          => 'calendar',
+        'cal_view'     => $calView,
+        'cal_date'     => $calDate,
+        'month'        => $calMonth,
+        'start_date'   => $data['start_date'],
+        'end_date'     => $data['end_date'],
+        'rep_va'       => $selectedRepVa,
+        'monitor_user' => $data['monitor_user'] ?? '',
+    ], $overrides);
+    $q = array_filter($q, static fn ($v): bool => $v !== '' && $v !== null);
+    return '/calendar-reports?' . http_build_query($q);
+};
+
+$anchorCalObj = new DateTimeImmutable($calDate, $tzObj);
+if ($calView === 'day') {
+    $prevDate = $anchorCalObj->modify('-1 day')->format('Y-m-d');
+    $nextDate = $anchorCalObj->modify('+1 day')->format('Y-m-d');
+    $rangeHeading = $anchorCalObj->format('l, M j, Y');
+} elseif ($calView === 'week') {
+    $wStartObj = new DateTimeImmutable($rangeStart, $tzObj);
+    $wEndObj = new DateTimeImmutable($rangeEnd, $tzObj);
+    $prevDate = $anchorCalObj->modify('-7 days')->format('Y-m-d');
+    $nextDate = $anchorCalObj->modify('+7 days')->format('Y-m-d');
+    $rangeHeading = $wStartObj->format('M j') . ' – ' . $wEndObj->format('M j, Y');
+} else {
+    $prevMonthObj = $firstDay->modify('-1 month');
+    $nextMonthObj = $firstDay->modify('+1 month');
+    $prevDate = $prevMonthObj->format('Y-m-01');
+    $nextDate = $nextMonthObj->format('Y-m-01');
+    $rangeHeading = $firstDay->format('F Y');
 }
 
 $repTasks = $data['report_tasks'] ?? [];
@@ -203,22 +392,54 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
   <button type="button" class="tab-btn <?= $defaultTab === 'reports' ? 'active' : '' ?>" data-tab-group="cal-rep" data-tab-btn="reports">Executive SLA Analytics</button>
 </div>
 
-<!-- Tab 1: Monthly Calendar & Unified Client-Synced Scheduler -->
-<div class="card no-print <?= $defaultTab === 'calendar' ? '' : 'is-hidden' ?>" data-tab-group="cal-rep" data-tab-panel="calendar" style="margin-bottom:24px;">
-  <form method="GET" action="/calendar-reports" style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px;">
+<!-- Tab 1: Hourly & Monthly Calendar + Bidirectional Google Calendar Scheduler -->
+<div class="card no-print <?= $defaultTab === 'calendar' ? '' : 'is-hidden' ?> cal-schedule-root"
+     data-tab-group="cal-rep"
+     data-tab-panel="calendar"
+     data-gcal-connected="<?= !empty($gcalStatus['connected']) ? '1' : '0' ?>"
+     data-cal-view="<?= SecurityHelper::e($calView) ?>"
+     style="margin-bottom:24px;">
+  <form method="GET" action="/calendar-reports" class="cal-toolbar-head">
     <input type="hidden" name="start_date" value="<?= SecurityHelper::e($data['start_date']) ?>">
     <input type="hidden" name="end_date" value="<?= SecurityHelper::e($data['end_date']) ?>">
     <input type="hidden" name="rep_va" value="<?= SecurityHelper::e($selectedRepVa) ?>">
+    <input type="hidden" name="cal_view" value="<?= SecurityHelper::e($calView) ?>">
     <input type="hidden" name="tab" value="calendar">
-    <div>
-      <h3><?= SecurityHelper::e($firstDay->format('F Y')) ?> Operations Calendar</h3>
-      <span class="muted" style="font-size:12px;">Click any calendar day to open + Schedule Meeting and scan client-synced open time slots.</span>
+
+    <div class="cal-toolbar-title-group">
+      <h3><?= SecurityHelper::e($rangeHeading) ?></h3>
+      <span class="muted" style="font-size:12px;">Click any hour slot to schedule a meeting or drag events between hours and days.</span>
     </div>
 
-    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-      <input type="month" name="month" class="input" value="<?= SecurityHelper::e($calMonth) ?>" data-auto-submit style="width:auto;">
+    <div class="cal-toolbar-controls">
+      <div class="cal-nav-group" role="group" aria-label="Calendar Navigation">
+        <a class="btn btn-secondary btn-sm"
+           href="<?= SecurityHelper::e($buildCalUrl(['cal_date' => $prevDate, 'month' => substr($prevDate, 0, 7)])) ?>"
+           title="Previous">&lsaquo;</a>
+        <a class="btn btn-secondary btn-sm"
+           href="<?= SecurityHelper::e($buildCalUrl(['cal_date' => $todayYmd, 'month' => substr($todayYmd, 0, 7)])) ?>">Today</a>
+        <a class="btn btn-secondary btn-sm"
+           href="<?= SecurityHelper::e($buildCalUrl(['cal_date' => $nextDate, 'month' => substr($nextDate, 0, 7)])) ?>"
+           title="Next">&rsaquo;</a>
+      </div>
+
+      <div class="cal-view-switch" role="group" aria-label="Calendar View">
+        <a class="cal-view-btn <?= $calView === 'week' ? 'active' : '' ?>"
+           href="<?= SecurityHelper::e($buildCalUrl(['cal_view' => 'week'])) ?>">Week</a>
+        <a class="cal-view-btn <?= $calView === 'day' ? 'active' : '' ?>"
+           href="<?= SecurityHelper::e($buildCalUrl(['cal_view' => 'day'])) ?>">Day</a>
+        <a class="cal-view-btn <?= $calView === 'month' ? 'active' : '' ?>"
+           href="<?= SecurityHelper::e($buildCalUrl(['cal_view' => 'month', 'month' => substr($calDate, 0, 7)])) ?>">Month</a>
+      </div>
+
+      <?php if ($calView === 'month'): ?>
+        <input type="month" name="month" class="input input-sm" value="<?= SecurityHelper::e($calMonth) ?>" data-auto-submit style="width:auto;">
+      <?php else: ?>
+        <input type="date" name="cal_date" class="input input-sm" value="<?= SecurityHelper::e($calDate) ?>" data-auto-submit style="width:auto;">
+      <?php endif; ?>
+
       <?php if ($role === 'admin' && !empty($data['staff_directory'])): ?>
-        <select name="monitor_user" class="select" data-auto-submit style="width:auto;">
+        <select name="monitor_user" class="select input-sm" data-auto-submit style="width:auto;">
           <option value="">My Calendar</option>
           <?php foreach ($data['staff_directory'] as $sd): ?>
             <option value="<?= SecurityHelper::e($sd['id']) ?>" <?= $data['monitor_user'] === $sd['id'] ? 'selected' : '' ?>>
@@ -230,56 +451,220 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
     </div>
   </form>
 
-  <div class="calendar-scroll-wrap">
-    <div class="calendar-grid">
-      <?php foreach (['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as $dow): ?>
-        <div class="cal-dow"><?= $dow ?></div>
-      <?php endforeach; ?>
-
-      <?php for ($pad = 1; $pad < $startDow; $pad++): ?>
-        <div class="cal-cell outside"></div>
-      <?php endfor; ?>
-
-      <?php for ($day = 1; $day <= $daysInMonth; $day++): ?>
-        <?php
-          $dateStr = $calMonth . '-' . str_pad((string) $day, 2, '0', STR_PAD_LEFT);
-          $isToday = $dateStr === $todayYmd;
-        ?>
-        <div class="cal-cell<?= $isToday ? ' is-today' : '' ?>" data-cal-date="<?= SecurityHelper::e($dateStr) ?>">
-          <div class="cal-day-num"><?= $day ?></div>
-          <?php foreach (($eventsByDate[$dateStr] ?? []) as $ev): ?>
+  <?php if ($calView === 'week' || $calView === 'day'): ?>
+    <?php $colCount = count($visibleDays); ?>
+    <div class="cal-hourly-shell <?= $calView === 'day' ? 'is-day-view' : 'is-week-view' ?>">
+      <div class="cal-hourly-scroll-x">
+        <!-- Sticky Day Header & All-Day Strip -->
+        <div class="cal-hourly-head-row" style="--cal-cols: <?= $colCount ?>;">
+          <div class="cal-ruler-corner" title="<?= SecurityHelper::e($userTzName) ?>">
+            <span><?= SecurityHelper::e($tzAbbr) ?></span>
+          </div>
+          <?php foreach ($visibleDays as $dStr): ?>
             <?php
-              $evType = (string) ($ev['type'] ?? 'team_sync');
-              $chipClass = match ($evType) {
-                  'task'                => 'task-chip',
-                  'pto'                 => 'pto-chip',
-                  'focus_block'         => 'focus-chip',
-                  'availability_window' => 'avail-chip',
-                  default               => '',
-              };
+              $dObj = new DateTimeImmutable($dStr, $tzObj);
+              $isTodayCol = ($dStr === $todayYmd);
             ?>
-            <div class="cal-event-chip <?= $chipClass ?><?= !empty($ev['synced']) ? ' is-gcal-synced' : '' ?>"
-                 <?= !empty($ev['draggable']) ? 'draggable="true"' : '' ?>
-                 <?= !empty($ev['id']) ? 'data-meeting-id="' . SecurityHelper::e($ev['id']) . '"' : '' ?>
-                 data-meeting-type="<?= SecurityHelper::e($evType) ?>"
-                 title="<?= SecurityHelper::e($ev['tooltip'] ?? $ev['label']) ?>">
-              <span class="cal-chip-label"><?= SecurityHelper::e($ev['label']) ?></span>
-              <?php if (!empty($ev['synced'])): ?>
-                <span class="cal-chip-gcal-dot" title="Synced to Google Calendar" aria-label="Synced to Google Calendar">G</span>
-              <?php endif; ?>
-              <?php if (!empty($ev['draggable']) && !empty($ev['id'])): ?>
-                <button type="button"
-                        class="cal-chip-del"
-                        data-delete-meeting="<?= SecurityHelper::e($ev['id']) ?>"
-                        title="Remove scheduled block"
-                        aria-label="Remove scheduled block">&times;</button>
-              <?php endif; ?>
+            <a class="cal-hourly-day-head <?= $isTodayCol ? 'is-today' : '' ?>"
+               href="<?= SecurityHelper::e($buildCalUrl(['cal_view' => 'day', 'cal_date' => $dStr])) ?>"
+               title="Open Day view for <?= SecurityHelper::e($dObj->format('M j, Y')) ?>">
+              <span class="cal-head-dow"><?= SecurityHelper::e($dObj->format('D')) ?></span>
+              <span class="cal-head-dom"><?= SecurityHelper::e($dObj->format('j')) ?></span>
+            </a>
+          <?php endforeach; ?>
+        </div>
+
+        <div class="cal-allday-row" style="--cal-cols: <?= $colCount ?>;">
+          <div class="cal-allday-label">All Day</div>
+          <?php foreach ($visibleDays as $dStr): ?>
+            <div class="cal-allday-cell <?= $dStr === $todayYmd ? 'is-today' : '' ?>" data-cal-date="<?= SecurityHelper::e($dStr) ?>">
+              <?php foreach (($allDayByDate[$dStr] ?? []) as $ev): ?>
+                <?php
+                  $evType = (string) ($ev['type'] ?? 'team_sync');
+                  $chipClass = match ($evType) {
+                      'task'                => 'task-chip',
+                      'pto'                 => 'pto-chip',
+                      'focus_block'         => 'focus-chip',
+                      'availability_window' => 'avail-chip',
+                      'google_event'        => 'google-chip',
+                      default               => '',
+                  };
+                  $hasId = !empty($ev['id']);
+                ?>
+                <div class="cal-event-chip <?= $chipClass ?>"
+                     <?= !empty($ev['draggable']) ? 'draggable="true"' : '' ?>
+                     <?php if ($hasId): ?>
+                       data-meeting-id="<?= SecurityHelper::e($ev['id']) ?>"
+                       data-ev-title="<?= SecurityHelper::e($ev['title'] ?? '') ?>"
+                       data-ev-date="<?= SecurityHelper::e($ev['date_label'] ?? '') ?>"
+                       data-ev-time="<?= SecurityHelper::e($ev['time_range'] ?? 'All Day') ?>"
+                       data-ev-type="<?= SecurityHelper::e($evType) ?>"
+                       data-ev-client="<?= SecurityHelper::e($ev['client'] ?? '') ?>"
+                       data-ev-va="<?= SecurityHelper::e($ev['va_name'] ?? '') ?>"
+                       data-ev-link="<?= SecurityHelper::e($ev['link'] ?? '') ?>"
+                       data-ev-glink="<?= SecurityHelper::e($ev['glink'] ?? '') ?>"
+                       data-ev-notes="<?= SecurityHelper::e($ev['notes'] ?? '') ?>"
+                       data-ev-source="<?= SecurityHelper::e($ev['source'] ?? 'workly') ?>"
+                       data-ev-can-delete="<?= !empty($ev['draggable']) ? '1' : '0' ?>"
+                     <?php endif; ?>
+                     title="<?= SecurityHelper::e($ev['tooltip'] ?? $ev['label']) ?>">
+                  <span class="cal-chip-label"><?= SecurityHelper::e($ev['label']) ?></span>
+                  <?php if (!empty($ev['synced'])): ?>
+                    <span class="cal-chip-gcal-dot" title="Synced to Google Calendar">G</span>
+                  <?php endif; ?>
+                  <?php if (!empty($ev['draggable']) && $hasId): ?>
+                    <button type="button" class="cal-chip-del" data-delete-meeting="<?= SecurityHelper::e($ev['id']) ?>" title="Remove block" aria-label="Remove block">&times;</button>
+                  <?php endif; ?>
+                </div>
+              <?php endforeach; ?>
             </div>
           <?php endforeach; ?>
         </div>
-      <?php endfor; ?>
+
+        <!-- Vertically Scrollable 24-Hour AM/PM Grid -->
+        <div id="workly-cal-timeline-scroll" class="cal-timeline-scroll">
+          <div class="cal-timeline-body" style="--cal-cols: <?= $colCount ?>;">
+            <div class="cal-time-ruler" aria-hidden="true">
+              <?php for ($h = 0; $h < 24; $h++): ?>
+                <div class="cal-hour-label">
+                  <span><?= SecurityHelper::e($formatHourLabel($h)) ?></span>
+                </div>
+              <?php endfor; ?>
+            </div>
+
+            <?php foreach ($visibleDays as $dStr): ?>
+              <div class="cal-day-col <?= $dStr === $todayYmd ? 'is-today' : '' ?>" data-cal-date="<?= SecurityHelper::e($dStr) ?>">
+                <?php for ($h = 0; $h < 24; $h++): ?>
+                  <div class="cal-hour-slot"
+                       data-cal-date="<?= SecurityHelper::e($dStr) ?>"
+                       data-cal-hour="<?= $h ?>"
+                       title="Schedule at <?= SecurityHelper::e($formatHourLabel($h)) ?>"></div>
+                <?php endfor; ?>
+
+                <div class="cal-timed-events-layer">
+                  <?php foreach (($timedByDate[$dStr] ?? []) as $ev): ?>
+                    <?php
+                      $evType = (string) ($ev['type'] ?? 'team_sync');
+                      $chipClass = match ($evType) {
+                          'focus_block'         => 'focus-chip',
+                          'availability_window' => 'avail-chip',
+                          'google_event'        => 'google-chip',
+                          'client_meeting'      => 'client-chip',
+                          default               => 'team-chip',
+                      };
+                      $topPx = round(($ev['start_min'] / 60) * 56, 2);
+                      $heightPx = max(24, round(($ev['dur_min'] / 60) * 56, 2));
+                      $colTotal = max(1, (int) ($ev['col_total'] ?? 1));
+                      $colIdx = max(0, (int) ($ev['col_idx'] ?? 0));
+                      $widthPct = round(100 / $colTotal, 3);
+                      $leftPct = round($colIdx * (100 / $colTotal), 3);
+                    ?>
+                    <div class="cal-timed-event <?= $chipClass ?>"
+                         style="top:<?= $topPx ?>px;height:<?= $heightPx ?>px;left:calc(<?= $leftPct ?>% + 2px);width:calc(<?= $widthPct ?>% - 4px);"
+                         <?= !empty($ev['draggable']) ? 'draggable="true"' : '' ?>
+                         data-meeting-id="<?= SecurityHelper::e($ev['id']) ?>"
+                         data-ev-title="<?= SecurityHelper::e($ev['title']) ?>"
+                         data-ev-date="<?= SecurityHelper::e($ev['date_label']) ?>"
+                         data-ev-time="<?= SecurityHelper::e($ev['time_range']) ?>"
+                         data-ev-type="<?= SecurityHelper::e($evType) ?>"
+                         data-ev-client="<?= SecurityHelper::e($ev['client'] ?? '') ?>"
+                         data-ev-va="<?= SecurityHelper::e($ev['va_name'] ?? '') ?>"
+                         data-ev-link="<?= SecurityHelper::e($ev['link'] ?? '') ?>"
+                         data-ev-glink="<?= SecurityHelper::e($ev['glink'] ?? '') ?>"
+                         data-ev-notes="<?= SecurityHelper::e($ev['notes'] ?? '') ?>"
+                         data-ev-source="<?= SecurityHelper::e($ev['source'] ?? 'workly') ?>"
+                         data-ev-can-delete="<?= !empty($ev['draggable']) ? '1' : '0' ?>"
+                         title="<?= SecurityHelper::e($ev['tooltip']) ?>">
+                      <div class="cal-timed-event-head">
+                        <span class="cal-timed-time"><?= SecurityHelper::e($ev['time_range']) ?></span>
+                        <?php if (!empty($ev['synced'])): ?>
+                          <span class="cal-chip-gcal-dot" title="Synced to Google Calendar">G</span>
+                        <?php endif; ?>
+                      </div>
+                      <div class="cal-timed-title"><?= SecurityHelper::e($ev['title']) ?></div>
+                      <?php if (!empty($ev['draggable'])): ?>
+                        <button type="button"
+                                class="cal-chip-del cal-timed-del"
+                                data-delete-meeting="<?= SecurityHelper::e($ev['id']) ?>"
+                                title="Remove event"
+                                aria-label="Remove event">&times;</button>
+                      <?php endif; ?>
+                    </div>
+                  <?php endforeach; ?>
+                </div>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        </div>
+      </div>
     </div>
-  </div>
+  <?php else: ?>
+    <div class="calendar-scroll-wrap">
+      <div class="calendar-grid">
+        <?php foreach (['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as $dow): ?>
+          <div class="cal-dow"><?= $dow ?></div>
+        <?php endforeach; ?>
+
+        <?php for ($pad = 1; $pad < $startDow; $pad++): ?>
+          <div class="cal-cell outside"></div>
+        <?php endfor; ?>
+
+        <?php for ($day = 1; $day <= $daysInMonth; $day++): ?>
+          <?php
+            $dateStr = $calMonth . '-' . str_pad((string) $day, 2, '0', STR_PAD_LEFT);
+            $isToday = $dateStr === $todayYmd;
+          ?>
+          <div class="cal-cell<?= $isToday ? ' is-today' : '' ?>" data-cal-date="<?= SecurityHelper::e($dateStr) ?>">
+            <div class="cal-day-num"><?= $day ?></div>
+            <?php foreach (($eventsByDate[$dateStr] ?? []) as $ev): ?>
+              <?php
+                $evType = (string) ($ev['type'] ?? 'team_sync');
+                $chipClass = match ($evType) {
+                    'task'                => 'task-chip',
+                    'pto'                 => 'pto-chip',
+                    'focus_block'         => 'focus-chip',
+                    'availability_window' => 'avail-chip',
+                    'google_event'        => 'google-chip',
+                    default               => '',
+                };
+                $hasId = !empty($ev['id']);
+              ?>
+              <div class="cal-event-chip <?= $chipClass ?><?= !empty($ev['synced']) ? ' is-gcal-synced' : '' ?>"
+                   <?= !empty($ev['draggable']) ? 'draggable="true"' : '' ?>
+                   <?php if ($hasId): ?>
+                     data-meeting-id="<?= SecurityHelper::e($ev['id']) ?>"
+                     data-ev-title="<?= SecurityHelper::e($ev['title'] ?? '') ?>"
+                     data-ev-date="<?= SecurityHelper::e($ev['date_label'] ?? '') ?>"
+                     data-ev-time="<?= SecurityHelper::e($ev['time_range'] ?? '') ?>"
+                     data-ev-type="<?= SecurityHelper::e($evType) ?>"
+                     data-ev-client="<?= SecurityHelper::e($ev['client'] ?? '') ?>"
+                     data-ev-va="<?= SecurityHelper::e($ev['va_name'] ?? '') ?>"
+                     data-ev-link="<?= SecurityHelper::e($ev['link'] ?? '') ?>"
+                     data-ev-glink="<?= SecurityHelper::e($ev['glink'] ?? '') ?>"
+                     data-ev-notes="<?= SecurityHelper::e($ev['notes'] ?? '') ?>"
+                     data-ev-source="<?= SecurityHelper::e($ev['source'] ?? 'workly') ?>"
+                     data-ev-can-delete="<?= !empty($ev['draggable']) ? '1' : '0' ?>"
+                   <?php endif; ?>
+                   data-meeting-type="<?= SecurityHelper::e($evType) ?>"
+                   title="<?= SecurityHelper::e($ev['tooltip'] ?? $ev['label']) ?>">
+                <span class="cal-chip-label"><?= SecurityHelper::e($ev['label']) ?></span>
+                <?php if (!empty($ev['synced'])): ?>
+                  <span class="cal-chip-gcal-dot" title="Synced to Google Calendar" aria-label="Synced to Google Calendar">G</span>
+                <?php endif; ?>
+                <?php if (!empty($ev['draggable']) && $hasId): ?>
+                  <button type="button"
+                          class="cal-chip-del"
+                          data-delete-meeting="<?= SecurityHelper::e($ev['id']) ?>"
+                          title="Remove scheduled block"
+                          aria-label="Remove scheduled block">&times;</button>
+                <?php endif; ?>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        <?php endfor; ?>
+      </div>
+    </div>
+  <?php endif; ?>
 </div>
 
 <!-- Tab 2: Detailed Executive SLA Analytics & Compact PDF Print Report -->
@@ -721,3 +1106,28 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
     </aside>
   </div>
 <?php endif; ?>
+
+<!-- Event Preview Modal (for Workly & Google Calendar synced events) -->
+<div id="modal-cal-event-detail" class="modal-backdrop is-hidden">
+  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="cal-detail-title" style="max-width:480px;">
+    <div class="modal-head">
+      <div>
+        <span id="cal-detail-type-badge" class="badge badge-info" style="margin-bottom:6px;">Event</span>
+        <h3 id="cal-detail-title">Calendar Event</h3>
+      </div>
+      <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
+    </div>
+    <div class="modal-body" style="display:grid;gap:10px;">
+      <div style="font-size:13.5px;font-weight:600;color:var(--ink);" id="cal-detail-datetime"></div>
+      <div id="cal-detail-meta" class="muted" style="font-size:12.5px;"></div>
+      <div id="cal-detail-notes" class="is-hidden" style="padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--border);font-size:13px;white-space:pre-wrap;"></div>
+    </div>
+    <div class="modal-foot" style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;padding-top:14px;border-top:1px solid var(--border);">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a id="cal-detail-meet-link" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm is-hidden">Join Meeting</a>
+        <a id="cal-detail-gcal-link" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm is-hidden">Open in Google Calendar</a>
+      </div>
+      <button type="button" id="cal-detail-delete-btn" class="btn btn-danger btn-sm is-hidden">Delete Event</button>
+    </div>
+  </div>
+</div>
