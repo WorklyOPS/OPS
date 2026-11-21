@@ -9,6 +9,15 @@ $attachmentsMap = $data['attachments'] ?? [];
 $selectedThread = (string) ($data['selected_thread'] ?? '');
 $selectedFolder = (string) ($data['selected_folder'] ?? 'all');
 $mailbox = $data['mailbox'] ?? null;
+$availableClients = $data['available_clients'] ?? [];
+$availableLabels = $data['available_labels'] ?? [];
+$emailFilters = $data['email_filters'] ?? ['q' => '', 'client' => '', 'label' => '', 'has_att' => false];
+$selectedMeta = $data['selected_thread_meta'] ?? ['client_ref_id' => null, 'client_name' => null, 'project_label' => null];
+$filterQ = (string) ($emailFilters['q'] ?? '');
+$filterClient = (string) ($emailFilters['client'] ?? '');
+$filterLabel = (string) ($emailFilters['label'] ?? '');
+$filterHasAtt = !empty($emailFilters['has_att']);
+$hasAnyActiveFilter = ($filterQ !== '' || $filterClient !== '' || $filterLabel !== '' || $filterHasAtt);
 $lastMsg = !empty($messages) ? end($messages) : null;
 $linkedEmail = ($mailbox && !empty($mailbox['email'])) ? (string) $mailbox['email'] : '';
 $isMailboxActive = $mailbox && (($mailbox['oauth_status'] ?? '') === 'active');
@@ -90,8 +99,22 @@ $renderRichToolbar = static function (string $editorId): void {
      data-folder="<?= SecurityHelper::e($selectedFolder) ?>"
      data-thread="<?= SecurityHelper::e($selectedThread) ?>"
      data-unread-count="<?= $unreadCount ?>"
-     data-connected="<?= $isMailboxActive ? '1' : '0' ?>">
+     data-total-threads="<?= $totalThreads ?>"
+     data-connected="<?= $isMailboxActive ? '1' : '0' ?>"
+     data-q="<?= SecurityHelper::e($filterQ) ?>"
+     data-client-filter="<?= SecurityHelper::e($filterClient) ?>"
+     data-label-filter="<?= SecurityHelper::e($filterLabel) ?>"
+     data-has-att="<?= $filterHasAtt ? '1' : '0' ?>"
+     data-selected-client-id="<?= SecurityHelper::e((string) ($selectedMeta['client_ref_id'] ?? '')) ?>"
+     data-selected-client-name="<?= SecurityHelper::e((string) ($selectedMeta['client_name'] ?? '')) ?>"
+     data-selected-project-label="<?= SecurityHelper::e((string) ($selectedMeta['project_label'] ?? '')) ?>">
 </div>
+
+<datalist id="workly-project-labels-list">
+  <?php foreach ($availableLabels as $lblOption): ?>
+    <option value="<?= SecurityHelper::e((string) $lblOption) ?>"></option>
+  <?php endforeach; ?>
+</datalist>
 
 <div class="page-header gmail-hub-header">
   <div class="gmail-header-intro">
@@ -155,11 +178,49 @@ $renderRichToolbar = static function (string $editorId): void {
     </div>
 
     <div class="gmail-search-wrap">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+      <svg class="gmail-search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
       </svg>
-      <input type="search" id="gmail-search-input" class="gmail-search-input" placeholder="Search sender, subject, or keywords...">
+      <input type="search" id="gmail-search-input" class="gmail-search-input" value="<?= SecurityHelper::e($filterQ) ?>" placeholder="Search sender, subject, body, client, or label..." autocomplete="off">
+      <button type="button" id="btn-gmail-search-clear" class="gmail-search-clear <?= $filterQ !== '' ? '' : 'is-hidden' ?>" title="Clear search" aria-label="Clear search">&times;</button>
     </div>
+  </div>
+
+  <div class="gmail-filter-bar">
+    <div class="gmail-filter-group">
+      <select id="gmail-filter-client" class="gmail-filter-select" aria-label="Filter by Client">
+        <option value="">All Clients</option>
+        <option value="__unlabeled" <?= $filterClient === '__unlabeled' ? 'selected' : '' ?>>No Client</option>
+        <?php foreach ($availableClients as $fc): ?>
+          <option value="<?= SecurityHelper::e((string) $fc['id']) ?>" <?= $filterClient === (string) $fc['id'] ? 'selected' : '' ?>>
+            <?= SecurityHelper::e((string) $fc['agency_name']) ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+
+      <select id="gmail-filter-project" class="gmail-filter-select" aria-label="Filter by Project or Label">
+        <option value="">All Projects / Labels</option>
+        <option value="__unlabeled" <?= $filterLabel === '__unlabeled' ? 'selected' : '' ?>>No Project Label</option>
+        <?php foreach ($availableLabels as $fl): ?>
+          <option value="<?= SecurityHelper::e((string) $fl) ?>" <?= strcasecmp($filterLabel, (string) $fl) === 0 ? 'selected' : '' ?>>
+            <?= SecurityHelper::e((string) $fl) ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+
+      <button type="button" id="gmail-filter-att-btn" class="gmail-filter-toggle <?= $filterHasAtt ? 'is-active' : '' ?>" aria-pressed="<?= $filterHasAtt ? 'true' : 'false' ?>">
+        <?= workly_icon_svg('Paperclip', 13) ?>
+        <span>Has Attachments</span>
+      </button>
+
+      <button type="button" id="gmail-filter-clear-btn" class="gmail-filter-clear-btn <?= $hasAnyActiveFilter ? '' : 'is-hidden' ?>">
+        Clear Filters
+      </button>
+    </div>
+
+    <span id="gmail-filter-status-count" class="gmail-filter-status mono">
+      <?= count($threads) ?> of <?= $totalThreads ?> conversations
+    </span>
   </div>
 </div>
 
@@ -177,7 +238,9 @@ $renderRichToolbar = static function (string $editorId): void {
       <?php if (empty($threads)): ?>
         <div class="gmail-empty-state">
           <div class="gmail-empty-icon"><?= workly_icon_svg('Mail', 24) ?></div>
-          <p class="muted" style="font-size:13px;">No conversations in this folder yet. Connect Gmail above or click <strong>+ Compose</strong>.</p>
+          <p class="muted" style="font-size:13px;">
+            <?= $hasAnyActiveFilter ? 'No conversations match the current search or filters.' : 'No conversations in this folder yet. Connect Gmail above or click + Compose.' ?>
+          </p>
         </div>
       <?php else: ?>
         <?php foreach ($threads as $th): ?>
@@ -190,9 +253,27 @@ $renderRichToolbar = static function (string $editorId): void {
             $senderInit = strtoupper(substr($senderName, 0, 2));
             $msgCount = (int) ($th['msg_count'] ?? 1);
             $attCount = (int) ($th['att_count'] ?? 0);
+            $thClientId = (string) ($th['client_ref_id'] ?? '');
+            $thClientName = (string) ($th['client_name'] ?? '');
+            $thProjectLabel = (string) ($th['project_label'] ?? '');
+            $thSearchText = strtolower(trim(implode(' ', [
+                (string) ($th['sender_name'] ?? ''),
+                (string) ($th['sender_email'] ?? ''),
+                (string) ($th['recipient_email'] ?? ''),
+                (string) ($th['cc_email'] ?? ''),
+                (string) ($th['subject'] ?? ''),
+                $snippet,
+                $thClientName,
+                $thProjectLabel,
+            ])));
           ?>
           <a href="/email?folder=<?= urlencode($selectedFolder) ?>&thread=<?= urlencode((string) $th['thread_id']) ?>"
              data-thread-id="<?= SecurityHelper::e((string) $th['thread_id']) ?>"
+             data-search-text="<?= SecurityHelper::e($thSearchText) ?>"
+             data-client-id="<?= SecurityHelper::e($thClientId) ?>"
+             data-client-name="<?= SecurityHelper::e($thClientName) ?>"
+             data-project-label="<?= SecurityHelper::e($thProjectLabel) ?>"
+             data-has-att="<?= $attCount > 0 ? '1' : '0' ?>"
              class="gmail-thread-row <?= $selectedThread === $th['thread_id'] ? 'active' : '' ?> <?= $isUnread ? 'is-unread' : '' ?>">
             <span class="avatar avatar-sm" style="margin-top:2px;flex-shrink:0;"><?= SecurityHelper::e($senderInit) ?></span>
             <div class="gmail-thread-row-body">
@@ -211,6 +292,20 @@ $renderRichToolbar = static function (string $editorId): void {
                 <?php endif; ?>
               </div>
               <div class="gmail-thread-snippet"><?= SecurityHelper::e($snippet) ?></div>
+              <?php if ($thClientName !== '' || $thProjectLabel !== ''): ?>
+                <div class="gmail-thread-labels">
+                  <?php if ($thClientName !== ''): ?>
+                    <span class="gmail-label-chip is-client <?= $filterClient === $thClientId ? 'is-active' : '' ?>" data-quick-filter-client="<?= SecurityHelper::e($thClientId) ?>" title="Filter by client">
+                      <?= SecurityHelper::e($thClientName) ?>
+                    </span>
+                  <?php endif; ?>
+                  <?php if ($thProjectLabel !== ''): ?>
+                    <span class="gmail-label-chip is-project <?= strcasecmp($filterLabel, $thProjectLabel) === 0 ? 'is-active' : '' ?>" data-quick-filter-label="<?= SecurityHelper::e($thProjectLabel) ?>" title="Filter by project / label">
+                      <?= SecurityHelper::e($thProjectLabel) ?>
+                    </span>
+                  <?php endif; ?>
+                </div>
+              <?php endif; ?>
             </div>
           </a>
         <?php endforeach; ?>
@@ -239,8 +334,63 @@ $renderRichToolbar = static function (string $editorId): void {
             <span>·</span>
             <span class="mono" id="gmail-reader-thread-chip">Conversation</span>
           </div>
+          <div id="gmail-reader-labels-bar" class="gmail-reader-labels-bar <?= (!empty($selectedMeta['client_name']) || !empty($selectedMeta['project_label'])) ? '' : 'is-hidden' ?>">
+            <?php if (!empty($selectedMeta['client_name'])): ?>
+              <button type="button" id="gmail-reader-client-pill" class="gmail-label-chip is-client" data-quick-filter-client="<?= SecurityHelper::e((string) ($selectedMeta['client_ref_id'] ?? '')) ?>">
+                <?= SecurityHelper::e((string) $selectedMeta['client_name']) ?>
+              </button>
+            <?php endif; ?>
+            <?php if (!empty($selectedMeta['project_label'])): ?>
+              <button type="button" id="gmail-reader-project-pill" class="gmail-label-chip is-project" data-quick-filter-label="<?= SecurityHelper::e((string) $selectedMeta['project_label']) ?>">
+                <?= SecurityHelper::e((string) $selectedMeta['project_label']) ?>
+              </button>
+            <?php endif; ?>
+          </div>
         </div>
         <div class="gmail-reader-actions">
+          <div class="gmail-reader-actions-wrap">
+            <button type="button" class="btn btn-secondary btn-sm" id="btn-gmail-open-label-popover" aria-expanded="false" aria-haspopup="true">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>
+              </svg>
+              <span>Categorize</span>
+            </button>
+            <div id="gmail-label-popover" class="gmail-label-popover is-hidden" role="dialog" aria-label="Categorize Conversation">
+              <div class="gmail-label-popover-title">Categorize Conversation</div>
+              <div class="gmail-label-popover-grid">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" for="gmail-label-client-select">Client Account</label>
+                  <select id="gmail-label-client-select" class="input input-sm">
+                    <option value="">None (Unassigned)</option>
+                    <?php foreach ($availableClients as $ac): ?>
+                      <option value="<?= SecurityHelper::e((string) $ac['id']) ?>" <?= ((string) ($selectedMeta['client_ref_id'] ?? '') === (string) $ac['id']) ? 'selected' : '' ?>>
+                        <?= SecurityHelper::e((string) $ac['agency_name']) ?>
+                      </option>
+                    <?php endforeach; ?>
+                  </select>
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label class="form-label" for="gmail-label-project-input">Project / Label</label>
+                  <input type="text"
+                         id="gmail-label-project-input"
+                         class="input input-sm"
+                         list="workly-project-labels-list"
+                         maxlength="120"
+                         value="<?= SecurityHelper::e((string) ($selectedMeta['project_label'] ?? '')) ?>"
+                         placeholder="e.g., Q4 Retainer, Onboarding, Audit...">
+                </div>
+                <div id="gmail-label-quick-chips" class="gmail-label-quick-chips">
+                  <?php foreach (array_slice($availableLabels, 0, 8) as $qLbl): ?>
+                    <button type="button" class="gmail-quick-chip" data-pick-project-label="<?= SecurityHelper::e((string) $qLbl) ?>"><?= SecurityHelper::e((string) $qLbl) ?></button>
+                  <?php endforeach; ?>
+                </div>
+              </div>
+              <div class="gmail-label-popover-foot">
+                <button type="button" class="btn btn-secondary btn-sm" id="btn-gmail-clear-label">Clear</button>
+                <button type="button" class="btn btn-primary btn-sm" id="btn-gmail-save-label">Apply</button>
+              </div>
+            </div>
+          </div>
           <button type="button" class="btn btn-secondary btn-sm" id="btn-gmail-scroll-reply">Reply</button>
           <button type="button" class="btn btn-secondary btn-sm" id="btn-gmail-forward">Forward</button>
           <button type="button" class="btn btn-secondary btn-sm" id="btn-gmail-mark-unread" data-thread-id="<?= SecurityHelper::e($selectedThread) ?>">Mark Unread</button>
@@ -408,6 +558,7 @@ $renderRichToolbar = static function (string $editorId): void {
           <label class="gmail-compose-field-label" for="compose-recipient-input">To</label>
           <input id="compose-recipient-input" class="gmail-compose-line-input" type="email" name="recipient_email" list="workly-contacts" required placeholder="recipient@company.com">
           <button type="button" id="btn-compose-toggle-cc" class="gmail-compose-cc-toggle">Cc</button>
+          <button type="button" id="btn-compose-toggle-label" class="gmail-compose-cc-toggle">Label</button>
           <datalist id="workly-contacts">
             <?php foreach ($data['contacts'] as $ct): ?>
               <option value="<?= SecurityHelper::e($ct['email']) ?>"><?= SecurityHelper::e($ct['name']) ?> (<?= SecurityHelper::e($ct['role']) ?>)</option>
@@ -418,6 +569,25 @@ $renderRichToolbar = static function (string $editorId): void {
         <div id="compose-cc-row" class="gmail-compose-field-row is-hidden">
           <label class="gmail-compose-field-label" for="compose-cc-input">Cc</label>
           <input id="compose-cc-input" class="gmail-compose-line-input" type="text" name="cc_email" placeholder="cc1@company.com, cc2@company.com">
+        </div>
+
+        <div id="compose-label-row" class="gmail-compose-field-row gmail-compose-label-row is-hidden">
+          <label class="gmail-compose-field-label" for="compose-client-select">Label</label>
+          <div class="gmail-compose-label-grid">
+            <select id="compose-client-select" name="client_ref_id" class="gmail-compose-select" aria-label="Client account">
+              <option value="">Auto / No Client</option>
+              <?php foreach ($availableClients as $ac): ?>
+                <option value="<?= SecurityHelper::e((string) $ac['id']) ?>"><?= SecurityHelper::e((string) $ac['agency_name']) ?></option>
+              <?php endforeach; ?>
+            </select>
+            <input id="compose-project-input"
+                   name="project_label"
+                   class="gmail-compose-line-input"
+                   type="text"
+                   list="workly-project-labels-list"
+                   maxlength="120"
+                   placeholder="Project / label (optional)">
+          </div>
         </div>
 
         <div class="gmail-compose-field-row">

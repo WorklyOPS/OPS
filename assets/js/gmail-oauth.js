@@ -15,8 +15,20 @@
     folder: bootstrapEl ? (bootstrapEl.getAttribute('data-folder') || 'all') : 'all',
     selectedThread: bootstrapEl ? (bootstrapEl.getAttribute('data-thread') || '') : '',
     unreadCount: bootstrapEl ? parseInt(bootstrapEl.getAttribute('data-unread-count') || '0', 10) : 0,
+    totalThreads: bootstrapEl ? parseInt(bootstrapEl.getAttribute('data-total-threads') || '0', 10) : 0,
     connected: bootstrapEl ? (bootstrapEl.getAttribute('data-connected') === '1') : false,
-    query: '',
+    query: bootstrapEl ? (bootstrapEl.getAttribute('data-q') || '') : '',
+    clientFilter: bootstrapEl ? (bootstrapEl.getAttribute('data-client-filter') || '') : '',
+    labelFilter: bootstrapEl ? (bootstrapEl.getAttribute('data-label-filter') || '') : '',
+    hasAttFilter: bootstrapEl ? (bootstrapEl.getAttribute('data-has-att') === '1') : false,
+    selectedThreadMeta: {
+      client_ref_id: bootstrapEl ? (bootstrapEl.getAttribute('data-selected-client-id') || null) : null,
+      client_name: bootstrapEl ? (bootstrapEl.getAttribute('data-selected-client-name') || null) : null,
+      project_label: bootstrapEl ? (bootstrapEl.getAttribute('data-selected-project-label') || null) : null
+    },
+    availableClients: [],
+    availableLabels: [],
+    cachedThreads: null,
     pollTimer: null,
     pollInFlight: false,
     searchTimer: null,
@@ -31,6 +43,152 @@
     sourceMode: { reply: false, compose: false },
     unreadSessionOpened: new Set()
   };
+
+  function hasActiveFilters() {
+    return Boolean(state.query || state.clientFilter || state.labelFilter || state.hasAttFilter);
+  }
+
+  function buildEmailPageUrl(threadOverride) {
+    const params = new URLSearchParams();
+    params.set('folder', state.folder || 'all');
+    const tid = threadOverride !== undefined ? threadOverride : state.selectedThread;
+    if (tid) params.set('thread', tid);
+    if (state.query) params.set('q', state.query);
+    if (state.clientFilter) params.set('client', state.clientFilter);
+    if (state.labelFilter) params.set('label', state.labelFilter);
+    if (state.hasAttFilter) params.set('has_att', '1');
+    return '/email?' + params.toString();
+  }
+
+  function syncUrlState() {
+    window.history.replaceState({}, document.title, buildEmailPageUrl());
+  }
+
+  function updateFilterControlsUi(visibleCount, totalCount) {
+    const clearSearchBtn = document.getElementById('btn-gmail-search-clear');
+    const clientSel = document.getElementById('gmail-filter-client');
+    const projectSel = document.getElementById('gmail-filter-project');
+    const attBtn = document.getElementById('gmail-filter-att-btn');
+    const clearAllBtn = document.getElementById('gmail-filter-clear-btn');
+    const statusCountEl = document.getElementById('gmail-filter-status-count');
+
+    if (clearSearchBtn) clearSearchBtn.classList.toggle('is-hidden', !state.query);
+    if (clientSel && clientSel.value !== state.clientFilter) clientSel.value = state.clientFilter;
+    if (projectSel && projectSel.value !== state.labelFilter) projectSel.value = state.labelFilter;
+    if (attBtn) {
+      attBtn.classList.toggle('is-active', Boolean(state.hasAttFilter));
+      attBtn.setAttribute('aria-pressed', state.hasAttFilter ? 'true' : 'false');
+    }
+    if (clearAllBtn) clearAllBtn.classList.toggle('is-hidden', !hasActiveFilters());
+
+    if (typeof totalCount === 'number' && !Number.isNaN(totalCount)) {
+      state.totalThreads = totalCount;
+    }
+    if (statusCountEl && typeof visibleCount === 'number') {
+      const denom = Math.max(visibleCount, state.totalThreads || visibleCount);
+      statusCountEl.textContent = visibleCount + ' of ' + denom + ' conversations';
+    }
+  }
+
+  function syncSelectOptions(selectEl, items, getVal, getLabel, leadingOptions, preserveVal) {
+    if (!selectEl || !Array.isArray(items)) return;
+    const prevVal = preserveVal !== undefined ? preserveVal : selectEl.value;
+    selectEl.replaceChildren();
+    (leadingOptions || []).forEach((lo) => {
+      const opt = document.createElement('option');
+      opt.value = lo.value;
+      opt.textContent = lo.label;
+      selectEl.appendChild(opt);
+    });
+    let found = false;
+    items.forEach((item) => {
+      const v = String(getVal(item));
+      const lbl = String(getLabel(item));
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = lbl;
+      if (v.toLowerCase() === String(prevVal || '').toLowerCase()) {
+        opt.selected = true;
+        found = true;
+      }
+      selectEl.appendChild(opt);
+    });
+    if (prevVal && !found) {
+      const isLeading = (leadingOptions || []).some((lo) => lo.value === prevVal);
+      if (isLeading) {
+        selectEl.value = prevVal;
+      } else {
+        const extra = document.createElement('option');
+        extra.value = prevVal;
+        extra.textContent = prevVal;
+        extra.selected = true;
+        selectEl.appendChild(extra);
+      }
+    } else if (prevVal) {
+      selectEl.value = prevVal;
+    }
+  }
+
+  function syncCategorizationCatalog(clients, labels) {
+    if (Array.isArray(clients)) {
+      state.availableClients = clients;
+      syncSelectOptions(
+        document.getElementById('gmail-filter-client'),
+        clients,
+        (c) => c.id,
+        (c) => c.agency_name,
+        [{ value: '', label: 'All Clients' }, { value: '__unlabeled', label: 'No Client' }],
+        state.clientFilter
+      );
+      syncSelectOptions(
+        document.getElementById('gmail-label-client-select'),
+        clients,
+        (c) => c.id,
+        (c) => c.agency_name,
+        [{ value: '', label: 'None (Unassigned)' }]
+      );
+      syncSelectOptions(
+        document.getElementById('compose-client-select'),
+        clients,
+        (c) => c.id,
+        (c) => c.agency_name,
+        [{ value: '', label: 'Auto / No Client' }]
+      );
+    }
+
+    if (Array.isArray(labels)) {
+      state.availableLabels = labels;
+      syncSelectOptions(
+        document.getElementById('gmail-filter-project'),
+        labels,
+        (l) => l,
+        (l) => l,
+        [{ value: '', label: 'All Projects / Labels' }, { value: '__unlabeled', label: 'No Project Label' }],
+        state.labelFilter
+      );
+      const datalist = document.getElementById('workly-project-labels-list');
+      if (datalist) {
+        datalist.replaceChildren();
+        labels.forEach((l) => {
+          const opt = document.createElement('option');
+          opt.value = l;
+          datalist.appendChild(opt);
+        });
+      }
+      const quickBox = document.getElementById('gmail-label-quick-chips');
+      if (quickBox) {
+        quickBox.replaceChildren();
+        labels.slice(0, 8).forEach((l) => {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'gmail-quick-chip';
+          btn.setAttribute('data-pick-project-label', l);
+          btn.textContent = l;
+          quickBox.appendChild(btn);
+        });
+      }
+    }
+  }
 
   function showGmailToast(message, type, onClick) {
     if (typeof window.worklyShowToast === 'function' && typeof onClick !== 'function') {
@@ -227,9 +385,13 @@
     if (allCountEl && typeof totalThreads === 'number') {
       allCountEl.textContent = String(totalThreads);
     }
+    updateFilterControlsUi(threads.length, typeof totalThreads === 'number' ? totalThreads : undefined);
     if (!listEl) return;
 
-    const snap = JSON.stringify(threads.map((t) => [t.thread_id, t.is_unread, t.msg_count, t.att_count, t.created_at, t.subject])) + '|' + state.selectedThread;
+    const snap = JSON.stringify(threads.map((t) => [
+      t.thread_id, t.is_unread, t.msg_count, t.att_count, t.created_at, t.subject,
+      t.client_ref_id || '', t.client_name || '', t.project_label || ''
+    ])) + '|' + state.selectedThread + '|' + state.clientFilter + '|' + state.labelFilter + '|' + state.query + '|' + (state.hasAttFilter ? '1' : '0');
     if (snap === state.knownThreadSnapshot) return;
     state.knownThreadSnapshot = snap;
 
@@ -242,8 +404,8 @@
       const p = document.createElement('p');
       p.className = 'muted';
       p.style.fontSize = '13px';
-      p.textContent = state.query
-        ? 'No conversations matched "' + state.query + '".'
+      p.textContent = hasActiveFilters()
+        ? ('No conversations matched your current filters' + (state.query ? (' for "' + state.query + '"') : '') + '.')
         : 'No conversations in this folder yet. Connect Gmail above or click + Compose.';
       empty.appendChild(p);
       listEl.appendChild(empty);
@@ -252,8 +414,13 @@
 
     threads.forEach((th) => {
       const row = document.createElement('a');
-      row.href = '/email?folder=' + encodeURIComponent(state.folder) + '&thread=' + encodeURIComponent(th.thread_id);
+      row.href = buildEmailPageUrl(th.thread_id);
       row.setAttribute('data-thread-id', th.thread_id);
+      row.setAttribute('data-search-text', th.search_text || '');
+      row.setAttribute('data-client-id', th.client_ref_id || '');
+      row.setAttribute('data-client-name', th.client_name || '');
+      row.setAttribute('data-project-label', th.project_label || '');
+      row.setAttribute('data-has-att', Number(th.att_count || 0) > 0 ? '1' : '0');
       row.className = 'gmail-thread-row'
         + (state.selectedThread === th.thread_id ? ' active' : '')
         + (th.is_unread ? ' is-unread' : '');
@@ -311,11 +478,122 @@
       snip.textContent = th.snippet || '';
 
       body.append(top, subjLine, snip);
+
+      if (th.client_name || th.project_label) {
+        const labelsRow = document.createElement('div');
+        labelsRow.className = 'gmail-thread-labels';
+        if (th.client_name && th.client_ref_id) {
+          const cChip = document.createElement('span');
+          cChip.className = 'gmail-label-chip is-client' + (state.clientFilter === String(th.client_ref_id) ? ' is-active' : '');
+          cChip.setAttribute('data-quick-filter-client', String(th.client_ref_id));
+          cChip.title = 'Filter by client';
+          cChip.textContent = th.client_name;
+          labelsRow.appendChild(cChip);
+        }
+        if (th.project_label) {
+          const pChip = document.createElement('span');
+          const isMatch = state.labelFilter && state.labelFilter.toLowerCase() === String(th.project_label).toLowerCase();
+          pChip.className = 'gmail-label-chip is-project' + (isMatch ? ' is-active' : '');
+          pChip.setAttribute('data-quick-filter-label', String(th.project_label));
+          pChip.title = 'Filter by project / label';
+          pChip.textContent = th.project_label;
+          labelsRow.appendChild(pChip);
+        }
+        body.appendChild(labelsRow);
+      }
+
       row.append(avatar, body);
       listEl.appendChild(row);
     });
 
     listEl.scrollTop = scrollTop;
+  }
+
+  function applyInstantFilterPreview() {
+    const qLow = state.query.toLowerCase();
+    const cf = state.clientFilter;
+    const lfLow = state.labelFilter.toLowerCase();
+    const attOnly = Boolean(state.hasAttFilter);
+
+    if (Array.isArray(state.cachedThreads)) {
+      const preview = state.cachedThreads.filter((th) => {
+        if (cf === '__unlabeled' && th.client_ref_id) return false;
+        if (cf && cf !== '__unlabeled' && String(th.client_ref_id || '') !== cf) return false;
+        const pLbl = String(th.project_label || '').trim();
+        if (lfLow === '__unlabeled' && pLbl !== '') return false;
+        if (lfLow && lfLow !== '__unlabeled' && pLbl.toLowerCase() !== lfLow) return false;
+        if (attOnly && Number(th.att_count || 0) <= 0) return false;
+        if (qLow) {
+          const hay = String(th.search_text || '').toLowerCase();
+          if (!hay.includes(qLow)) return false;
+        }
+        return true;
+      });
+      renderThreadList(preview, state.totalThreads || state.cachedThreads.length);
+      return;
+    }
+
+    // Fallback instant preview on initial SSR rows before cachedThreads arrives
+    const listEl = document.getElementById('gmail-thread-list');
+    if (!listEl) return;
+    let visible = 0;
+    listEl.querySelectorAll('.gmail-thread-row[data-thread-id]').forEach((row) => {
+      const cid = row.getAttribute('data-client-id') || '';
+      const pLbl = (row.getAttribute('data-project-label') || '').trim();
+      const hasAtt = row.getAttribute('data-has-att') === '1';
+      const hay = (row.getAttribute('data-search-text') || '').toLowerCase();
+      let ok = true;
+      if (cf === '__unlabeled' && cid !== '') ok = false;
+      else if (cf && cf !== '__unlabeled' && cid !== cf) ok = false;
+      if (ok && lfLow === '__unlabeled' && pLbl !== '') ok = false;
+      else if (ok && lfLow && lfLow !== '__unlabeled' && pLbl.toLowerCase() !== lfLow) ok = false;
+      if (ok && attOnly && !hasAtt) ok = false;
+      if (ok && qLow && !hay.includes(qLow)) ok = false;
+      row.classList.toggle('is-hidden', !ok);
+      if (ok) visible++;
+    });
+    const countEl = document.getElementById('gmail-thread-count-label');
+    if (countEl) countEl.textContent = String(visible);
+    updateFilterControlsUi(visible);
+  }
+
+  function renderReaderLabelsBar(meta) {
+    const safeMeta = meta || { client_ref_id: null, client_name: null, project_label: null };
+    state.selectedThreadMeta = safeMeta;
+    const barEl = document.getElementById('gmail-reader-labels-bar');
+    if (barEl) {
+      barEl.replaceChildren();
+      let hasAny = false;
+      if (safeMeta.client_name && safeMeta.client_ref_id) {
+        const cBtn = document.createElement('button');
+        cBtn.type = 'button';
+        cBtn.id = 'gmail-reader-client-pill';
+        cBtn.className = 'gmail-label-chip is-client' + (state.clientFilter === String(safeMeta.client_ref_id) ? ' is-active' : '');
+        cBtn.setAttribute('data-quick-filter-client', String(safeMeta.client_ref_id));
+        cBtn.textContent = safeMeta.client_name;
+        barEl.appendChild(cBtn);
+        hasAny = true;
+      }
+      if (safeMeta.project_label) {
+        const pBtn = document.createElement('button');
+        pBtn.type = 'button';
+        pBtn.id = 'gmail-reader-project-pill';
+        const isMatch = state.labelFilter && state.labelFilter.toLowerCase() === String(safeMeta.project_label).toLowerCase();
+        pBtn.className = 'gmail-label-chip is-project' + (isMatch ? ' is-active' : '');
+        pBtn.setAttribute('data-quick-filter-label', String(safeMeta.project_label));
+        pBtn.textContent = safeMeta.project_label;
+        barEl.appendChild(pBtn);
+        hasAny = true;
+      }
+      barEl.classList.toggle('is-hidden', !hasAny);
+    }
+    const popEl = document.getElementById('gmail-label-popover');
+    if (!popEl || popEl.classList.contains('is-hidden')) {
+      const cSel = document.getElementById('gmail-label-client-select');
+      const pInp = document.getElementById('gmail-label-project-input');
+      if (cSel) cSel.value = safeMeta.client_ref_id || '';
+      if (pInp) pInp.value = safeMeta.project_label || '';
+    }
   }
 
   function isOwnAddress(email) {
@@ -582,6 +860,9 @@
         q: state.query || '',
         mark_read: shouldMarkRead ? '1' : '0'
       };
+      if (state.clientFilter) paramsObj.client = state.clientFilter;
+      if (state.labelFilter) paramsObj.label = state.labelFilter;
+      if (state.hasAttFilter) paramsObj.has_att = '1';
       if (state.folder === 'unread' && state.unreadSessionOpened.size > 0) {
         paramsObj.keep_threads = Array.from(state.unreadSessionOpened).join(',');
       }
@@ -590,12 +871,20 @@
 
       updateGmailUiState(Boolean(data.connected), data.gmail_email || '', data.last_synced || '');
       updateGlobalUnreadBadges(data.unread_count || 0);
+      syncCategorizationCatalog(data.available_clients, data.available_labels);
 
       if (data.selected_thread && !state.selectedThread) {
         state.selectedThread = data.selected_thread;
       }
 
+      if (!hasActiveFilters() && state.folder === 'all' && Array.isArray(data.threads)) {
+        state.cachedThreads = data.threads;
+      } else if (!hasActiveFilters() && Array.isArray(data.threads)) {
+        state.cachedThreads = null;
+      }
+
       renderThreadList(data.threads || [], data.total_threads);
+      renderReaderLabelsBar(data.selected_thread_meta || null);
       renderActiveThread(data.selected_thread || state.selectedThread, data.messages || [], data.attachments || {});
 
       if (Array.isArray(data.new_messages) && data.new_messages.length) {
@@ -617,6 +906,11 @@
     }
     state.selectedThread = threadId;
     state.knownMessagesSnapshot = '';
+    const popEl = document.getElementById('gmail-label-popover');
+    if (popEl) popEl.classList.add('is-hidden');
+    const popBtn = document.getElementById('btn-gmail-open-label-popover');
+    if (popBtn) popBtn.setAttribute('aria-expanded', 'false');
+
     const splitShell = document.getElementById('gmail-split-shell');
     if (splitShell) splitShell.classList.add('has-mobile-thread');
     document.querySelectorAll('.gmail-thread-row').forEach((el) => {
@@ -624,8 +918,7 @@
       el.classList.toggle('active', isActive);
       if (isActive) el.classList.remove('is-unread');
     });
-    const url = '/email?folder=' + encodeURIComponent(state.folder) + '&thread=' + encodeURIComponent(threadId);
-    window.history.replaceState({}, document.title, url);
+    syncUrlState();
     await refreshLiveState({ sync: false, silent: true, force: true, markRead: true });
   }
 
@@ -639,12 +932,12 @@
       }
     }
     state.folder = nextFolder;
+    state.cachedThreads = null;
     state.knownThreadSnapshot = '';
     document.querySelectorAll('[data-email-folder]').forEach((tab) => {
       tab.classList.toggle('active', tab.getAttribute('data-email-folder') === state.folder);
     });
-    const url = '/email?folder=' + encodeURIComponent(state.folder) + (state.selectedThread ? '&thread=' + encodeURIComponent(state.selectedThread) : '');
-    window.history.replaceState({}, document.title, url);
+    syncUrlState();
     await refreshLiveState({ sync: false, silent: true, force: true, markRead: state.folder !== 'unread' });
   }
 
@@ -670,6 +963,8 @@
         window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
       } else if (data.connected) {
         await refreshLiveState({ sync: true, silent: true });
+      } else {
+        await refreshLiveState({ sync: false, silent: true, markRead: false });
       }
     } catch (error) {
       updateGmailUiState(false, '', '');
@@ -958,10 +1253,16 @@
       if (editorName === 'compose') {
         const subInp = form.querySelector('[name="subject"]');
         const recInp = form.querySelector('[name="recipient_email"]');
+        const cidSel = form.querySelector('[name="client_ref_id"]');
+        const lblInp = form.querySelector('[name="project_label"]');
         if (subInp) subInp.value = '';
         if (recInp) recInp.value = '';
+        if (cidSel) cidSel.value = '';
+        if (lblInp) lblInp.value = '';
         const ccRow = document.getElementById('compose-cc-row');
         if (ccRow) ccRow.classList.add('is-hidden');
+        const labelRow = document.getElementById('compose-label-row');
+        if (labelRow) labelRow.classList.add('is-hidden');
         const dockTitle = document.getElementById('gmail-compose-dock-title');
         if (dockTitle) dockTitle.textContent = 'New Message';
         const dock = document.getElementById('gmail-compose-popup');
@@ -974,6 +1275,7 @@
       if (data.thread_id) {
         state.selectedThread = data.thread_id;
       }
+      state.cachedThreads = null;
       state.knownThreadSnapshot = '';
       state.knownMessagesSnapshot = '';
       await refreshLiveState({ sync: false, silent: true, force: true });
@@ -1029,6 +1331,8 @@
     if (preview) preview.replaceChildren();
     const ccRow = document.getElementById('compose-cc-row');
     if (ccRow) ccRow.classList.add('is-hidden');
+    const labelRow = document.getElementById('compose-label-row');
+    if (labelRow) labelRow.classList.add('is-hidden');
     const dockTitle = document.getElementById('gmail-compose-dock-title');
     if (dockTitle) dockTitle.textContent = 'New Message';
     closeComposeDock();
@@ -1114,6 +1418,19 @@
         if (ccInp) ccInp.focus();
       });
     }
+    const toggleLabelBtn = document.getElementById('btn-compose-toggle-label');
+    const composeLabelRow = document.getElementById('compose-label-row');
+
+    if (toggleLabelBtn && composeLabelRow) {
+      toggleLabelBtn.addEventListener('click', () => {
+        const wasHidden = composeLabelRow.classList.contains('is-hidden');
+        composeLabelRow.classList.toggle('is-hidden', !wasHidden);
+        if (wasHidden) {
+          const cidSel = document.getElementById('compose-client-select');
+          if (cidSel) cidSel.focus();
+        }
+      });
+    }
     if (composeSubjectInput && composeDockTitle) {
       composeSubjectInput.addEventListener('input', () => {
         composeDockTitle.textContent = composeSubjectInput.value.trim() || 'New Message';
@@ -1121,6 +1438,31 @@
     }
 
     initRichEditors();
+
+    // Helper for applying filter updates with instant preview + authoritative server refresh
+    function applyFilterAndRefresh(opts) {
+      const cfg = opts || {};
+      updateFilterControlsUi();
+      syncUrlState();
+      applyInstantFilterPreview();
+      if (state.searchTimer) window.clearTimeout(state.searchTimer);
+      const delay = cfg.debounce ? 180 : 0;
+      state.searchTimer = window.setTimeout(() => {
+        state.knownThreadSnapshot = '';
+        refreshLiveState({ sync: false, silent: true, force: true, markRead: state.folder !== 'unread' });
+      }, delay);
+    }
+
+    function toggleClientFilter(clientId) {
+      state.clientFilter = state.clientFilter === clientId ? '' : clientId;
+      applyFilterAndRefresh({ debounce: false });
+    }
+
+    function toggleLabelFilter(labelStr) {
+      const clean = String(labelStr || '').trim();
+      state.labelFilter = (state.labelFilter.toLowerCase() === clean.toLowerCase()) ? '' : clean;
+      applyFilterAndRefresh({ debounce: false });
+    }
 
     // Folder tab switching without full page reload
     document.querySelectorAll('[data-email-folder]').forEach((tab) => {
@@ -1130,21 +1472,212 @@
       });
     });
 
-    // Live search filtering
+    // Live multi-facet search & filtering
     if (searchInput) {
       searchInput.addEventListener('input', () => {
         state.query = searchInput.value.trim();
-        if (state.searchTimer) window.clearTimeout(state.searchTimer);
-        state.searchTimer = window.setTimeout(() => {
-          refreshLiveState({ sync: false, silent: true, force: true });
-        }, 200);
+        applyFilterAndRefresh({ debounce: true });
+      });
+    }
+    const clearSearchBtn = document.getElementById('btn-gmail-search-clear');
+    if (clearSearchBtn && searchInput) {
+      clearSearchBtn.addEventListener('click', () => {
+        searchInput.value = '';
+        state.query = '';
+        searchInput.focus();
+        applyFilterAndRefresh({ debounce: false });
       });
     }
 
-    // Delegate thread selection clicks
+    const filterClientSel = document.getElementById('gmail-filter-client');
+    if (filterClientSel) {
+      filterClientSel.addEventListener('change', () => {
+        state.clientFilter = filterClientSel.value || '';
+        applyFilterAndRefresh({ debounce: false });
+      });
+    }
+
+    const filterProjectSel = document.getElementById('gmail-filter-project');
+    if (filterProjectSel) {
+      filterProjectSel.addEventListener('change', () => {
+        state.labelFilter = filterProjectSel.value || '';
+        applyFilterAndRefresh({ debounce: false });
+      });
+    }
+
+    const filterAttBtn = document.getElementById('gmail-filter-att-btn');
+    if (filterAttBtn) {
+      filterAttBtn.addEventListener('click', () => {
+        state.hasAttFilter = !state.hasAttFilter;
+        applyFilterAndRefresh({ debounce: false });
+      });
+    }
+
+    const clearAllFiltersBtn = document.getElementById('gmail-filter-clear-btn');
+    if (clearAllFiltersBtn) {
+      clearAllFiltersBtn.addEventListener('click', () => {
+        state.query = '';
+        state.clientFilter = '';
+        state.labelFilter = '';
+        state.hasAttFilter = false;
+        if (searchInput) searchInput.value = '';
+        applyFilterAndRefresh({ debounce: false });
+      });
+    }
+
+    // Reader Header Label Quick-Filter Clicks
+    const readerLabelsBar = document.getElementById('gmail-reader-labels-bar');
+    if (readerLabelsBar) {
+      readerLabelsBar.addEventListener('click', (e) => {
+        const cChip = e.target.closest('[data-quick-filter-client]');
+        if (cChip) {
+          toggleClientFilter(cChip.getAttribute('data-quick-filter-client') || '');
+          return;
+        }
+        const lChip = e.target.closest('[data-quick-filter-label]');
+        if (lChip) {
+          toggleLabelFilter(lChip.getAttribute('data-quick-filter-label') || '');
+        }
+      });
+    }
+
+    // Reader Categorize Popover (Client + Project Label assignment)
+    const openLabelPopBtn = document.getElementById('btn-gmail-open-label-popover');
+    const labelPopover = document.getElementById('gmail-label-popover');
+    const labelClientSel = document.getElementById('gmail-label-client-select');
+    const labelProjectInp = document.getElementById('gmail-label-project-input');
+    const saveLabelBtn = document.getElementById('btn-gmail-save-label');
+    const clearLabelBtn = document.getElementById('btn-gmail-clear-label');
+    const quickChipsBox = document.getElementById('gmail-label-quick-chips');
+
+    function closeLabelPopover() {
+      if (labelPopover) labelPopover.classList.add('is-hidden');
+      if (openLabelPopBtn) openLabelPopBtn.setAttribute('aria-expanded', 'false');
+    }
+
+    async function saveThreadCategorization(clientId, projectLbl) {
+      const tid = state.selectedThread;
+      if (!tid) return;
+      if (saveLabelBtn) saveLabelBtn.disabled = true;
+      if (clearLabelBtn) clearLabelBtn.disabled = true;
+      try {
+        const res = await requestJson('/api/v1/email/threads/' + encodeURIComponent(tid) + '/label', {
+          method: 'PATCH',
+          headers: {
+            'X-CSRF-Token': csrfToken,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            client_ref_id: clientId || '',
+            project_label: projectLbl || ''
+          })
+        });
+        renderReaderLabelsBar({
+          client_ref_id: res.client_ref_id || null,
+          client_name: res.client_name || null,
+          project_label: res.project_label || null
+        });
+        closeLabelPopover();
+        showGmailToast(
+          (res.client_ref_id || res.project_label) ? 'Conversation categorized.' : 'Labels cleared.',
+          'success'
+        );
+        state.cachedThreads = null;
+        state.knownThreadSnapshot = '';
+        await refreshLiveState({ sync: false, silent: true, force: true, markRead: false });
+      } catch (err) {
+        showGmailToast(err.message || 'Could not update conversation labels.', 'error');
+      } finally {
+        if (saveLabelBtn) saveLabelBtn.disabled = false;
+        if (clearLabelBtn) clearLabelBtn.disabled = false;
+      }
+    }
+
+    if (openLabelPopBtn && labelPopover) {
+      openLabelPopBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isClosed = labelPopover.classList.contains('is-hidden');
+        if (isClosed) {
+          if (labelClientSel) labelClientSel.value = (state.selectedThreadMeta && state.selectedThreadMeta.client_ref_id) || '';
+          if (labelProjectInp) labelProjectInp.value = (state.selectedThreadMeta && state.selectedThreadMeta.project_label) || '';
+          labelPopover.classList.remove('is-hidden');
+          openLabelPopBtn.setAttribute('aria-expanded', 'true');
+          if (labelProjectInp) labelProjectInp.focus();
+        } else {
+          closeLabelPopover();
+        }
+      });
+
+      document.addEventListener('click', (e) => {
+        if (!labelPopover.classList.contains('is-hidden') && !labelPopover.contains(e.target) && !openLabelPopBtn.contains(e.target)) {
+          closeLabelPopover();
+        }
+      });
+
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !labelPopover.classList.contains('is-hidden')) {
+          closeLabelPopover();
+        }
+      });
+    }
+
+    if (quickChipsBox && labelProjectInp) {
+      quickChipsBox.addEventListener('click', (e) => {
+        const chip = e.target.closest('[data-pick-project-label]');
+        if (!chip) return;
+        labelProjectInp.value = chip.getAttribute('data-pick-project-label') || '';
+        labelProjectInp.focus();
+      });
+    }
+
+    if (saveLabelBtn) {
+      saveLabelBtn.addEventListener('click', () => {
+        saveThreadCategorization(
+          labelClientSel ? labelClientSel.value : '',
+          labelProjectInp ? labelProjectInp.value.trim() : ''
+        );
+      });
+    }
+
+    if (clearLabelBtn) {
+      clearLabelBtn.addEventListener('click', () => {
+        if (labelClientSel) labelClientSel.value = '';
+        if (labelProjectInp) labelProjectInp.value = '';
+        saveThreadCategorization('', '');
+      });
+    }
+
+    if (labelProjectInp) {
+      labelProjectInp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          saveThreadCategorization(
+            labelClientSel ? labelClientSel.value : '',
+            labelProjectInp.value.trim()
+          );
+        }
+      });
+    }
+
+    // Delegate thread selection & inline label chip quick-filter clicks
     const listEl = document.getElementById('gmail-thread-list');
     if (listEl) {
       listEl.addEventListener('click', (e) => {
+        const qClient = e.target.closest('[data-quick-filter-client]');
+        if (qClient) {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleClientFilter(qClient.getAttribute('data-quick-filter-client') || '');
+          return;
+        }
+        const qLabel = e.target.closest('[data-quick-filter-label]');
+        if (qLabel) {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleLabelFilter(qLabel.getAttribute('data-quick-filter-label') || '');
+          return;
+        }
         const row = e.target.closest('.gmail-thread-row[data-thread-id]');
         if (!row) return;
         e.preventDefault();
@@ -1314,6 +1847,15 @@
           addLine('To', recipient);
           if (cc) addLine('CC', cc);
           addLine('Subject', subject);
+          const cidField = form.querySelector('[name="client_ref_id"]');
+          const lblField = form.querySelector('[name="project_label"]');
+          if (cidField && cidField.value) {
+            const optText = cidField.options[cidField.selectedIndex] ? cidField.options[cidField.selectedIndex].textContent : cidField.value;
+            addLine('Client', optText);
+          }
+          if (lblField && lblField.value.trim()) {
+            addLine('Project / Label', lblField.value.trim());
+          }
           addLine('Attachments', fileCount + ' file(s)');
           const mode = document.createElement('div');
           mode.className = 'muted';

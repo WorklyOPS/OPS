@@ -873,7 +873,7 @@ final class SecurityHelper
             ]),
         ]);
         $resp = curl_exec($ch);
-        curl_close($ch);
+        unset($ch);
         if (!is_string($resp)) {
             return false;
         }

@@ -1693,6 +1693,8 @@ final class PageController
             ");
             $this->db->exec('ALTER TABLE email_attachments ADD COLUMN IF NOT EXISTS content_id VARCHAR(255) DEFAULT NULL');
             $this->db->exec('ALTER TABLE email_attachments ADD COLUMN IF NOT EXISTS is_inline BOOLEAN NOT NULL DEFAULT FALSE');
+            $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS project_label VARCHAR(120) DEFAULT NULL');
+            $this->db->exec('CREATE INDEX IF NOT EXISTS idx_email_project_label ON email_messages (project_label)');
         } catch (Throwable) {
         }
 
@@ -1707,11 +1709,43 @@ final class PageController
         if (!in_array($folder, ['all', 'inbox', 'unread', 'sent'], true)) {
             $folder = 'all';
         }
+        $filterQuery = trim(SecurityHelper::sanitizePlainText($_GET['q'] ?? '', 120));
+        $filterClient = trim(SecurityHelper::sanitizePlainText($_GET['client'] ?? '', 64));
+        $filterLabel = trim(SecurityHelper::sanitizePlainText($_GET['label'] ?? '', 120));
+        $filterHasAtt = ($_GET['has_att'] ?? '0') === '1';
+
+        // Load CRM Clients scoped by user role + lookup map
+        $scopedClients = [];
+        $clientNameMap = [];
+        try {
+            if (($user['role'] ?? '') === 'va') {
+                $clSt = $this->db->prepare('SELECT id, agency_name FROM clients WHERE focus_va_id = :uid ORDER BY agency_name ASC');
+                $clSt->execute([':uid' => $user['id']]);
+                $scopedClients = $clSt->fetchAll(PDO::FETCH_ASSOC);
+            } elseif (($user['role'] ?? '') === 'team_leader') {
+                $clSt = $this->db->prepare('SELECT id, agency_name FROM clients WHERE team_leader_id = :uid ORDER BY agency_name ASC');
+                $clSt->execute([':uid' => $user['id']]);
+                $scopedClients = $clSt->fetchAll(PDO::FETCH_ASSOC);
+            } else {
+                $scopedClients = $this->db->query('SELECT id, agency_name FROM clients ORDER BY agency_name ASC')->fetchAll(PDO::FETCH_ASSOC);
+            }
+            foreach ($scopedClients as $sc) {
+                $clientNameMap[(string) $sc['id']] = (string) $sc['agency_name'];
+            }
+            foreach ($this->db->query('SELECT id, agency_name FROM clients')->fetchAll(PDO::FETCH_ASSOC) as $allC) {
+                if (!isset($clientNameMap[(string) $allC['id']])) {
+                    $clientNameMap[(string) $allC['id']] = (string) $allC['agency_name'];
+                }
+            }
+        } catch (Throwable) {
+        }
 
         if ($user['role'] === 'admin' && empty($mailbox)) {
             $stmt = $this->db->query("
                 SELECT DISTINCT ON (m.thread_id)
                        m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email, m.body, m.snippet, m.folder, m.is_read, m.created_at,
+                       (SELECT m2.client_ref_id FROM email_messages m2 WHERE m2.thread_id = m.thread_id AND m2.client_ref_id IS NOT NULL ORDER BY m2.created_at DESC LIMIT 1) AS client_ref_id,
+                       (SELECT m2.project_label FROM email_messages m2 WHERE m2.thread_id = m.thread_id AND m2.project_label IS NOT NULL AND m2.project_label <> '' ORDER BY m2.created_at DESC LIMIT 1) AS project_label,
                        (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
                        (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND (ea.is_inline = FALSE OR ea.size_bytes >= 1024)) AS att_count
                 FROM email_messages m
@@ -1721,6 +1755,8 @@ final class PageController
             $stmt = $this->db->prepare("
                 SELECT DISTINCT ON (m.thread_id)
                        m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email, m.body, m.snippet, m.folder, m.is_read, m.created_at,
+                       (SELECT m2.client_ref_id FROM email_messages m2 WHERE m2.thread_id = m.thread_id AND m2.client_ref_id IS NOT NULL ORDER BY m2.created_at DESC LIMIT 1) AS client_ref_id,
+                       (SELECT m2.project_label FROM email_messages m2 WHERE m2.thread_id = m.thread_id AND m2.project_label IS NOT NULL AND m2.project_label <> '' ORDER BY m2.created_at DESC LIMIT 1) AS project_label,
                        (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
                        (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND (ea.is_inline = FALSE OR ea.size_bytes >= 1024)) AS att_count
                 FROM email_messages m
@@ -1792,6 +1828,8 @@ final class PageController
             if ($thRow['is_unread']) {
                 $unreadCount++;
             }
+            $cid = (string) ($thRow['client_ref_id'] ?? '');
+            $thRow['client_name'] = $cid !== '' ? ($clientNameMap[$cid] ?? null) : null;
         }
         unset($thRow);
 
@@ -1801,15 +1839,91 @@ final class PageController
             return ($tb <=> $ta) ?: strcmp((string) ($b['id'] ?? ''), (string) ($a['id'] ?? ''));
         });
 
-        $threads = array_values(array_filter($allThreads, static function (array $th) use ($folder, $selectedThread): bool {
-            if ($folder === 'inbox') {
-                return ($th['folder'] ?? '') === 'inbox';
+        $deepMatchedThreads = null;
+        if ($filterQuery !== '') {
+            $deepMatchedThreads = [];
+            try {
+                $dq = $this->db->prepare("
+                    SELECT DISTINCT thread_id
+                    FROM email_messages
+                    WHERE LOWER(
+                        COALESCE(sender_name, '') || ' ' ||
+                        COALESCE(sender_email, '') || ' ' ||
+                        COALESCE(recipient_email, '') || ' ' ||
+                        COALESCE(cc_email, '') || ' ' ||
+                        COALESCE(subject, '') || ' ' ||
+                        COALESCE(body, '') || ' ' ||
+                        COALESCE(snippet, '') || ' ' ||
+                        COALESCE(project_label, '')
+                    ) LIKE LOWER(:ql)
+                ");
+                $dq->execute([':ql' => '%' . $filterQuery . '%']);
+                foreach ($dq->fetchAll(PDO::FETCH_COLUMN) as $mtid) {
+                    $deepMatchedThreads[(string) $mtid] = true;
+                }
+            } catch (Throwable) {
+                $deepMatchedThreads = null;
             }
-            if ($folder === 'sent') {
-                return ($th['folder'] ?? '') === 'sent';
+        }
+
+        $threads = array_values(array_filter($allThreads, static function (array $th) use (
+            $folder,
+            $selectedThread,
+            $filterQuery,
+            $deepMatchedThreads,
+            $filterClient,
+            $filterLabel,
+            $filterHasAtt
+        ): bool {
+            $tid = (string) ($th['thread_id'] ?? '');
+            if ($folder === 'inbox' && ($th['folder'] ?? '') !== 'inbox') {
+                return false;
             }
-            if ($folder === 'unread') {
-                return !empty($th['is_unread']) || ($selectedThread !== '' && ($th['thread_id'] ?? '') === $selectedThread);
+            if ($folder === 'sent' && ($th['folder'] ?? '') !== 'sent') {
+                return false;
+            }
+            if ($folder === 'unread' && empty($th['is_unread']) && ($selectedThread === '' || $tid !== $selectedThread)) {
+                return false;
+            }
+            if ($filterClient !== '') {
+                $thCid = (string) ($th['client_ref_id'] ?? '');
+                if ($filterClient === '__unlabeled') {
+                    if ($thCid !== '') {
+                        return false;
+                    }
+                } elseif ($thCid !== $filterClient) {
+                    return false;
+                }
+            }
+            if ($filterLabel !== '') {
+                $thLbl = trim((string) ($th['project_label'] ?? ''));
+                if ($filterLabel === '__unlabeled') {
+                    if ($thLbl !== '') {
+                        return false;
+                    }
+                } elseif (strcasecmp($thLbl, $filterLabel) !== 0) {
+                    return false;
+                }
+            }
+            if ($filterHasAtt && (int) ($th['att_count'] ?? 0) <= 0) {
+                return false;
+            }
+            if ($filterQuery !== '') {
+                $hay = strtolower(implode(' ', [
+                    (string) ($th['sender_name'] ?? ''),
+                    (string) ($th['sender_email'] ?? ''),
+                    (string) ($th['recipient_email'] ?? ''),
+                    (string) ($th['cc_email'] ?? ''),
+                    (string) ($th['subject'] ?? ''),
+                    (string) ($th['snippet'] ?? ''),
+                    (string) ($th['client_name'] ?? ''),
+                    (string) ($th['project_label'] ?? ''),
+                ]));
+                $hitSummary = str_contains($hay, strtolower($filterQuery));
+                $hitDeep = is_array($deepMatchedThreads) && isset($deepMatchedThreads[$tid]);
+                if (!$hitSummary && !$hitDeep) {
+                    return false;
+                }
             }
             return true;
         }));
@@ -1825,8 +1939,9 @@ final class PageController
 
         $threadMessages = [];
         $attachmentsByMsg = [];
+        $selectedThreadMeta = ['client_ref_id' => null, 'client_name' => null, 'project_label' => null];
         if ($selectedThread !== '') {
-            $mStmt = $this->db->prepare('SELECT id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, folder, is_read, created_at FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC, id ASC');
+            $mStmt = $this->db->prepare('SELECT id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, folder, is_read, client_ref_id, project_label, created_at FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC, id ASC');
             $mStmt->execute([':tid' => $selectedThread]);
             $threadMessages = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -1836,6 +1951,17 @@ final class PageController
                     $recip = strtolower(trim((string) ($m['recipient_email'] ?? '')));
                     return !isset($adminEmailLookup[$sender]) && !isset($adminEmailLookup[$recip]);
                 }));
+            }
+
+            foreach ($threadMessages as $tm) {
+                if (!empty($tm['client_ref_id']) && $selectedThreadMeta['client_ref_id'] === null) {
+                    $cidVal = (string) $tm['client_ref_id'];
+                    $selectedThreadMeta['client_ref_id'] = $cidVal;
+                    $selectedThreadMeta['client_name'] = $clientNameMap[$cidVal] ?? null;
+                }
+                if (!empty($tm['project_label']) && $selectedThreadMeta['project_label'] === null) {
+                    $selectedThreadMeta['project_label'] = (string) $tm['project_label'];
+                }
             }
 
             if (!empty($threadMessages)) {
@@ -1865,6 +1991,41 @@ final class PageController
             }
         }
 
+        // Gather project / deliverable label suggestions from existing emails & open tasks
+        $labelSeen = [];
+        $availableLabels = [];
+        $pushLbl = static function (?string $raw) use (&$labelSeen, &$availableLabels): void {
+            $val = trim((string) $raw);
+            if ($val === '') {
+                return;
+            }
+            $k = strtolower($val);
+            if (!isset($labelSeen[$k])) {
+                $labelSeen[$k] = true;
+                $availableLabels[] = $val;
+            }
+        };
+        foreach ($allThreads as $thItem) {
+            $pushLbl($thItem['project_label'] ?? '');
+        }
+        try {
+            if (($user['role'] ?? '') === 'va') {
+                $tSt = $this->db->prepare("SELECT title FROM tasks WHERE assigned_va_id = :uid AND status <> 'completed' ORDER BY updated_at DESC LIMIT 25");
+                $tSt->execute([':uid' => $user['id']]);
+            } elseif (($user['role'] ?? '') === 'team_leader') {
+                $tSt = $this->db->prepare("SELECT title FROM tasks WHERE team_leader_id = :uid AND status <> 'completed' ORDER BY updated_at DESC LIMIT 25");
+                $tSt->execute([':uid' => $user['id']]);
+            } else {
+                $tSt = $this->db->query("SELECT title FROM tasks WHERE status <> 'completed' ORDER BY updated_at DESC LIMIT 25");
+            }
+            foreach ($tSt->fetchAll(PDO::FETCH_COLUMN) as $tt) {
+                $pushLbl(mb_substr((string) $tt, 0, 80, 'UTF-8'));
+            }
+        } catch (Throwable) {
+        }
+        natcasesort($availableLabels);
+        $availableLabels = array_values(array_slice($availableLabels, 0, 40));
+
         if (($user['role'] ?? '') === 'admin') {
             $contacts = $this->db->query("SELECT name, email, role FROM users WHERE is_active = TRUE ORDER BY role ASC, name ASC")->fetchAll(PDO::FETCH_ASSOC);
         } else {
@@ -1872,15 +2033,24 @@ final class PageController
         }
 
         return [
-            'threads'          => $threads,
-            'total_threads'    => count($allThreads),
-            'unread_count'     => $unreadCount,
-            'selected_thread'  => $selectedThread,
-            'selected_folder'  => $folder,
-            'messages'         => $threadMessages,
-            'attachments'      => $attachmentsByMsg,
-            'mailbox'          => $mailbox,
-            'contacts'         => $contacts,
+            'threads'              => $threads,
+            'total_threads'        => count($allThreads),
+            'unread_count'         => $unreadCount,
+            'selected_thread'      => $selectedThread,
+            'selected_thread_meta' => $selectedThreadMeta,
+            'selected_folder'      => $folder,
+            'messages'             => $threadMessages,
+            'attachments'          => $attachmentsByMsg,
+            'mailbox'              => $mailbox,
+            'contacts'             => $contacts,
+            'available_clients'    => $scopedClients,
+            'available_labels'     => $availableLabels,
+            'email_filters'        => [
+                'q'       => $filterQuery,
+                'client'  => $filterClient,
+                'label'   => $filterLabel,
+                'has_att' => $filterHasAtt,
+            ],
         ];
     }
 

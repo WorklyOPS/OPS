@@ -2660,6 +2660,19 @@
       return map[rawType] || 'Event';
     }
 
+    function getTypeBadgeClass(rawType) {
+      const map = {
+        team_sync: 'badge badge-brand',
+        client_meeting: 'badge badge-info',
+        focus_block: 'badge badge-brand',
+        availability_window: 'badge badge-success',
+        google_event: 'badge badge-success',
+        checkpoint: 'badge badge-warn',
+        review: 'badge badge-info'
+      };
+      return map[rawType] || 'badge badge-info';
+    }
+
     function openEventDetailModal(el) {
       const modalEl = document.getElementById('modal-cal-event-detail');
       if (!modalEl) return;
@@ -2668,8 +2681,14 @@
 
       const titleEl = document.getElementById('cal-detail-title');
       const badgeEl = document.getElementById('cal-detail-type-badge');
-      const dtEl = document.getElementById('cal-detail-datetime');
-      const metaEl = document.getElementById('cal-detail-meta');
+      const sourceBadgeEl = document.getElementById('cal-detail-source-badge');
+      const dateValEl = document.getElementById('cal-detail-date-val');
+      const timeValEl = document.getElementById('cal-detail-time-val');
+      const vaRowEl = document.getElementById('cal-detail-va-row');
+      const vaValEl = document.getElementById('cal-detail-va-val');
+      const clientRowEl = document.getElementById('cal-detail-client-row');
+      const clientValEl = document.getElementById('cal-detail-client-val');
+      const notesWrapEl = document.getElementById('cal-detail-notes-wrap');
       const notesEl = document.getElementById('cal-detail-notes');
       const meetLinkEl = document.getElementById('cal-detail-meet-link');
       const gcalLinkEl = document.getElementById('cal-detail-gcal-link');
@@ -2688,23 +2707,41 @@
       const canDelete = el.getAttribute('data-ev-can-delete') === '1';
 
       if (titleEl) titleEl.textContent = evTitle;
-      if (badgeEl) badgeEl.textContent = formatTypeBadgeLabel(evType);
-      if (dtEl) dtEl.textContent = [evDate, evTime].filter(Boolean).join(' · ');
+      if (badgeEl) {
+        badgeEl.className = getTypeBadgeClass(evType);
+        badgeEl.textContent = formatTypeBadgeLabel(evType);
+      }
+      if (sourceBadgeEl) {
+        sourceBadgeEl.textContent = evSource === 'google' ? 'Google Calendar' : 'Workly Calendar';
+      }
+      if (dateValEl) dateValEl.textContent = evDate || 'Scheduled Date';
+      if (timeValEl) timeValEl.textContent = evTime || 'All Day';
 
-      if (metaEl) {
-        const parts = [evSource === 'google' ? 'Imported from Google Calendar' : 'Scheduled in Workly'];
-        if (evVa) parts.push('Participant: ' + evVa);
-        if (evClient) parts.push('Client: ' + evClient);
-        metaEl.textContent = parts.join(' · ');
+      if (vaRowEl && vaValEl) {
+        if (evVa.trim() !== '') {
+          vaValEl.textContent = evVa;
+          vaRowEl.classList.remove('is-hidden');
+        } else {
+          vaRowEl.classList.add('is-hidden');
+        }
       }
 
-      if (notesEl) {
+      if (clientRowEl && clientValEl) {
+        if (evClient.trim() !== '') {
+          clientValEl.textContent = evClient;
+          clientRowEl.classList.remove('is-hidden');
+        } else {
+          clientRowEl.classList.add('is-hidden');
+        }
+      }
+
+      if (notesWrapEl && notesEl) {
         if (evNotes.trim() !== '') {
           notesEl.textContent = evNotes;
-          notesEl.classList.remove('is-hidden');
+          notesWrapEl.classList.remove('is-hidden');
         } else {
           notesEl.textContent = '';
-          notesEl.classList.add('is-hidden');
+          notesWrapEl.classList.add('is-hidden');
         }
       }
 
@@ -2729,6 +2766,7 @@
       }
       if (delBtn) {
         delBtn.setAttribute('data-delete-id', mid);
+        delBtn.disabled = false;
         delBtn.classList.toggle('is-hidden', !canDelete);
       }
 

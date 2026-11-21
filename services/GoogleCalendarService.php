@@ -986,7 +986,7 @@ final class GoogleCalendarService
         $raw = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlErr = curl_error($ch);
-        curl_close($ch);
+        unset($ch);
 
         if (!is_string($raw)) {
             return ['status' => $status, 'data' => null, 'error' => $curlErr !== '' ? $curlErr : 'Unknown cURL error'];

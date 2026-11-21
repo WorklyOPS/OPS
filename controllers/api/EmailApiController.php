@@ -50,6 +50,10 @@ final class EmailApiController
             $this->setThreadReadState($arg, $user);
             return;
         }
+        if ($method === 'PATCH' && $sub === 'threads' && $arg !== '' && ($parts[5] ?? '') === 'label') {
+            $this->setThreadLabel($arg, $user);
+            return;
+        }
         if ($method === 'POST' && $sub === 'disconnect') {
             $this->disconnectMailbox($user);
             return;
@@ -87,6 +91,8 @@ final class EmailApiController
             $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS snippet TEXT DEFAULT NULL');
             $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS body_html TEXT DEFAULT NULL');
             $this->db->exec("ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS body_format VARCHAR(16) DEFAULT 'plain'");
+            $this->db->exec('ALTER TABLE email_messages ADD COLUMN IF NOT EXISTS project_label VARCHAR(120) DEFAULT NULL');
+            $this->db->exec('CREATE INDEX IF NOT EXISTS idx_email_project_label ON email_messages (project_label)');
             $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS access_token_encrypted TEXT DEFAULT NULL');
             $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS refresh_token_encrypted TEXT DEFAULT NULL');
             $this->db->exec('ALTER TABLE staff_connected_mailboxes ADD COLUMN IF NOT EXISTS token_expires_at TIMESTAMPTZ DEFAULT NULL');
@@ -340,7 +346,7 @@ final class EmailApiController
         curl_setopt_array($ch, $opts);
         $raw = curl_exec($ch);
         $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
+        unset($ch);
 
         if (!is_string($raw) || $code < 200 || $code >= 300) {
             return null;
@@ -496,6 +502,7 @@ final class EmailApiController
             $body = SecurityHelper::htmlToPlainText($bodyHtml, 16000);
         }
         $clientRef = SecurityHelper::sanitizePlainText($input['client_ref_id'] ?? '', 64) ?: null;
+        $projectLabel = SecurityHelper::sanitizePlainText($input['project_label'] ?? '', 120) ?: null;
 
         if ($threadId === '' || $recipient === '' || $body === '') {
             http_response_code(422);
@@ -507,6 +514,28 @@ final class EmailApiController
             http_response_code(403);
             echo json_encode(['error' => 'Recipient is not available for email delivery']);
             return;
+        }
+
+        // Inherit existing thread categorization if not explicitly overridden
+        if ($clientRef === null || $projectLabel === null) {
+            $metaStmt = $this->db->prepare("
+                SELECT
+                    (SELECT client_ref_id FROM email_messages WHERE thread_id = :t1 AND client_ref_id IS NOT NULL ORDER BY created_at DESC LIMIT 1) AS cid,
+                    (SELECT project_label FROM email_messages WHERE thread_id = :t2 AND project_label IS NOT NULL AND project_label <> '' ORDER BY created_at DESC LIMIT 1) AS plabel
+            ");
+            $metaStmt->execute([':t1' => $threadId, ':t2' => $threadId]);
+            $tMeta = $metaStmt->fetch(PDO::FETCH_ASSOC);
+            if ($tMeta) {
+                if ($clientRef === null && !empty($tMeta['cid'])) {
+                    $clientRef = (string) $tMeta['cid'];
+                }
+                if ($projectLabel === null && !empty($tMeta['plabel'])) {
+                    $projectLabel = (string) $tMeta['plabel'];
+                }
+            }
+        }
+        if ($clientRef !== null) {
+            $clientRef = $this->validateScopedClientId($user, $clientRef);
         }
 
         if (stripos($subject, 'Re:') !== 0) {
@@ -538,8 +567,8 @@ final class EmailApiController
         $bodyFormat = $bodyHtml !== '' ? 'html' : 'plain';
         $createdAtIso = gmdate('c');
         $stmt = $this->db->prepare("
-            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id, created_at)
-            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, 'sent', TRUE, :cid, :cat)
+            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id, project_label, created_at)
+            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, 'sent', TRUE, :cid, :plabel, :cat)
         ");
         $stmt->execute([
             ':id'      => $id,
@@ -555,6 +584,7 @@ final class EmailApiController
             ':snip'    => mb_substr($body, 0, 140, 'UTF-8'),
             ':gid'     => $gmailSentId,
             ':cid'     => $clientRef,
+            ':plabel'  => $projectLabel,
             ':cat'     => $createdAtIso,
         ]);
 
@@ -578,6 +608,7 @@ final class EmailApiController
             $body = SecurityHelper::htmlToPlainText($bodyHtml, 16000);
         }
         $clientRef = SecurityHelper::sanitizePlainText($input['client_ref_id'] ?? '', 64) ?: null;
+        $projectLabel = SecurityHelper::sanitizePlainText($input['project_label'] ?? '', 120) ?: null;
 
         if ($recipient === '' || $subject === '' || $body === '') {
             http_response_code(422);
@@ -589,6 +620,13 @@ final class EmailApiController
             http_response_code(403);
             echo json_encode(['error' => 'Recipient is not available for email delivery']);
             return;
+        }
+
+        $scopedClients = $this->getScopedClients($user);
+        if ($clientRef !== null) {
+            $clientRef = $this->validateScopedClientId($user, $clientRef, $scopedClients);
+        } else {
+            $clientRef = $this->matchClientIdByEmails($scopedClients, [$recipient, $cc]);
         }
 
         $threadId = 'th-' . bin2hex(random_bytes(5));
@@ -618,8 +656,8 @@ final class EmailApiController
         $bodyFormat = $bodyHtml !== '' ? 'html' : 'plain';
         $createdAtIso = gmdate('c');
         $stmt = $this->db->prepare("
-            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id, created_at)
-            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, 'sent', TRUE, :cid, :cat)
+            INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id, project_label, created_at)
+            VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, 'sent', TRUE, :cid, :plabel, :cat)
         ");
         $stmt->execute([
             ':id'      => $id,
@@ -635,6 +673,7 @@ final class EmailApiController
             ':snip'    => mb_substr($body, 0, 140, 'UTF-8'),
             ':gid'     => $gmailSentId,
             ':cid'     => $clientRef,
+            ':plabel'  => $projectLabel,
             ':cat'     => $createdAtIso,
         ]);
 
@@ -825,6 +864,7 @@ final class EmailApiController
             $upMb->execute([':uid' => $user['id'], ':em' => $gmailEmail]);
         }
 
+        $scopedClients = $this->getScopedClients($user);
         $limit = max(5, min(40, $maxResults));
         $list = $this->gmailRequest('GET', '/messages?maxResults=' . $limit, $token);
         if ($list && !empty($list['messages']) && is_array($list['messages'])) {
@@ -950,10 +990,28 @@ final class EmailApiController
                     }
                 }
 
+                // Inherit thread labels or auto-match CRM client email
+                $autoClientId = null;
+                $autoProjectLabel = null;
+                $threadMetaQ = $this->db->prepare("
+                    SELECT
+                        (SELECT client_ref_id FROM email_messages WHERE thread_id = :t1 AND client_ref_id IS NOT NULL ORDER BY created_at DESC LIMIT 1) AS cid,
+                        (SELECT project_label FROM email_messages WHERE thread_id = :t2 AND project_label IS NOT NULL AND project_label <> '' ORDER BY created_at DESC LIMIT 1) AS plabel
+                ");
+                $threadMetaQ->execute([':t1' => $threadId, ':t2' => $threadId]);
+                $threadMetaRow = $threadMetaQ->fetch(PDO::FETCH_ASSOC);
+                if ($threadMetaRow) {
+                    $autoClientId = !empty($threadMetaRow['cid']) ? (string) $threadMetaRow['cid'] : null;
+                    $autoProjectLabel = !empty($threadMetaRow['plabel']) ? (string) $threadMetaRow['plabel'] : null;
+                }
+                if ($autoClientId === null) {
+                    $autoClientId = $this->matchClientIdByEmails($scopedClients, [$fromEmail, $toEmail, $ccEmail]);
+                }
+
                 $id = 'msg-' . bin2hex(random_bytes(5));
                 $ins = $this->db->prepare("
-                    INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, created_at)
-                    VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, :folder, :is_read, :cat)
+                    INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id, project_label, created_at)
+                    VALUES (:id, :tid, :sname, :semail, :remail, :cc, :subject, :body, :bhtml, :bfmt, :snip, :gid, :folder, :is_read, :cid, :plabel, :cat)
                 ");
                 $ins->execute([
                     ':id'      => $id,
@@ -970,6 +1028,8 @@ final class EmailApiController
                     ':gid'     => $gid,
                     ':folder'  => $folder,
                     ':is_read' => $isRead ? 'true' : 'false',
+                    ':cid'     => $autoClientId,
+                    ':plabel'  => $autoProjectLabel,
                     ':cat'     => $createdAtIso,
                 ]);
 
@@ -1146,12 +1206,83 @@ final class EmailApiController
         echo json_encode(['success' => true, 'thread_id' => $cleanTid, 'is_read' => $isRead]);
     }
 
+    private function setThreadLabel(string $threadId, array $user): void
+    {
+        $cleanTid = SecurityHelper::sanitizePlainText($threadId, 64);
+        if ($cleanTid === '') {
+            http_response_code(422);
+            echo json_encode(['error' => 'Invalid thread id']);
+            return;
+        }
+
+        $chk = $this->db->prepare('SELECT sender_email, recipient_email, cc_email FROM email_messages WHERE thread_id = :tid LIMIT 1');
+        $chk->execute([':tid' => $cleanTid]);
+        $existsRow = $chk->fetch(PDO::FETCH_ASSOC);
+        if (!$existsRow) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Conversation thread not found']);
+            return;
+        }
+        $adminEmails = $this->getHiddenAdminEmails($user);
+        if (!empty($adminEmails) && $this->messageInvolvesAdmin($existsRow, $adminEmails)) {
+            http_response_code(403);
+            echo json_encode(['error' => 'Conversation unavailable']);
+            return;
+        }
+
+        $input = json_decode((string) file_get_contents('php://input'), true) ?: [];
+        $rawClientId = SecurityHelper::sanitizePlainText((string) ($input['client_ref_id'] ?? ''), 64);
+        $rawProjectLabel = SecurityHelper::sanitizePlainText((string) ($input['project_label'] ?? ''), 120);
+
+        $scopedClients = $this->getScopedClients($user);
+        $clientMap = [];
+        foreach ($scopedClients as $sc) {
+            $clientMap[(string) $sc['id']] = (string) $sc['agency_name'];
+        }
+
+        $finalClientId = $rawClientId !== '' ? $this->validateScopedClientId($user, $rawClientId, $scopedClients) : null;
+        if ($rawClientId !== '' && $finalClientId === null) {
+            http_response_code(422);
+            echo json_encode(['error' => 'Selected client is invalid or outside your scope']);
+            return;
+        }
+        $finalProjectLabel = $rawProjectLabel !== '' ? $rawProjectLabel : null;
+
+        $upd = $this->db->prepare('UPDATE email_messages SET client_ref_id = :cid, project_label = :plabel WHERE thread_id = :tid');
+        $upd->execute([
+            ':cid'    => $finalClientId,
+            ':plabel' => $finalProjectLabel,
+            ':tid'    => $cleanTid,
+        ]);
+
+        $this->invalidate();
+        AuditLogger::log(
+            'EMAIL_THREAD_LABELED',
+            'success',
+            "Updated labels on thread {$cleanTid} (client=" . ($finalClientId ?? 'none') . ', project=' . ($finalProjectLabel ?? 'none') . ')',
+            $user['id'],
+            $user['role'],
+            $this->db
+        );
+
+        echo json_encode([
+            'success'       => true,
+            'thread_id'     => $cleanTid,
+            'client_ref_id' => $finalClientId,
+            'client_name'   => $finalClientId !== null ? ($clientMap[$finalClientId] ?? null) : null,
+            'project_label' => $finalProjectLabel,
+        ]);
+    }
+
     private function liveState(array $user): void
     {
         $shouldSync = ($_GET['sync'] ?? '1') === '1';
         $summaryOnly = ($_GET['summary_only'] ?? '0') === '1';
         $folder = SecurityHelper::sanitizePlainText($_GET['folder'] ?? 'all', 16);
         $query = trim(SecurityHelper::sanitizePlainText($_GET['q'] ?? '', 120));
+        $clientFilter = trim(SecurityHelper::sanitizePlainText($_GET['client'] ?? '', 64));
+        $labelFilter = trim(SecurityHelper::sanitizePlainText($_GET['label'] ?? '', 120));
+        $hasAttFilter = ($_GET['has_att'] ?? '0') === '1';
         $selectedThread = SecurityHelper::sanitizePlainText($_GET['thread'] ?? '', 64);
         $markRead = ($_GET['mark_read'] ?? '1') === '1';
         $keepThreadsRaw = (string) ($_GET['keep_threads'] ?? '');
@@ -1179,12 +1310,28 @@ final class EmailApiController
         $linkedEmail = ($mailbox && !empty($mailbox['email'])) ? (string) $mailbox['email'] : $email;
         $adminEmails = $this->getHiddenAdminEmails($user);
 
-        // Fetch all visible messages summary scoped to user
+        $scopedClients = $this->getScopedClients($user);
+        $clientNameMap = [];
+        foreach ($scopedClients as $sc) {
+            $clientNameMap[(string) $sc['id']] = (string) $sc['agency_name'];
+        }
+        try {
+            foreach ($this->db->query('SELECT id, agency_name FROM clients')->fetchAll(PDO::FETCH_ASSOC) as $allCl) {
+                if (!isset($clientNameMap[(string) $allCl['id']])) {
+                    $clientNameMap[(string) $allCl['id']] = (string) $allCl['agency_name'];
+                }
+            }
+        } catch (Throwable) {
+        }
+
+        // Fetch all visible thread heads scoped to user
         if (($user['role'] ?? '') === 'admin' && empty($mailbox)) {
             $allStmt = $this->db->query("
                 SELECT DISTINCT ON (m.thread_id)
                        m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email,
                        m.body, m.snippet, m.folder, m.is_read, m.created_at,
+                       (SELECT m2.client_ref_id FROM email_messages m2 WHERE m2.thread_id = m.thread_id AND m2.client_ref_id IS NOT NULL ORDER BY m2.created_at DESC LIMIT 1) AS client_ref_id,
+                       (SELECT m2.project_label FROM email_messages m2 WHERE m2.thread_id = m.thread_id AND m2.project_label IS NOT NULL AND m2.project_label <> '' ORDER BY m2.created_at DESC LIMIT 1) AS project_label,
                        (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
                        (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND (ea.is_inline = FALSE OR ea.size_bytes >= 1024)) AS att_count
                 FROM email_messages m
@@ -1195,6 +1342,8 @@ final class EmailApiController
                 SELECT DISTINCT ON (m.thread_id)
                        m.id, m.thread_id, m.subject, m.sender_name, m.sender_email, m.recipient_email, m.cc_email,
                        m.body, m.snippet, m.folder, m.is_read, m.created_at,
+                       (SELECT m2.client_ref_id FROM email_messages m2 WHERE m2.thread_id = m.thread_id AND m2.client_ref_id IS NOT NULL ORDER BY m2.created_at DESC LIMIT 1) AS client_ref_id,
+                       (SELECT m2.project_label FROM email_messages m2 WHERE m2.thread_id = m.thread_id AND m2.project_label IS NOT NULL AND m2.project_label <> '' ORDER BY m2.created_at DESC LIMIT 1) AS project_label,
                        (SELECT COUNT(*)::INT FROM email_messages m2 WHERE m2.thread_id = m.thread_id) AS msg_count,
                        (SELECT COUNT(*)::INT FROM email_attachments ea JOIN email_messages m3 ON ea.email_id = m3.id WHERE m3.thread_id = m.thread_id AND (ea.is_inline = FALSE OR ea.size_bytes >= 1024)) AS att_count
                 FROM email_messages m
@@ -1219,7 +1368,7 @@ final class EmailApiController
             $allThreads = array_values(array_filter($allThreads, fn(array $row): bool => !$this->messageInvolvesAdmin($row, $adminEmails)));
         }
 
-        // Compute unread email count and check incoming unread
+        // Compute unread email count and resolve Client & Project labels cleanly
         $unreadCount = 0;
         $selfLow = strtolower($email);
         $linkLow = strtolower($linkedEmail);
@@ -1233,6 +1382,18 @@ final class EmailApiController
             if (empty($thRow['snippet'])) {
                 $thRow['snippet'] = mb_substr(trim(strip_tags((string) ($thRow['body'] ?? ''))), 0, 140, 'UTF-8');
             }
+            $cid = (string) ($thRow['client_ref_id'] ?? '');
+            $thRow['client_name'] = $cid !== '' ? ($clientNameMap[$cid] ?? null) : null;
+            $thRow['search_text'] = strtolower(trim(implode(' ', [
+                (string) ($thRow['sender_name'] ?? ''),
+                (string) ($thRow['sender_email'] ?? ''),
+                (string) ($thRow['recipient_email'] ?? ''),
+                (string) ($thRow['cc_email'] ?? ''),
+                (string) ($thRow['subject'] ?? ''),
+                (string) ($thRow['snippet'] ?? ''),
+                (string) ($thRow['client_name'] ?? ''),
+                (string) ($thRow['project_label'] ?? ''),
+            ])));
             unset($thRow['body']);
         }
         unset($thRow);
@@ -1245,18 +1406,55 @@ final class EmailApiController
 
         if ($summaryOnly) {
             echo json_encode([
-                'connected'    => (bool) $connected,
-                'gmail_email'  => $connected ? $mailbox['email'] : null,
-                'last_synced'  => $mailbox['last_synced_at'] ?? $syncRes['synced_at'],
-                'imported'     => (int) ($syncRes['imported'] ?? 0),
-                'unread_count' => $unreadCount,
-                'new_messages' => $syncRes['new_messages'] ?? [],
+                'connected'     => (bool) $connected,
+                'gmail_email'   => $connected ? $mailbox['email'] : null,
+                'last_synced'   => $mailbox['last_synced_at'] ?? $syncRes['synced_at'],
+                'imported'      => (int) ($syncRes['imported'] ?? 0),
+                'unread_count'  => $unreadCount,
+                'new_messages'  => $syncRes['new_messages'] ?? [],
                 'latest_unread' => array_values(array_slice(array_filter($allThreads, static fn(array $t): bool => !empty($t['is_unread'])), 0, 3)),
             ]);
             return;
         }
 
-        $threads = array_values(array_filter($allThreads, static function (array $th) use ($folder, $query, $keepThreadSet): bool {
+        // Deep search across ALL messages inside each thread when $query is provided
+        $deepMatchedThreads = null;
+        if ($query !== '') {
+            $deepMatchedThreads = [];
+            try {
+                $qLike = '%' . $query . '%';
+                $dq = $this->db->prepare("
+                    SELECT DISTINCT thread_id
+                    FROM email_messages
+                    WHERE LOWER(
+                        COALESCE(sender_name, '') || ' ' ||
+                        COALESCE(sender_email, '') || ' ' ||
+                        COALESCE(recipient_email, '') || ' ' ||
+                        COALESCE(cc_email, '') || ' ' ||
+                        COALESCE(subject, '') || ' ' ||
+                        COALESCE(body, '') || ' ' ||
+                        COALESCE(snippet, '') || ' ' ||
+                        COALESCE(project_label, '')
+                    ) LIKE LOWER(:ql)
+                ");
+                $dq->execute([':ql' => $qLike]);
+                foreach ($dq->fetchAll(PDO::FETCH_COLUMN) as $mtid) {
+                    $deepMatchedThreads[(string) $mtid] = true;
+                }
+            } catch (Throwable) {
+                $deepMatchedThreads = null;
+            }
+        }
+
+        $threads = array_values(array_filter($allThreads, static function (array $th) use (
+            $folder,
+            $query,
+            $deepMatchedThreads,
+            $clientFilter,
+            $labelFilter,
+            $hasAttFilter,
+            $keepThreadSet
+        ): bool {
             $tid = (string) ($th['thread_id'] ?? '');
             if ($folder === 'inbox' && ($th['folder'] ?? '') !== 'inbox') {
                 return false;
@@ -1267,9 +1465,33 @@ final class EmailApiController
             if ($folder === 'unread' && empty($th['is_unread']) && !isset($keepThreadSet[$tid])) {
                 return false;
             }
+            if ($clientFilter !== '') {
+                $thCid = (string) ($th['client_ref_id'] ?? '');
+                if ($clientFilter === '__unlabeled') {
+                    if ($thCid !== '') {
+                        return false;
+                    }
+                } elseif ($thCid !== $clientFilter) {
+                    return false;
+                }
+            }
+            if ($labelFilter !== '') {
+                $thLabel = trim((string) ($th['project_label'] ?? ''));
+                if ($labelFilter === '__unlabeled') {
+                    if ($thLabel !== '') {
+                        return false;
+                    }
+                } elseif (strcasecmp($thLabel, $labelFilter) !== 0) {
+                    return false;
+                }
+            }
+            if ($hasAttFilter && (int) ($th['att_count'] ?? 0) <= 0) {
+                return false;
+            }
             if ($query !== '') {
-                $hay = strtolower(($th['sender_name'] ?? '') . ' ' . ($th['sender_email'] ?? '') . ' ' . ($th['subject'] ?? '') . ' ' . ($th['snippet'] ?? ''));
-                if (!str_contains($hay, strtolower($query))) {
+                $hitInSummary = str_contains((string) ($th['search_text'] ?? ''), strtolower($query));
+                $hitInDeep = is_array($deepMatchedThreads) && isset($deepMatchedThreads[$tid]);
+                if (!$hitInSummary && !$hitInDeep) {
                     return false;
                 }
             }
@@ -1282,13 +1504,25 @@ final class EmailApiController
 
         $threadMessages = [];
         $attachmentsByMsg = [];
+        $selectedThreadMeta = ['client_ref_id' => null, 'client_name' => null, 'project_label' => null];
         if ($selectedThread !== '') {
-            $mStmt = $this->db->prepare('SELECT id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, folder, is_read, created_at FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC, id ASC');
+            $mStmt = $this->db->prepare('SELECT id, thread_id, sender_name, sender_email, recipient_email, cc_email, subject, body, body_html, body_format, snippet, folder, is_read, client_ref_id, project_label, created_at FROM email_messages WHERE thread_id = :tid ORDER BY created_at ASC, id ASC');
             $mStmt->execute([':tid' => $selectedThread]);
             $threadMessages = $mStmt->fetchAll(PDO::FETCH_ASSOC);
 
             if (!empty($adminEmails)) {
                 $threadMessages = array_values(array_filter($threadMessages, fn(array $m): bool => !$this->messageInvolvesAdmin($m, $adminEmails)));
+            }
+
+            foreach ($threadMessages as $tm) {
+                if (!empty($tm['client_ref_id']) && $selectedThreadMeta['client_ref_id'] === null) {
+                    $cidVal = (string) $tm['client_ref_id'];
+                    $selectedThreadMeta['client_ref_id'] = $cidVal;
+                    $selectedThreadMeta['client_name'] = $clientNameMap[$cidVal] ?? null;
+                }
+                if (!empty($tm['project_label']) && $selectedThreadMeta['project_label'] === null) {
+                    $selectedThreadMeta['project_label'] = (string) $tm['project_label'];
+                }
             }
 
             if (!empty($threadMessages)) {
@@ -1320,19 +1554,117 @@ final class EmailApiController
             }
         }
 
+        $availableLabels = $this->getAvailableProjectLabels($user, $allThreads);
+        $clientList = array_map(static fn(array $c): array => [
+            'id'          => (string) $c['id'],
+            'agency_name' => (string) $c['agency_name'],
+        ], $scopedClients);
+
         echo json_encode([
-            'connected'       => (bool) $connected,
-            'gmail_email'     => $connected ? $mailbox['email'] : null,
-            'last_synced'     => $mailbox['last_synced_at'] ?? $syncRes['synced_at'],
-            'imported'        => (int) ($syncRes['imported'] ?? 0),
-            'unread_count'    => $unreadCount,
-            'total_threads'   => count($allThreads),
-            'threads'         => $threads,
-            'selected_thread' => $selectedThread,
-            'messages'        => $threadMessages,
-            'attachments'     => $attachmentsByMsg,
-            'new_messages'    => $syncRes['new_messages'] ?? [],
+            'connected'            => (bool) $connected,
+            'gmail_email'          => $connected ? $mailbox['email'] : null,
+            'last_synced'          => $mailbox['last_synced_at'] ?? $syncRes['synced_at'],
+            'imported'             => (int) ($syncRes['imported'] ?? 0),
+            'unread_count'         => $unreadCount,
+            'total_threads'        => count($allThreads),
+            'threads'              => $threads,
+            'selected_thread'      => $selectedThread,
+            'selected_thread_meta' => $selectedThreadMeta,
+            'messages'             => $threadMessages,
+            'attachments'          => $attachmentsByMsg,
+            'available_clients'    => $clientList,
+            'available_labels'     => $availableLabels,
+            'new_messages'         => $syncRes['new_messages'] ?? [],
         ]);
+    }
+
+    private function getScopedClients(array $user): array
+    {
+        try {
+            if (($user['role'] ?? '') === 'va') {
+                $st = $this->db->prepare('SELECT id, agency_name, name, email, additional_email FROM clients WHERE focus_va_id = :uid ORDER BY agency_name ASC');
+                $st->execute([':uid' => $user['id']]);
+                return $st->fetchAll(PDO::FETCH_ASSOC);
+            }
+            if (($user['role'] ?? '') === 'team_leader') {
+                $st = $this->db->prepare('SELECT id, agency_name, name, email, additional_email FROM clients WHERE team_leader_id = :uid ORDER BY agency_name ASC');
+                $st->execute([':uid' => $user['id']]);
+                return $st->fetchAll(PDO::FETCH_ASSOC);
+            }
+            return $this->db->query('SELECT id, agency_name, name, email, additional_email FROM clients ORDER BY agency_name ASC')->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable) {
+            return [];
+        }
+    }
+
+    private function validateScopedClientId(array $user, string $clientId, ?array $preloaded = null): ?string
+    {
+        $clients = $preloaded ?? $this->getScopedClients($user);
+        foreach ($clients as $c) {
+            if ((string) $c['id'] === $clientId) {
+                return $clientId;
+            }
+        }
+        return null;
+    }
+
+    private function matchClientIdByEmails(array $clients, array $rawAddresses): ?string
+    {
+        if (empty($clients)) {
+            return null;
+        }
+        $hay = strtolower(implode(' ', $rawAddresses));
+        if (trim($hay) === '') {
+            return null;
+        }
+        foreach ($clients as $c) {
+            $e1 = strtolower(trim((string) ($c['email'] ?? '')));
+            $e2 = strtolower(trim((string) ($c['additional_email'] ?? '')));
+            if (($e1 !== '' && str_contains($hay, $e1)) || ($e2 !== '' && str_contains($hay, $e2))) {
+                return (string) $c['id'];
+            }
+        }
+        return null;
+    }
+
+    private function getAvailableProjectLabels(array $user, array $visibleThreads): array
+    {
+        $seen = [];
+        $labels = [];
+        $addLabel = static function (?string $raw) use (&$seen, &$labels): void {
+            $val = trim((string) $raw);
+            if ($val === '') {
+                return;
+            }
+            $k = strtolower($val);
+            if (!isset($seen[$k])) {
+                $seen[$k] = true;
+                $labels[] = $val;
+            }
+        };
+
+        foreach ($visibleThreads as $th) {
+            $addLabel($th['project_label'] ?? '');
+        }
+
+        try {
+            if (($user['role'] ?? '') === 'va') {
+                $ts = $this->db->prepare("SELECT title FROM tasks WHERE assigned_va_id = :uid AND status <> 'completed' ORDER BY updated_at DESC LIMIT 25");
+                $ts->execute([':uid' => $user['id']]);
+            } elseif (($user['role'] ?? '') === 'team_leader') {
+                $ts = $this->db->prepare("SELECT title FROM tasks WHERE team_leader_id = :uid AND status <> 'completed' ORDER BY updated_at DESC LIMIT 25");
+                $ts->execute([':uid' => $user['id']]);
+            } else {
+                $ts = $this->db->query("SELECT title FROM tasks WHERE status <> 'completed' ORDER BY updated_at DESC LIMIT 25");
+            }
+            foreach ($ts->fetchAll(PDO::FETCH_COLUMN) as $taskTitle) {
+                $addLabel(mb_substr((string) $taskTitle, 0, 80, 'UTF-8'));
+            }
+        } catch (Throwable) {
+        }
+
+        natcasesort($labels);
+        return array_values(array_slice($labels, 0, 40));
     }
 
     private function downloadAttachment(string $attId, array $user): void

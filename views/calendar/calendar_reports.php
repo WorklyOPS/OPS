@@ -1109,25 +1109,70 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
 
 <!-- Event Preview Modal (for Workly & Google Calendar synced events) -->
 <div id="modal-cal-event-detail" class="modal-backdrop is-hidden">
-  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="cal-detail-title" style="max-width:480px;">
-    <div class="modal-head">
-      <div>
-        <span id="cal-detail-type-badge" class="badge badge-info" style="margin-bottom:6px;">Event</span>
+  <div class="modal-panel cal-detail-panel" role="dialog" aria-modal="true" aria-labelledby="cal-detail-title">
+    <div class="modal-head cal-detail-head">
+      <div class="cal-detail-head-main">
+        <div class="cal-detail-badges">
+          <span id="cal-detail-type-badge" class="badge badge-info">Event</span>
+          <span id="cal-detail-source-badge" class="badge badge-neutral">Workly</span>
+        </div>
         <h3 id="cal-detail-title">Calendar Event</h3>
       </div>
       <button type="button" class="btn btn-secondary btn-sm" data-close-modal>Close</button>
     </div>
-    <div class="modal-body" style="display:grid;gap:10px;">
-      <div style="font-size:13.5px;font-weight:600;color:var(--ink);" id="cal-detail-datetime"></div>
-      <div id="cal-detail-meta" class="muted" style="font-size:12.5px;"></div>
-      <div id="cal-detail-notes" class="is-hidden" style="padding:10px 12px;border-radius:10px;background:var(--bg);border:1px solid var(--border);font-size:13px;white-space:pre-wrap;"></div>
-    </div>
-    <div class="modal-foot" style="display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px;padding-top:14px;border-top:1px solid var(--border);">
-      <div style="display:flex;gap:8px;flex-wrap:wrap;">
-        <a id="cal-detail-meet-link" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm is-hidden">Join Meeting</a>
-        <a id="cal-detail-gcal-link" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm is-hidden">Open in Google Calendar</a>
+
+    <div class="modal-body cal-detail-body">
+      <div class="cal-detail-grid">
+        <div class="cal-detail-item">
+          <span class="cal-detail-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          </span>
+          <div class="cal-detail-item-content">
+            <span class="cal-detail-label">Date &amp; Time</span>
+            <strong id="cal-detail-date-val" class="cal-detail-value">-</strong>
+            <span id="cal-detail-time-val" class="cal-detail-sub">-</span>
+          </div>
+        </div>
+
+        <div id="cal-detail-va-row" class="cal-detail-item is-hidden">
+          <span class="cal-detail-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          </span>
+          <div class="cal-detail-item-content">
+            <span class="cal-detail-label">Participant</span>
+            <strong id="cal-detail-va-val" class="cal-detail-value">-</strong>
+          </div>
+        </div>
+
+        <div id="cal-detail-client-row" class="cal-detail-item is-hidden">
+          <span class="cal-detail-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l8-4v18"/><path d="M19 21V11l-6-4"/><path d="M9 9v.01"/><path d="M9 12v.01"/><path d="M9 15v.01"/></svg>
+          </span>
+          <div class="cal-detail-item-content">
+            <span class="cal-detail-label">Client Account</span>
+            <strong id="cal-detail-client-val" class="cal-detail-value">-</strong>
+          </div>
+        </div>
       </div>
-      <button type="button" id="cal-detail-delete-btn" class="btn btn-danger btn-sm is-hidden">Delete Event</button>
+
+      <div id="cal-detail-notes-wrap" class="cal-detail-notes-card is-hidden">
+        <div class="cal-detail-label" style="margin-bottom:4px;">Agenda &amp; Notes</div>
+        <div id="cal-detail-notes" class="cal-detail-notes-text"></div>
+      </div>
+
+      <div class="cal-detail-footer">
+        <div class="cal-detail-footer-links">
+          <a id="cal-detail-meet-link" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm is-hidden">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>
+            <span>Join Meeting</span>
+          </a>
+          <a id="cal-detail-gcal-link" href="#" target="_blank" rel="noopener noreferrer" class="btn btn-secondary btn-sm is-hidden">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+            <span>Open in Google Calendar</span>
+          </a>
+        </div>
+        <button type="button" id="cal-detail-delete-btn" class="btn btn-danger btn-sm is-hidden">Delete Event</button>
+      </div>
     </div>
   </div>
 </div>

@@ -148,7 +148,7 @@ final class GmailOAuthService
         $raw = curl_exec($ch);
         $status = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $curlError = curl_error($ch);
-        curl_close($ch);
+        unset($ch);
 
         if (!is_string($raw)) {
             throw new RuntimeException('Google API request failed: ' . ($curlError !== '' ? $curlError : 'unknown cURL error'));

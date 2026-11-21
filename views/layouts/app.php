@@ -29,7 +29,7 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/css/workly.css">
+  <link rel="stylesheet" href="/assets/css/workly.css?v=<?= (string) (@filemtime(__DIR__ . '/../../assets/css/workly.css') ?: '1') ?>">
   <script src="/assets/js/localtheme.js"></script>
 </head>
 <body>
@@ -563,14 +563,14 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
 
   <?php require __DIR__ . '/../partials/cookie_banner.php'; ?>
 
-  <script src="/assets/js/app.js"></script>
+  <script src="/assets/js/app.js?v=<?= (string) (@filemtime(__DIR__ . '/../../assets/js/app.js') ?: '1') ?>"></script>
   <script src="/assets/js/theme-mode.js"></script>
   <?php if ($activeSection === 'dashboard' && $role === 'team_leader'): ?>
     <script src="/assets/js/vendor/recharts-bundle.js"></script>
     <script src="/assets/js/tl-recharts.js"></script>
   <?php endif; ?>
   <?php if ($activeSection === 'email'): ?>
-    <script src="/assets/js/gmail-oauth.js"></script>
+    <script src="/assets/js/gmail-oauth.js?v=<?= (string) (@filemtime(__DIR__ . '/../../assets/js/gmail-oauth.js') ?: '1') ?>"></script>
   <?php endif; ?>
 </body>
 </html>
