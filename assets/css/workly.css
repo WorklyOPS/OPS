@@ -7589,7 +7589,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   .kanban-toolbar-controls { width: 100%; }
   .kanban-view-tabs { width: 100%; }
   .kanban-search-input { flex: 1 1 100%; min-width: 0; }
-  .kanban-filter-panel { right: 0; left: auto; width: min(310px, calc(100vw - 44px)); }
+  .kanban-filter-panel { right: auto; left: auto; width: min(310px, calc(100vw - 44px)); }
   .photo-upload-picker, .photo-upload-trigger { max-width: 100%; }
   .va-inspect-select { min-width: 0; width: 100%; }
   .subtask-add-row .btn, .subtask-draft-row .btn { width: 100%; }
@@ -7660,7 +7660,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
 }
 
 @media (max-width: 420px) {
-  .grid-4 { grid-template-columns: 1fr; gap: 12px; }
+  .grid-4 { gap: 12px; }
   .topbar-brand { gap: 7px; font-size: 15.5px; }
   .kanban-board { grid-template-columns: repeat(4, minmax(232px, 84vw)); }
   .swimlane-grid { grid-template-columns: repeat(4, minmax(216px, 82vw)); }
