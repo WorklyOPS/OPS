@@ -1,20 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="workly-csrf" content="<?= SecurityHelper::e($csrfToken) ?>">
-  <title>Sign In — Workly Virtual Assistant Platform</title>
-  <meta name="description" content="Secure authentication for Workly Virtual Assistant Operations.">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/css/workly.css">
-  <script src="/assets/js/localtheme.js"></script>
-  <?php if (!empty($secretsStatus['turnstile_configured'])): ?>
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-  <?php endif; ?>
-</head>
+<?php
+$headTitle = 'Sign In — Workly Virtual Assistant Platform';
+$headDescription = 'Operations & Productivity Suite';
+$headIncludeFonts = true;
+$headExtra = !empty($secretsStatus['turnstile_configured'])
+    ? '<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>'
+    : '';
+require __DIR__ . '/../partials/head.php';
+?>
 
 <div style="top: 10px; right: 10px; position: absolute;">
 <button class="theme-toggle" id="themeToggle">
@@ -32,11 +26,7 @@
     <section class="auth-hero-pane">
       <div>
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:28px;">
-          <div class="brand-mark">W</div>
-          <div>
-            <div style="font-weight:800;font-size:19px;letter-spacing:-0.02em;">Workly</div>
-            <div class="muted" style="font-size:12px;">Virtual Assistant Operations Suite</div>
-          </div>
+          <img src="../assets/img/brand/logo.png" class="w-logo">
         </div>
 
         <h1 style="font-size:28px;line-height:1.2;margin-bottom:12px;">Precision pod orchestration, SLA tracking &amp; client CRM.</h1>

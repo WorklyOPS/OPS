@@ -21,17 +21,12 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
 ?>
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="workly-csrf" content="<?= SecurityHelper::e($csrfToken) ?>">
-  <title><?= SecurityHelper::e($pageTitle) ?> — Workly</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/css/workly.css?v=<?= (string) (@filemtime(__DIR__ . '/../../assets/css/workly.css') ?: '1') ?>">
-  <script src="/assets/js/localtheme.js"></script>
-</head>
+<?php
+$headTitle = ((string) ($pageTitle ?? 'Workspace')) . ' — Workly';
+$headDescription = 'Operations & Productivity Suite';
+$headIncludeFonts = true;
+require __DIR__ . '/../partials/head.php';
+?>
 <body>
   <div id="workly-global-progress" class="workly-global-progress" aria-hidden="true"></div>
 
@@ -43,8 +38,7 @@ $unreadNotifCount = (int) ($unreadNotifCount ?? 0);
         </button>
 
         <a href="<?= $role === 'va' ? '/tasks' : '/dashboard' ?>" class="topbar-brand" style="text-decoration:none;">
-          <span class="brand-mark" style="width:32px;height:32px;font-size:15px;">W</span>
-          <span>Workly</span>
+          <img src="../assets/img/brand/logo.png" class="w-logo">
         </a>
 
         <span class="topbar-divider" aria-hidden="true"></span>

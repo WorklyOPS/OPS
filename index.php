@@ -20,6 +20,19 @@ $rawUri = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
 $uri = '/' . ltrim($rawUri, '/');
 $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
 
+// Serve /favicon.ico cleanly whether placed in root or assets/img/brand/
+if ($uri === '/favicon.ico') {
+    $icoFile = is_file(__DIR__ . '/favicon.ico')
+        ? __DIR__ . '/favicon.ico'
+        : __DIR__ . '/assets/img/brand/favicon.ico';
+    if (is_file($icoFile)) {
+        header('Content-Type: image/x-icon');
+        header('Cache-Control: public, max-age=86400');
+        readfile($icoFile);
+        exit;
+    }
+}
+
 // Health Probe Endpoint (no sensitive leak)
 if ($uri === '/health' || $uri === '/api/v1/health') {
     SecurityHelper::sendApiHeaders();
@@ -54,16 +67,14 @@ try {
     ?>
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Workly — Workspace Configuration Required</title>
-  <link rel="stylesheet" href="/assets/css/workly.css">
-  <script src="/assets/js/localtheme.js"></script>
-</head>
+<?php
+$headTitle = 'Workly — Operations & Productivity Suite';
+$headIncludeFonts = false;
+require __DIR__ . '/views/partials/head.php';
+?>
 <body class="auth-body">
   <div class="auth-card">
-    <div class="brand-mark">W</div>
+    <img src="../assets/img/brand/logo.png" class="w-logo">
     <h1>Workspace Setup Required</h1>
     <p class="muted">Workly could not establish a database connection. Verify your environment credentials and initialize the workspace schema before continuing.</p>
     <div class="notice notice-warn">System Status: Database Connection Pending</div>
@@ -283,13 +294,11 @@ SecurityHelper::sendHtmlHeaders();
 ?>
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>404 — Page Not Found | Workly</title>
-  <link rel="stylesheet" href="/assets/css/workly.css">
-  <script src="/assets/js/localtheme.js"></script>
-</head>
+<?php
+$headTitle = '404 — Page Not Found | Workly';
+$headIncludeFonts = false;
+require __DIR__ . '/views/partials/head.php';
+?>
 <body class="auth-body">
   <div class="auth-card">
     <div class="brand-mark">W</div>

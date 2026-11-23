@@ -1,14 +1,11 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Initial Administrator Setup — Workly</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/css/workly.css">
-</head>
+<?php
+$headTitle = 'Initial Administrator Setup — Workly';
+$headDescription = 'Operations & Productivity Suite';
+$headIncludeFonts = true;
+require __DIR__ . '/../partials/head.php';
+?>
 <body class="auth-body">
   <main class="auth-split">
     <section class="auth-hero-pane">
