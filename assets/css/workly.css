@@ -8228,8 +8228,8 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
     justify-content: center;
   }
 
-  input[name="cal_date"], input[name="monitor_user"] {
-    width: 100%;
+  input[name="cal_date"], select[name="monitor_user"] {
+    width: 100% !important;
   }
   
   .cal-hourly-scroll-x {
