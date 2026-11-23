@@ -74,7 +74,7 @@ require __DIR__ . '/views/partials/head.php';
 ?>
 <body class="auth-body">
   <div class="auth-card">
-    <img src="../assets/img/brand/logo.png" class="w-logo">
+    <img src="../assets/img/brand/logo.png" style="width:84px">
     <h1>Workspace Setup Required</h1>
     <p class="muted">Workly could not establish a database connection. Verify your environment credentials and initialize the workspace schema before continuing.</p>
     <div class="notice notice-warn">System Status: Database Connection Pending</div>

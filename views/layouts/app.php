@@ -38,7 +38,7 @@ require __DIR__ . '/../partials/head.php';
         </button>
 
         <a href="<?= $role === 'va' ? '/tasks' : '/dashboard' ?>" class="topbar-brand" style="text-decoration:none;">
-          <img src="../assets/img/brand/logo.png" class="w-logo">
+          <img src="../assets/img/brand/logo.png" style="width:64px">
         </a>
 
         <span class="topbar-divider" aria-hidden="true"></span>

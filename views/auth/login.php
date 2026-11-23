@@ -26,7 +26,7 @@ require __DIR__ . '/../partials/head.php';
     <section class="auth-hero-pane">
       <div>
         <div style="display:flex;align-items:center;gap:12px;margin-bottom:28px;">
-          <img src="../assets/img/brand/logo.png" class="w-logo">
+          <img src="../assets/img/brand/logo.png" style="width:84px">
         </div>
 
         <h1 style="font-size:28px;line-height:1.2;margin-bottom:12px;">Precision pod orchestration, SLA tracking &amp; client CRM.</h1>
