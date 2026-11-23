@@ -3183,7 +3183,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
 
 .gmail-thread-list {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 6px;
   overflow-y: auto;
   overflow-x: hidden;
@@ -3192,6 +3192,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   width: 100%;
   min-width: 0;
   max-width: 100%;
+  flex-wrap: wrap;
 }
 
 .gmail-thread-row {
@@ -7746,10 +7747,6 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
     align-items: stretch;
   }
 
-  .gmail-thread-list {
-    flex-direction: row;
-    flex-wrap: wrap;
-  }
 }
 
 /* --------------------------------------------------------------------------
