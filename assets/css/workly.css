@@ -7400,7 +7400,7 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   .topbar-inner { padding: 0 14px; gap: 10px; }
   .topbar-divider, .topbar-breadcrumb { display: none; }
   #btn-start-tour { display: none; }
-  .grid-2, .grid-3, .grid-5, .sla-kpi-grid, .perks-card-grid { grid-template-columns: minmax(0, 1fr); }
+  .grid-2, .grid-3, .grid-5, .perks-card-grid { grid-template-columns: minmax(0, 1fr); }
   .grid-2.grid-2-mobile { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
   .tab-strip {
@@ -7735,7 +7735,20 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
   .gcal-sync-actions .gsi-material-button,
   .gcal-sync-actions .gmail-account-capsule {
     width: 100%;
-    justify-content: center;
+  }
+
+  #btn-print-sla {
+    width: 100%;
+  }
+
+  .gmail-msg-head {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .gmail-thread-list {
+    flex-direction: row;
+    flex-wrap: wrap;
   }
 }
 
@@ -8212,6 +8225,16 @@ input[type="month"]::-webkit-calendar-picker-indicator:hover {
     width: 100%;
     justify-content: flex-start;
   }
+
+  .cal-view-switch {
+    width: 100%;
+    justify-content: center;
+  }
+
+  input[name="cal_date"], input[name="monitor_user"] {
+    width: 100%;
+  }
+  
   .cal-hourly-scroll-x {
     max-height: 540px;
   }

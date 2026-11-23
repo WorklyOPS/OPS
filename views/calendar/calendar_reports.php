@@ -1111,7 +1111,6 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
           </div>
 
           <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;">
-            <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
             <button type="submit" class="btn btn-primary">Schedule &amp; Save</button>
           </div>
         </form>
