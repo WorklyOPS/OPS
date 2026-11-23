@@ -2557,7 +2557,7 @@
     const browserTz = getBrowserTimezone();
 
     // Auto-scroll hourly timeline to 7 AM (7 * 56px = 392px)
-    const timelineScroll = document.getElementById('workly-cal-timeline-scroll');
+    const timelineScroll = calRoot.querySelector('.cal-hourly-scroll-x') || document.getElementById('workly-cal-timeline-scroll');
     if (timelineScroll) {
       window.requestAnimationFrame(() => {
         timelineScroll.scrollTop = 392;
@@ -2630,9 +2630,68 @@
       }
     }
 
+    const customLinkCb = document.getElementById('cb-custom-meeting-link');
+    const customLinkWrap = document.getElementById('sched-custom-link-wrap');
+    const customLinkInp = document.getElementById('sched-meeting-link');
+    const incClientCb = document.getElementById('cb-inc-client');
+    const incClientGroup = document.getElementById('sched-inc-client-group');
+    const incClientHint = document.getElementById('sched-inc-client-hint');
+    const schedClientSel = document.getElementById('sched-client-id');
+
+    function syncCustomLinkVisibility() {
+      if (!customLinkCb || !customLinkWrap) return;
+      const show = Boolean(customLinkCb.checked);
+      customLinkWrap.classList.toggle('is-hidden', !show);
+      if (!show && customLinkInp) {
+        customLinkInp.value = '';
+      }
+    }
+
+    function syncIncludeClientState() {
+      if (!incClientCb) return;
+      const hasClient = Boolean(schedClientSel && schedClientSel.value !== '');
+      incClientCb.disabled = !hasClient;
+      if (!hasClient) {
+        incClientCb.checked = false;
+      }
+      if (incClientGroup) {
+        incClientGroup.classList.toggle('is-disabled', !hasClient);
+      }
+      if (incClientHint) {
+        incClientHint.textContent = hasClient
+          ? 'Optional — sends the client an email with the meeting & calendar invite link.'
+          : 'Select a CRM client above to optionally email them a calendar invite link.';
+      }
+    }
+
+    function resetScheduleOptionToggles() {
+      if (customLinkCb) customLinkCb.checked = false;
+      syncCustomLinkVisibility();
+      if (incClientCb) incClientCb.checked = false;
+      syncIncludeClientState();
+    }
+
+    if (customLinkCb) {
+      customLinkCb.addEventListener('change', () => {
+        syncCustomLinkVisibility();
+        if (customLinkCb.checked && customLinkInp) {
+          customLinkInp.focus();
+        }
+      });
+      syncCustomLinkVisibility();
+    }
+    if (schedClientSel) {
+      schedClientSel.addEventListener('change', syncIncludeClientState);
+      syncIncludeClientState();
+    }
+    document.querySelectorAll('[data-open-drawer="drawer-schedule-meeting"]').forEach((btn) => {
+      btn.addEventListener('click', resetScheduleOptionToggles);
+    });
+
     function openScheduleDrawerAt(targetDate, startHour) {
       const schedDrawer = document.getElementById('drawer-schedule-meeting');
       if (!schedDrawer || !targetDate) return;
+      resetScheduleOptionToggles();
       const sInp = document.getElementById('sched-start-time');
       const eInp = document.getElementById('sched-end-time');
       const h = Number.isFinite(startHour) ? Math.max(0, Math.min(23, startHour)) : 9;
@@ -4456,18 +4515,25 @@
         docsMap = {};
       }
     }
+    const visibleCountEl = document.getElementById('kb-visible-count');
     let activeCat = '';
     let activeReaderDocId = '';
 
     function filterDocs() {
       const q = searchInp ? searchInp.value.trim().toLowerCase() : '';
+      let visibleCount = 0;
       docCards.forEach((card) => {
         const cardCat = (card.getAttribute('data-kb-cat') || '').toLowerCase();
         const hay = (card.getAttribute('data-kb-search') || '').toLowerCase();
         const matchCat = (activeCat === '' || cardCat === activeCat.toLowerCase());
         const matchSearch = (q === '' || hay.includes(q));
-        card.style.display = (matchCat && matchSearch) ? '' : 'none';
+        const show = matchCat && matchSearch;
+        card.style.display = show ? '' : 'none';
+        if (show) visibleCount++;
       });
+      if (visibleCountEl) {
+        visibleCountEl.textContent = visibleCount + ' SOP(s)';
+      }
     }
 
     if (searchInp) searchInp.addEventListener('input', filterDocs);
@@ -4479,6 +4545,9 @@
         catContainer.querySelectorAll('[data-kb-cat]').forEach((b) => {
           b.classList.toggle('active', b === pill);
         });
+        if (typeof pill.scrollIntoView === 'function') {
+          pill.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        }
         filterDocs();
       });
     }
@@ -4831,18 +4900,32 @@
       updateStudioStats();
       openModal('modal-kb-studio');
       window.setTimeout(() => {
-        if (mode === 'create' && titleInp) {
-          titleInp.focus();
-        } else {
-          editor.focus();
+        if (window.innerWidth > 900) {
+          if (mode === 'create' && titleInp) {
+            titleInp.focus();
+          } else {
+            editor.focus();
+          }
         }
       }, 40);
+    }
+
+    const studioWorkspace = document.getElementById('kb-studio-workspace');
+    if (studioWorkspace && editor) {
+      studioWorkspace.addEventListener('click', (e) => {
+        if (e.target === studioWorkspace) {
+          editor.focus();
+        }
+      });
     }
 
     if (editor) {
       editor.addEventListener('input', updateStudioStats);
       editor.addEventListener('keyup', saveEditorSelection);
       editor.addEventListener('mouseup', saveEditorSelection);
+      editor.addEventListener('touchend', () => {
+        window.setTimeout(saveEditorSelection, 20);
+      });
       editor.addEventListener('blur', () => {
         saveEditorSelection();
         updateStudioStats();
@@ -6114,9 +6197,15 @@
               return;
             }
 
-            if (endpoint === '/api/v1/meetings' && !payload.timezone) {
-              const tz = getBrowserTimezone();
-              if (tz) payload.timezone = tz;
+            if (endpoint === '/api/v1/meetings') {
+              if (!payload.timezone) {
+                const tz = getBrowserTimezone();
+                if (tz) payload.timezone = tz;
+              }
+              if (!payload.use_custom_link) {
+                payload.use_custom_link = false;
+                delete payload.meeting_link;
+              }
             }
 
             const res = await apiFetch(targetUrl, {
@@ -6193,9 +6282,28 @@
           }
 
           const gSyncCount = formApiRes && formApiRes.google_sync ? Number(formApiRes.google_sync.synced_count || 0) : 0;
+          const clientInvited = Boolean(formApiRes && formApiRes.client_invited);
+          const clientEmailSent = Boolean(formApiRes && formApiRes.client_email_sent);
+          const clientEmailAddr = formApiRes && formApiRes.client_email ? String(formApiRes.client_email) : '';
+
+          if (clientInvited && clientEmailSent) {
+            showToast(
+              gSyncCount > 0
+                ? 'Saved, synced to Google Calendar & emailed invite to ' + clientEmailAddr
+                : 'Saved & emailed calendar invite to ' + clientEmailAddr,
+              'success'
+            );
+            window.setTimeout(() => window.location.reload(), 460);
+            return;
+          }
           if (gSyncCount > 0) {
             showToast('Saved & synced to ' + gSyncCount + ' Google Calendar(s)', 'success');
             window.setTimeout(() => window.location.reload(), 420);
+            return;
+          }
+          if (clientInvited && !clientEmailSent) {
+            showToast('Saved & logged client invite in Email Hub (connect Gmail to email externally)', 'info');
+            window.setTimeout(() => window.location.reload(), 520);
             return;
           }
 

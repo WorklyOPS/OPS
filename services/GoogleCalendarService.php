@@ -903,9 +903,10 @@ final class GoogleCalendarService
         $linkStmt->execute([':etype' => $entityType, ':eid' => $entityId, ':uid' => $userId]);
         $existing = $linkStmt->fetch(PDO::FETCH_ASSOC);
 
+        $sendUpdates = !empty($payload['attendees']) ? 'all' : 'none';
         $eventData = null;
         if ($existing && !empty($existing['google_event_id'])) {
-            $patchUrl = self::CALENDAR_EVENTS_BASE . '/' . rawurlencode((string) $existing['google_event_id']) . '?sendUpdates=none';
+            $patchUrl = self::CALENDAR_EVENTS_BASE . '/' . rawurlencode((string) $existing['google_event_id']) . '?sendUpdates=' . $sendUpdates;
             $resp = self::calendarHttp('PATCH', $patchUrl, $token, $payload);
             if ($resp['status'] >= 200 && $resp['status'] < 300 && !empty($resp['data']['id'])) {
                 $eventData = $resp['data'];
@@ -916,7 +917,7 @@ final class GoogleCalendarService
         }
 
         if ($eventData === null) {
-            $postUrl = self::CALENDAR_EVENTS_BASE . '?sendUpdates=none';
+            $postUrl = self::CALENDAR_EVENTS_BASE . '?sendUpdates=' . $sendUpdates;
             $resp = self::calendarHttp('POST', $postUrl, $token, $payload);
             if ($resp['status'] < 200 || $resp['status'] >= 300 || empty($resp['data']['id'])) {
                 error_log('Workly Google Calendar POST failed (' . $resp['status'] . '): ' . $resp['error']);

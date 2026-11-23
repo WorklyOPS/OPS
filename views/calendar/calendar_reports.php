@@ -1016,13 +1016,13 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
       <div class="drawer-body">
         <form id="form-schedule-meeting" data-api-form="/api/v1/meetings" data-api-method="POST">
           <div class="form-group">
-            <label class="form-label">Title</label>
+            <label class="form-label" for="sched-title">Title</label>
             <input class="input" id="sched-title" name="title" required placeholder="Weekly Client Sync or Deep Work Block">
           </div>
 
-          <div class="grid-2">
+          <div class="grid-2 grid-2-mobile">
             <div class="form-group">
-              <label class="form-label">Event Type</label>
+              <label class="form-label" for="sched-meeting-type">Event Type</label>
               <select class="select" id="sched-meeting-type" name="meeting_type" required>
                 <option value="team_sync">Team Meeting / Alignment</option>
                 <option value="client_meeting">Client Sync Call</option>
@@ -1033,7 +1033,7 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
 
             <?php if ($role !== 'va' && !empty($data['vas'])): ?>
               <div class="form-group">
-                <label class="form-label">Staff / VA Participant</label>
+                <label class="form-label" for="sched-va-id">Staff / VA Participant</label>
                 <select class="select" id="sched-va-id" name="va_id" required>
                   <option value="<?= SecurityHelper::e($user['id']) ?>">Myself (<?= SecurityHelper::e($user['name']) ?>)</option>
                   <?php foreach ($data['vas'] as $v): ?>
@@ -1051,34 +1051,39 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
           </div>
 
           <div class="form-group">
-            <label class="form-label">CRM Client (Syncs Available Hours Scanner)</label>
+            <label class="form-label" for="sched-client-id">CRM Client (Syncs Available Hours Scanner)</label>
             <select class="select" id="sched-client-id" name="client_id">
-              <option value="">Internal / Personal Focus (No Client)</option>
+              <option value="">Internal / Personal Focus</option>
               <?php foreach ($data['clients'] as $c): ?>
                 <option value="<?= SecurityHelper::e($c['id']) ?>"><?= SecurityHelper::e($c['agency_name']) ?></option>
               <?php endforeach; ?>
             </select>
           </div>
 
-          <div class="form-group" style="flex-direction:row;align-items:center;gap:8px;">
-            <input type="checkbox" id="cb-inc-client" name="include_client" value="1">
-            <label for="cb-inc-client" style="font-size:13px;">Include client participant on calendar invite</label>
+          <div id="sched-inc-client-group" class="form-group sched-check-card">
+            <label for="cb-inc-client" class="sched-check-label">
+              <input type="checkbox" id="cb-inc-client" name="include_client" value="1">
+              <span>
+                <strong>Include client participant on calendar invite</strong>
+                <small id="sched-inc-client-hint" class="muted" style="display:block;font-size:11.5px;margin-top:2px;">Optional — sends the client an email with the meeting &amp; calendar invite link.</small>
+              </span>
+            </label>
           </div>
 
           <div class="grid-2">
             <div class="form-group">
-              <label class="form-label">Start Time</label>
+              <label class="form-label" for="sched-start-time">Start Time</label>
               <input class="input" id="sched-start-time" type="datetime-local" name="start_time" value="<?= date('Y-m-d') ?>T09:00" required>
             </div>
             <div class="form-group">
-              <label class="form-label">End Time</label>
+              <label class="form-label" for="sched-end-time">End Time</label>
               <input class="input" id="sched-end-time" type="datetime-local" name="end_time" value="<?= date('Y-m-d') ?>T10:00" required>
             </div>
           </div>
 
           <!-- Client-Synced Live Open Slot Scanner -->
           <div style="padding:12px;border-radius:10px;background:var(--bg);border:1px solid var(--border);margin-bottom:14px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
               <strong style="font-size:12.5px;">Live Open Slot Scanner</strong>
               <button type="button" id="btn-check-slots" class="btn btn-secondary btn-sm">Scan Open Slots</button>
             </div>
@@ -1087,17 +1092,25 @@ if (isset($_GET['tab']) && in_array($_GET['tab'], ['calendar', 'reports'], true)
             </div>
           </div>
 
-          <div class="form-group">
-            <label class="form-label">Video Conference URL (optional auto-generated)</label>
-            <input class="input" name="meeting_link" placeholder="https://meet.google.com/...">
+          <div id="sched-video-link-group" class="form-group sched-check-card">
+            <label for="cb-custom-meeting-link" class="sched-check-label">
+              <input type="checkbox" id="cb-custom-meeting-link" name="use_custom_link" value="1">
+              <span>
+                <strong>Use custom Video Conference URL</strong>
+                <small class="muted" style="display:block;font-size:11.5px;margin-top:2px;">Leave unchecked to auto-generate a meeting link.</small>
+              </span>
+            </label>
+            <div id="sched-custom-link-wrap" class="is-hidden" style="margin-top:10px;">
+              <input class="input" id="sched-meeting-link" type="url" name="meeting_link" placeholder="https://meet.google.com/...">
+            </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label">Agenda / Objective (Optional)</label>
-            <textarea class="textarea" name="notes" rows="2" placeholder="Meeting topics or focus milestones..."></textarea>
+            <label class="form-label" for="sched-notes">Agenda / Objective (Optional)</label>
+            <textarea class="textarea" id="sched-notes" name="notes" rows="2" placeholder="Meeting topics or focus milestones..."></textarea>
           </div>
 
-          <div style="display:flex;justify-content:flex-end;gap:10px;">
+          <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;">
             <button type="button" class="btn btn-secondary" data-close-drawer>Cancel</button>
             <button type="submit" class="btn btn-primary">Schedule &amp; Save</button>
           </div>

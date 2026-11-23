@@ -157,6 +157,154 @@ final class GmailOAuthService
         return ['status' => $status, 'body' => $raw];
     }
 
+    /** Build RFC 2822 base64url raw MIME message with plain + HTML alternative bodies. */
+    public static function buildRawMime(
+        string $fromEmail,
+        string $fromName,
+        string $toEmail,
+        string $subject,
+        string $bodyPlain,
+        string $bodyHtml = ''
+    ): string {
+        $safeSubj = '=?UTF-8?B?' . base64_encode($subject) . '?=';
+        $safeFromName = str_replace(["\r", "\n", '"'], '', $fromName);
+        $headers = [
+            "From: \"{$safeFromName}\" <{$fromEmail}>",
+            "To: {$toEmail}",
+            "Subject: {$safeSubj}",
+            'MIME-Version: 1.0',
+        ];
+
+        $hasHtml = trim($bodyHtml) !== '';
+        if (!$hasHtml) {
+            $headers[] = 'Content-Type: text/plain; charset=UTF-8';
+            $headers[] = 'Content-Transfer-Encoding: base64';
+            $raw = implode("\r\n", $headers) . "\r\n\r\n" . chunk_split(base64_encode($bodyPlain));
+        } else {
+            $altBoundary = 'wrk_alt_' . bin2hex(random_bytes(9));
+            $htmlWrapped = '<!DOCTYPE html><html><body style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.55;color:#1f2937;">'
+                . $bodyHtml
+                . '</body></html>';
+            $headers[] = "Content-Type: multipart/alternative; boundary=\"{$altBoundary}\"";
+            $parts = [
+                "--{$altBoundary}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($bodyPlain)),
+                "--{$altBoundary}\r\nContent-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n" . chunk_split(base64_encode($htmlWrapped)),
+                "--{$altBoundary}--",
+            ];
+            $raw = implode("\r\n", $headers) . "\r\n\r\n" . implode("\r\n", $parts);
+        }
+
+        return rtrim(strtr(base64_encode($raw), '+/', '-_'), '=');
+    }
+
+    /** Attempt to deliver an email via the specified Workly user's connected Gmail OAuth mailbox. */
+    public static function sendEmailViaMailbox(
+        PDO $db,
+        string $senderUserId,
+        string $senderFallbackName,
+        string $toEmail,
+        string $subject,
+        string $bodyPlain,
+        string $bodyHtml = ''
+    ): array {
+        $result = [
+            'sent'             => false,
+            'sender_email'     => null,
+            'gmail_message_id' => null,
+            'gmail_thread_id'  => null,
+            'error'            => null,
+        ];
+
+        if ($senderUserId === '' || !filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+            $result['error'] = 'Invalid sender or recipient email';
+            return $result;
+        }
+
+        try {
+            $stmt = $db->prepare("
+                SELECT email, oauth_status, oauth_scope, access_token_encrypted, refresh_token_encrypted, token_expires_at
+                FROM staff_connected_mailboxes
+                WHERE user_id = :uid AND oauth_status = 'active'
+                LIMIT 1
+            ");
+            $stmt->execute([':uid' => $senderUserId]);
+            $mailbox = $stmt->fetch(PDO::FETCH_ASSOC);
+            if (!$mailbox || empty($mailbox['refresh_token_encrypted'])) {
+                $result['error'] = 'No active Gmail OAuth mailbox connected';
+                return $result;
+            }
+
+            $scope = (string) ($mailbox['oauth_scope'] ?? '');
+            if ($scope !== '' && !str_contains($scope, 'gmail.send') && !str_contains($scope, 'mail.google.com')) {
+                $result['error'] = 'Connected Google account lacks gmail.send scope';
+                return $result;
+            }
+
+            $accessToken = self::decrypt((string) ($mailbox['access_token_encrypted'] ?? ''));
+            $refreshToken = self::decrypt((string) ($mailbox['refresh_token_encrypted'] ?? ''));
+            $expiresAt = !empty($mailbox['token_expires_at']) ? strtotime((string) $mailbox['token_expires_at']) : 0;
+
+            if (($accessToken === '' || $expiresAt <= time() + 60) && $refreshToken !== '') {
+                $token = self::refreshAccessToken($refreshToken);
+                $accessToken = (string) ($token['access_token'] ?? '');
+                if ($accessToken !== '') {
+                    $newRefresh = (string) ($token['refresh_token'] ?? $refreshToken);
+                    $expiresIn = max(60, (int) ($token['expires_in'] ?? 3600));
+                    $db->prepare("
+                        UPDATE staff_connected_mailboxes
+                        SET access_token_encrypted = :at,
+                            refresh_token_encrypted = :rt,
+                            token_expires_at = NOW() + (CAST(:ei AS INTEGER) * INTERVAL '1 second'),
+                            token_type = :tt,
+                            updated_at = NOW()
+                        WHERE user_id = :uid
+                    ")->execute([
+                        ':at'  => self::encrypt($accessToken),
+                        ':rt'  => self::encrypt($newRefresh),
+                        ':ei'  => $expiresIn,
+                        ':tt'  => (string) ($token['token_type'] ?? 'Bearer'),
+                        ':uid' => $senderUserId,
+                    ]);
+                }
+            }
+
+            if ($accessToken === '') {
+                $result['error'] = 'Unable to obtain Gmail access token';
+                return $result;
+            }
+
+            $fromEmail = (string) ($mailbox['email'] ?? '');
+            $result['sender_email'] = $fromEmail;
+            $rawMime = self::buildRawMime($fromEmail, $senderFallbackName, $toEmail, $subject, $bodyPlain, $bodyHtml);
+
+            $resp = self::httpRequest(
+                'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
+                'POST',
+                [
+                    'Authorization: Bearer ' . $accessToken,
+                    'Accept: application/json',
+                    'Content-Type: application/json',
+                ],
+                json_encode(['raw' => $rawMime]) ?: '{}'
+            );
+            $decoded = json_decode($resp['body'], true);
+            if ($resp['status'] >= 200 && $resp['status'] < 300 && is_array($decoded) && !empty($decoded['id'])) {
+                $result['sent'] = true;
+                $result['gmail_message_id'] = (string) $decoded['id'];
+                $result['gmail_thread_id'] = !empty($decoded['threadId']) ? (string) $decoded['threadId'] : null;
+                return $result;
+            }
+            $result['error'] = is_array($decoded) && !empty($decoded['error']['message'])
+                ? (string) $decoded['error']['message']
+                : ('Gmail API HTTP ' . $resp['status']);
+        } catch (Throwable $e) {
+            $result['error'] = $e->getMessage();
+            error_log('Workly Gmail sendEmailViaMailbox error: ' . $e->getMessage());
+        }
+
+        return $result;
+    }
+
     public static function encrypt(string $plainText): string
     {
         if ($plainText === '') {

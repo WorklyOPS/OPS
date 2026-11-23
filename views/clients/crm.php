@@ -451,7 +451,7 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
               </div>
             </div>
 
-            <div class="grid-2">
+            <div class="grid-2 grid-2-mobile">
               <div class="form-group">
                 <label class="form-label">Contracted Hrs/Mo</label>
                 <input class="input" type="number" step="1" min="1" name="contracted_hours_per_month" required>
@@ -602,18 +602,23 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
               </div>
             </div>
 
-            <div class="grid-2">
-              <div class="form-group">
-                <label class="form-label">Website</label>
-                <input class="input" name="website" placeholder="https://agency.com">
-              </div>
+            <div class="form-group">
+              <label class="form-label">Website</label>
+              <input class="input" name="website" placeholder="https://agency.com">
+            </div>
+
+            <div class="grid-2 grid-2-mobile">
               <div class="form-group">
                 <label class="form-label">Country</label>
                 <input class="input" name="country" value="United States">
               </div>
+              <div class="form-group">
+                <label class="form-label">Monthly Hours</label>
+                <input class="input" type="number" step="1" min="1" name="contracted_hours_per_month" value="80">
+              </div>
             </div>
 
-            <div class="grid-3">
+            <div class="grid-2 grid-2-mobile">
               <div class="form-group">
                 <label class="form-label">Assigned VA</label>
                 <select class="select" name="focus_va_id" required>
@@ -636,10 +641,6 @@ $portfolioUtil = $totalContractedHrs > 0 ? round(($totalConsumedHrs / $totalCont
                     <?php endif; ?>
                   <?php endif; ?>
                 </select>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Monthly Hours</label>
-                <input class="input" type="number" step="1" min="1" name="contracted_hours_per_month" value="80">
               </div>
             </div>
 

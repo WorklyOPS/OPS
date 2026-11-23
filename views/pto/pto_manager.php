@@ -87,13 +87,13 @@ foreach ($requests as $r) {
       </form>
     </div>
 
-    <div class="card">
+    <div class="card pto-table-card">
       <h3 style="margin-bottom:12px;">My PTO Request History</h3>
       <?php if (empty($requests)): ?>
         <p class="muted">No PTO requests recorded yet.</p>
       <?php else: ?>
         <div class="table-wrap">
-          <table class="table">
+          <table class="table pto-responsive-table">
             <thead>
               <tr>
                 <th>Date Range</th>
@@ -106,17 +106,17 @@ foreach ($requests as $r) {
             <tbody>
               <?php foreach ($requests as $req): ?>
                 <tr>
-                  <td>
+                  <td data-label="Date Range">
                     <span class="pto-date-pill"><?= SecurityHelper::e($req['start_date']) ?> &rarr; <?= SecurityHelper::e($req['end_date']) ?></span>
                   </td>
-                  <td class="tabular-nums"><strong><?= (int) $req['business_days_count'] ?>d</strong></td>
-                  <td><?= SecurityHelper::e($req['reason']) ?></td>
-                  <td>
+                  <td data-label="Days" class="tabular-nums"><strong><?= (int) $req['business_days_count'] ?>d</strong></td>
+                  <td data-label="Reason"><?= SecurityHelper::e($req['reason']) ?></td>
+                  <td data-label="Status">
                     <span class="badge <?= $req['status'] === 'approved' ? 'badge-success' : ($req['status'] === 'rejected' || $req['status'] === 'cancelled' ? 'badge-danger' : 'badge-warn') ?>">
                       <?= SecurityHelper::e(ucfirst($req['status'])) ?>
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Action">
                     <?php if ($req['status'] === 'pending'): ?>
                       <button type="button"
                               class="btn btn-secondary btn-sm"
@@ -245,8 +245,8 @@ foreach ($requests as $r) {
   </div>
 
   <div class="<?= !empty($notifications) ? 'pto-layout-grid-wide' : '' ?>">
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <div class="card pto-table-card">
+      <div class="pto-card-head-bar">
         <h3>PTO Request Queue &amp; History</h3>
         <span class="badge badge-neutral tabular-nums"><?= count($requests) ?> request(s)</span>
       </div>
@@ -254,7 +254,7 @@ foreach ($requests as $r) {
         <p class="muted">No PTO requests recorded yet.</p>
       <?php else: ?>
         <div class="table-wrap">
-          <table class="table">
+          <table class="table pto-responsive-table">
             <thead>
               <tr>
                 <th>Staff Member</th>
@@ -269,8 +269,8 @@ foreach ($requests as $r) {
               <?php foreach ($requests as $req): ?>
                 <?php $reqHay = strtolower(trim($req['va_name'] . ' ' . ($req['va_email'] ?? '') . ' ' . $req['reason'])); ?>
                 <tr class="pto-req-row" data-va-name="<?= SecurityHelper::e($reqHay) ?>">
-                  <td>
-                    <div style="display:flex;align-items:center;gap:8px;">
+                  <td data-label="Staff Member">
+                    <div style="display:flex;align-items:center;gap:8px;min-width:0;">
                       <?php if (!empty($req['avatar_url'])): ?>
                         <img src="<?= SecurityHelper::e($req['avatar_url']) ?>" alt="<?= SecurityHelper::e($req['va_name']) ?>" class="avatar-xs">
                       <?php else: ?>
@@ -279,17 +279,17 @@ foreach ($requests as $r) {
                       <strong><?= SecurityHelper::e($req['va_name']) ?></strong>
                     </div>
                   </td>
-                  <td><span class="pto-date-pill"><?= SecurityHelper::e($req['start_date']) ?> &rarr; <?= SecurityHelper::e($req['end_date']) ?></span></td>
-                  <td class="tabular-nums"><?= (int) $req['business_days_count'] ?>d</td>
-                  <td><?= SecurityHelper::e($req['reason']) ?></td>
-                  <td>
+                  <td data-label="Date Range"><span class="pto-date-pill"><?= SecurityHelper::e($req['start_date']) ?> &rarr; <?= SecurityHelper::e($req['end_date']) ?></span></td>
+                  <td data-label="Days" class="tabular-nums"><?= (int) $req['business_days_count'] ?>d</td>
+                  <td data-label="Reason"><?= SecurityHelper::e($req['reason']) ?></td>
+                  <td data-label="Status">
                     <span class="badge <?= $req['status'] === 'approved' ? 'badge-success' : ($req['status'] === 'rejected' || $req['status'] === 'cancelled' ? 'badge-danger' : 'badge-warn') ?>">
                       <?= SecurityHelper::e(ucfirst($req['status'])) ?>
                     </span>
                   </td>
-                  <td>
+                  <td data-label="Review">
                     <?php if ($req['status'] === 'pending'): ?>
-                      <div style="display:flex;gap:6px;">
+                      <div class="pto-review-actions">
                         <button type="button"
                                 class="btn btn-primary btn-sm"
                                 data-action-url="/api/v1/pto/<?= SecurityHelper::e($req['id']) ?>/review"
@@ -399,13 +399,13 @@ foreach ($requests as $r) {
   <?php require __DIR__ . '/../partials/pto_calendar_card.php'; ?>
 
   <div class="pto-layout-grid-wide">
-    <div class="card">
+    <div class="card pto-table-card">
       <h3 style="margin-bottom:12px;">Pod PTO Request History</h3>
       <?php if (empty($requests)): ?>
         <p class="muted">No PTO requests recorded for your pod yet.</p>
       <?php else: ?>
         <div class="table-wrap">
-          <table class="table">
+          <table class="table pto-responsive-table">
             <thead>
               <tr>
                 <th>Staff Member</th>
@@ -418,8 +418,8 @@ foreach ($requests as $r) {
             <tbody>
               <?php foreach ($requests as $req): ?>
                 <tr>
-                  <td>
-                    <div style="display:flex;align-items:center;gap:8px;">
+                  <td data-label="Staff Member">
+                    <div style="display:flex;align-items:center;gap:8px;min-width:0;">
                       <?php if (!empty($req['avatar_url'])): ?>
                         <img src="<?= SecurityHelper::e($req['avatar_url']) ?>" alt="<?= SecurityHelper::e($req['va_name']) ?>" class="avatar-xs">
                       <?php else: ?>
@@ -428,10 +428,10 @@ foreach ($requests as $r) {
                       <strong><?= SecurityHelper::e($req['va_name']) ?></strong>
                     </div>
                   </td>
-                  <td><span class="pto-date-pill"><?= SecurityHelper::e($req['start_date']) ?> &rarr; <?= SecurityHelper::e($req['end_date']) ?></span></td>
-                  <td class="tabular-nums"><?= (int) $req['business_days_count'] ?>d</td>
-                  <td><?= SecurityHelper::e($req['reason']) ?></td>
-                  <td>
+                  <td data-label="Date Range"><span class="pto-date-pill"><?= SecurityHelper::e($req['start_date']) ?> &rarr; <?= SecurityHelper::e($req['end_date']) ?></span></td>
+                  <td data-label="Days" class="tabular-nums"><?= (int) $req['business_days_count'] ?>d</td>
+                  <td data-label="Reason"><?= SecurityHelper::e($req['reason']) ?></td>
+                  <td data-label="Status">
                     <span class="badge <?= $req['status'] === 'approved' ? 'badge-success' : ($req['status'] === 'rejected' || $req['status'] === 'cancelled' ? 'badge-danger' : 'badge-warn') ?>">
                       <?= SecurityHelper::e(ucfirst($req['status'])) ?>
                     </span>

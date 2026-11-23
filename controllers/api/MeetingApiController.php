@@ -258,7 +258,7 @@ final class MeetingApiController
         $clientId = !empty($input['client_id'])
             ? SecurityHelper::sanitizePlainText($input['client_id'], 64)
             : null;
-        $includeClient = !empty($input['include_client']) || ($type === 'client_meeting' && $clientId !== null);
+        $includeClient = filter_var($input['include_client'] ?? false, FILTER_VALIDATE_BOOLEAN) && $clientId !== null;
         $notes = SecurityHelper::sanitizePlainText($input['notes'] ?? '', 1000);
         $autoSlot = !empty($input['auto_slot']);
 
@@ -274,9 +274,14 @@ final class MeetingApiController
             [$start, $end] = $this->findSmartSlotOnDate($vaId, $targetDate, $dur, $clientId, $userTz);
         }
 
+        $useCustomLink = array_key_exists('use_custom_link', $input)
+            ? filter_var($input['use_custom_link'], FILTER_VALIDATE_BOOLEAN)
+            : (trim((string) ($input['meeting_link'] ?? '')) !== '');
+        $customLink = $useCustomLink ? SecurityHelper::sanitizeUrl($input['meeting_link'] ?? '') : '';
+
         $link = in_array($type, ['focus_block', 'availability_window'], true)
             ? null
-            : (SecurityHelper::sanitizeUrl($input['meeting_link'] ?? '') ?: ('https://meet.google.com/wrk-' . bin2hex(random_bytes(4))));
+            : ($customLink !== '' ? $customLink : ('https://meet.google.com/wrk-' . bin2hex(random_bytes(4))));
 
         if ($title === '' || $vaId === '' || $start === '' || $end === '') {
             http_response_code(422);
@@ -319,6 +324,17 @@ final class MeetingApiController
             return;
         }
 
+        $clientRow = null;
+        if ($clientId !== null) {
+            $clStmt = $this->db->prepare('SELECT id, agency_name, name, email FROM clients WHERE id = :cid LIMIT 1');
+            $clStmt->execute([':cid' => $clientId]);
+            $clientRow = $clStmt->fetch(PDO::FETCH_ASSOC) ?: null;
+            if (!$clientRow) {
+                $clientId = null;
+                $includeClient = false;
+            }
+        }
+
         $meetingId = (in_array($type, ['focus_block', 'availability_window'], true) ? 'blk-' : 'meet-') . bin2hex(random_bytes(5));
         $stmt = $this->db->prepare("
             INSERT INTO calendar_meetings (id, title, va_id, client_id, include_client, start_time, end_time, meeting_type, meeting_link, notes, created_by_tl_id, google_synced)
@@ -338,7 +354,7 @@ final class MeetingApiController
             ':creator' => $user['id'],
         ]);
 
-        // Notify in threaded emails for client/team meetings or synced client availability
+        // Notify internal staff in Email Hub when scheduling someone else
         if (!in_array($type, ['focus_block'], true) && $va['id'] !== $user['id']) {
             $threadId = 'th-' . bin2hex(random_bytes(5));
             $eStmt = $this->db->prepare("
@@ -352,12 +368,148 @@ final class MeetingApiController
                 ':semail'  => $user['email'],
                 ':remail'  => $va['email'],
                 ':subject' => "[Calendar Invite] {$title}",
-                ':body'    => "You are invited to '{$title}'.\nStart: {$dtStart->format('Y-m-d H:i')}\nEnd: {$dtEnd->format('Y-m-d H:i')}" . ($link ? "\nMeeting Link: {$link}" : ''),
+                ':body'    => "You are invited to '{$title}'.\nStart: {$dtStart->format('Y-m-d g:i A T')}\nEnd: {$dtEnd->format('Y-m-d g:i A T')}" . ($link ? "\nMeeting Link: {$link}" : ''),
                 ':cid'     => $clientId,
             ]);
         }
 
         $googleSync = GoogleCalendarService::syncMeeting($this->db, $meetingId);
+
+        // Send calendar invitation & meeting link email to CRM client when optionally checked
+        $clientInvited = false;
+        $clientEmailSent = false;
+        $clientEmailAddr = null;
+
+        if ($includeClient && $clientRow) {
+            $candidateEmail = trim((string) ($clientRow['email'] ?? ''));
+            if (filter_var($candidateEmail, FILTER_VALIDATE_EMAIL)) {
+                $clientInvited = true;
+                $clientEmailAddr = $candidateEmail;
+
+                $gcalHtmlLink = '';
+                foreach (($googleSync['synced_users'] ?? []) as $su) {
+                    if (!empty($su['html_link'])) {
+                        $gcalHtmlLink = (string) $su['html_link'];
+                        break;
+                    }
+                }
+
+                $utcStart = $dtStart->setTimezone(new DateTimeZone('UTC'))->format('Ymd\THis\Z');
+                $utcEnd = $dtEnd->setTimezone(new DateTimeZone('UTC'))->format('Ymd\THis\Z');
+                $templateDetails = trim(($link ? "Join Meeting: {$link}\n\n" : '') . ($notes !== '' ? $notes : ''));
+                $addToCalendarUrl = 'https://calendar.google.com/calendar/render?' . http_build_query([
+                    'action'   => 'TEMPLATE',
+                    'text'     => $title,
+                    'dates'    => $utcStart . '/' . $utcEnd,
+                    'details'  => $templateDetails,
+                    'location' => $link ?: 'Online Meeting',
+                ], '', '&', PHP_QUERY_RFC3986);
+
+                $calendarInviteUrl = $gcalHtmlLink !== '' ? $gcalHtmlLink : $addToCalendarUrl;
+                $clientDisplay = trim((string) ($clientRow['name'] ?: $clientRow['agency_name']));
+                $agencyName = trim((string) ($clientRow['agency_name'] ?? ''));
+                $whenLabel = $dtStart->format('l, M j, Y · g:i A') . ' – ' . $dtEnd->format('g:i A T');
+                $mailSubject = "Meeting Invitation: {$title} ({$dtStart->format('M j, g:i A')})";
+
+                $plainLines = [
+                    "Hi {$clientDisplay},",
+                    '',
+                    "You're invited to a scheduled meeting: {$title}",
+                    "When: {$whenLabel}",
+                    "Participant: {$va['name']}",
+                ];
+                if ($link) {
+                    $plainLines[] = "Meeting Video Link: {$link}";
+                }
+                $plainLines[] = "Calendar Invite Link: {$calendarInviteUrl}";
+                if ($addToCalendarUrl !== $calendarInviteUrl) {
+                    $plainLines[] = "Add to Google Calendar: {$addToCalendarUrl}";
+                }
+                if ($notes !== '') {
+                    $plainLines[] = '';
+                    $plainLines[] = 'Agenda / Notes:';
+                    $plainLines[] = $notes;
+                }
+                $plainLines[] = '';
+                $plainLines[] = "Best regards,\n{$user['name']}";
+                $plainBody = implode("\n", $plainLines);
+
+                $safeClient = SecurityHelper::e($clientDisplay);
+                $safeTitle = SecurityHelper::e($title);
+                $safeWhen = SecurityHelper::e($whenLabel);
+                $safeVa = SecurityHelper::e((string) $va['name']);
+                $safeAgency = SecurityHelper::e($agencyName);
+                $safeLink = $link ? SecurityHelper::e($link) : '';
+                $safeCalUrl = SecurityHelper::e($calendarInviteUrl);
+                $safeAddCalUrl = SecurityHelper::e($addToCalendarUrl);
+                $safeNotes = $notes !== '' ? nl2br(SecurityHelper::e($notes)) : '';
+
+                $htmlBody = '<div style="max-width:560px;margin:0 auto;padding:20px;border:1px solid #e2e8f0;border-radius:12px;background:#ffffff;">'
+                    . '<p style="margin:0 0 12px;">Hi ' . $safeClient . ',</p>'
+                    . '<p style="margin:0 0 14px;">You have been invited to a meeting' . ($safeAgency !== '' ? ' for <strong>' . $safeAgency . '</strong>' : '') . ':</p>'
+                    . '<div style="padding:14px 16px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:16px;">'
+                    . '<div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:6px;">' . $safeTitle . '</div>'
+                    . '<div style="font-size:13px;color:#334155;margin-bottom:4px;"><strong>When:</strong> ' . $safeWhen . '</div>'
+                    . '<div style="font-size:13px;color:#334155;"><strong>Team Contact:</strong> ' . $safeVa . '</div>'
+                    . ($safeLink !== '' ? '<div style="font-size:13px;color:#334155;margin-top:4px;"><strong>Meeting URL:</strong> <a href="' . $safeLink . '" style="color:#7c3aed;">' . $safeLink . '</a></div>' : '')
+                    . '</div>'
+                    . ($safeNotes !== '' ? '<div style="margin-bottom:16px;font-size:13px;color:#475569;"><strong>Agenda:</strong><br>' . $safeNotes . '</div>' : '')
+                    . '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">'
+                    . '<a href="' . $safeCalUrl . '" style="display:inline-block;padding:10px 16px;background:#8822ce;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:700;font-size:13px;margin-right:8px;">Open Calendar Invite</a>'
+                    . ($safeLink !== '' ? '<a href="' . $safeLink . '" style="display:inline-block;padding:10px 16px;background:#0f172a;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:700;font-size:13px;">Join Meeting</a>' : '')
+                    . ($addToCalendarUrl !== $calendarInviteUrl ? ' <a href="' . $safeAddCalUrl . '" style="display:inline-block;padding:10px 14px;background:#f1f5f9;color:#0f172a;text-decoration:none;border-radius:8px;font-weight:600;font-size:13px;">Add to Google Calendar</a>' : '')
+                    . '</div>'
+                    . '<p style="margin:0;font-size:12.5px;color:#64748b;">Sent by ' . SecurityHelper::e((string) $user['name']) . '</p>'
+                    . '</div>';
+
+                $sendRes = GmailOAuthService::sendEmailViaMailbox(
+                    $this->db,
+                    (string) $user['id'],
+                    (string) $user['name'],
+                    $clientEmailAddr,
+                    $mailSubject,
+                    $plainBody,
+                    $htmlBody
+                );
+                if (empty($sendRes['sent']) && $vaId !== (string) $user['id']) {
+                    $sendRes = GmailOAuthService::sendEmailViaMailbox(
+                        $this->db,
+                        $vaId,
+                        (string) $va['name'],
+                        $clientEmailAddr,
+                        $mailSubject,
+                        $plainBody,
+                        $htmlBody
+                    );
+                }
+
+                $clientEmailSent = !empty($sendRes['sent']);
+                $senderEmailUsed = (string) ($sendRes['sender_email'] ?: $user['email']);
+                $gmailMsgId = $sendRes['gmail_message_id'] ?? null;
+                $threadId = !empty($sendRes['gmail_thread_id']) ? (string) $sendRes['gmail_thread_id'] : ('th-' . bin2hex(random_bytes(5)));
+
+                try {
+                    $this->db->prepare("
+                        INSERT INTO email_messages (id, thread_id, sender_name, sender_email, recipient_email, subject, body, body_html, body_format, snippet, gmail_message_id, folder, is_read, client_ref_id, project_label)
+                        VALUES (:id, :tid, :sname, :semail, :remail, :subj, :body, :bhtml, 'html', :snip, :gid, 'sent', TRUE, :cid, 'Meeting Invite')
+                    ")->execute([
+                        ':id'     => 'msg-' . bin2hex(random_bytes(5)),
+                        ':tid'    => $threadId,
+                        ':sname'  => $user['name'],
+                        ':semail' => $senderEmailUsed,
+                        ':remail' => $clientEmailAddr,
+                        ':subj'   => $mailSubject,
+                        ':body'   => $plainBody,
+                        ':bhtml'  => $htmlBody,
+                        ':snip'   => mb_substr($plainBody, 0, 140, 'UTF-8'),
+                        ':gid'    => $gmailMsgId,
+                        ':cid'    => $clientId,
+                    ]);
+                } catch (Throwable) {
+                    // Preserve meeting creation even if email archive insert has legacy schema columns
+                }
+            }
+        }
 
         CacheService::invalidatePrefix($this->db, 'meetings:');
         CacheService::invalidatePrefix($this->db, 'emails:');
@@ -365,13 +517,16 @@ final class MeetingApiController
 
         http_response_code(201);
         echo json_encode([
-            'success'      => true,
-            'id'           => $meetingId,
-            'meeting_type' => $type,
-            'start_time'   => $dtStart->format('Y-m-d H:i'),
-            'end_time'     => $dtEnd->format('Y-m-d H:i'),
-            'meeting_link' => $link,
-            'google_sync'  => $googleSync,
+            'success'           => true,
+            'id'                => $meetingId,
+            'meeting_type'      => $type,
+            'start_time'        => $dtStart->format('Y-m-d H:i'),
+            'end_time'          => $dtEnd->format('Y-m-d H:i'),
+            'meeting_link'      => $link,
+            'google_sync'       => $googleSync,
+            'client_invited'    => $clientInvited,
+            'client_email_sent' => $clientEmailSent,
+            'client_email'      => $clientEmailAddr,
         ]);
     }
 

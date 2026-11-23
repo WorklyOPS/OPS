@@ -10,6 +10,13 @@ foreach ($docs as $d) {
     $d['content'] = $safeHtml;
     $docsMap[$d['id']] = $d;
 }
+$catCounts = [];
+foreach ($docs as $d) {
+    $cKey = strtolower(trim((string) ($d['category'] ?? '')));
+    if ($cKey !== '') {
+        $catCounts[$cKey] = ($catCounts[$cKey] ?? 0) + 1;
+    }
+}
 ?>
 
 <div class="page-header no-print">
@@ -25,18 +32,35 @@ foreach ($docs as $d) {
   <?php endif; ?>
 </div>
 
-<div class="card no-print" style="margin-bottom:18px;padding:14px 16px;">
-  <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:10px;">
-    <input id="kb-search" type="search" class="input" placeholder="Search SOPs by title, keyword, or client..." style="max-width:380px;">
-    <span class="muted" style="font-size:12px;">Click any SOP card to open the full document reader, or export any SOP directly as PDF.</span>
+<div class="card kb-filter-card no-print">
+  <div class="kb-filter-top">
+    <div class="kb-search-box">
+      <svg class="kb-search-icon" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+      </svg>
+      <input id="kb-search" type="search" class="input kb-search-input" placeholder="Search SOPs by title, keyword, or client...">
+    </div>
+    <span id="kb-visible-count" class="kb-visible-count mono tabular-nums"><?= count($docs) ?> SOP(s)</span>
   </div>
-  <div style="display:flex;flex-wrap:wrap;gap:6px;" id="kb-category-pills">
-    <button type="button" class="tab-btn active" data-kb-cat="">All Categories</button>
-    <?php foreach ($categories as $cat): ?>
-      <button type="button" class="tab-btn" data-kb-cat="<?= SecurityHelper::e($cat['name']) ?>">
-        <?= SecurityHelper::e($cat['name']) ?>
+
+  <div class="kb-cat-bar">
+    <span class="kb-cat-bar-label">Categories</span>
+    <div class="kb-category-pills" id="kb-category-pills" role="tablist" aria-label="SOP Categories">
+      <button type="button" class="kb-cat-pill active" data-kb-cat="">
+        <span>All</span>
+        <span class="kb-cat-count"><?= count($docs) ?></span>
       </button>
-    <?php endforeach; ?>
+      <?php foreach ($categories as $cat): ?>
+        <?php
+          $catName = (string) ($cat['name'] ?? '');
+          $catCount = (int) ($catCounts[strtolower(trim($catName))] ?? 0);
+        ?>
+        <button type="button" class="kb-cat-pill" data-kb-cat="<?= SecurityHelper::e($catName) ?>">
+          <span><?= SecurityHelper::e($catName) ?></span>
+          <span class="kb-cat-count"><?= $catCount ?></span>
+        </button>
+      <?php endforeach; ?>
+    </div>
   </div>
 </div>
 
@@ -309,10 +333,13 @@ foreach ($docs as $d) {
           <button type="button" class="btn btn-secondary btn-sm" id="btn-kb-cancel-link">Cancel</button>
         </div>
 
-        <div class="kb-studio-workspace">
+        <div class="kb-studio-workspace" id="kb-studio-workspace">
           <div class="kb-studio-page kb-rich-content kb-doc-surface"
                id="kb-studio-editor"
                contenteditable="true"
+               tabindex="0"
+               role="textbox"
+               aria-multiline="true"
                data-kb-editor
                data-placeholder="Start writing your SOP document here... Use headings, tables, font sizing, text case, highlights, and lists just like a word processor."
                aria-label="Knowledge document editor"></div>
